@@ -3,13 +3,23 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO
 
 from llmdbg.config import load_debug_config
 from llmdbg.demo_model import FEATURES, LayerState, run_demo
-from llmdbg.model_runtime import load_model_trace
+from llmdbg.model_runtime import ModelExecution, prepare_model_execution
+
+
+@dataclass(frozen=True)
+class SourceBreakpoint:
+    """A model-step source line with an optional token-position condition."""
+
+    line: int
+    token_position: int | None = None
 
 
 class ProtocolStream:
@@ -47,6 +57,7 @@ class LLMDebugAdapter:
 
     THREAD_ID = 1
     FRAME_ID = 1
+    SCOPE_TOKEN = 50
     SCOPE_LAYER = 100
     SCOPE_INPUT = 200
     SCOPE_OUTPUT = 300
@@ -56,14 +67,18 @@ class LLMDebugAdapter:
         self.stream = stream
         self.sequence = 1
         self.trace: tuple[LayerState, ...] = ()
+        self.execution: ModelExecution | None = None
+        self.tokens: tuple[str, ...] = ()
+        self.token_index = 0
         self.layer_index = 0
         self.launched = False
         self.stop_on_entry = True
         self.source_content = ""
         self.source_lines: tuple[int, ...] = ()
+        self.step_paths: tuple[str, ...] = ()
         self.source_name = "model.execution.llmdbg"
         self.source_path: str | None = None
-        self.breakpoint_lines: set[int] = set()
+        self.breakpoints: tuple[SourceBreakpoint, ...] = ()
 
     @property
     def state(self) -> LayerState:
@@ -107,7 +122,9 @@ class LLMDebugAdapter:
             "stopped",
             {
                 "reason": reason,
-                "description": f"Stopped after {self.state.layer.name}",
+                "description": (
+                    f"Stopped at token {self.token_index}, {self.state.layer.name}"
+                ),
                 "threadId": self.THREAD_ID,
                 "allThreadsStopped": True,
             },
@@ -127,6 +144,7 @@ class LLMDebugAdapter:
                 {
                     "supportsConfigurationDoneRequest": True,
                     "supportsEvaluateForHovers": True,
+                    "supportsConditionalBreakpoints": True,
                     "supportsStepBack": False,
                     "supportsRestartRequest": False,
                 },
@@ -141,7 +159,7 @@ class LLMDebugAdapter:
                     "output",
                     {"category": "console", "output": f"llmdbg: loading {model}\n"},
                 )
-                model_trace = load_model_trace(
+                self.execution = prepare_model_execution(
                     str(model),
                     revision=str(arguments.get("revision", "main")),
                     prompt=str(arguments.get("prompt", "The capital of France is")),
@@ -151,26 +169,13 @@ class LLMDebugAdapter:
                         "output", {"category": "console", "output": f"llmdbg: {output}"}
                     ),
                 )
-                self.trace = model_trace.states
-                tokens = model_trace.tokens
+                self.tokens = self.execution.tokens
+                self._configure_model_source(arguments)
             else:
                 self.trace = run_demo()
-                tokens = ()
-            configured_paths = arguments.get("stepPaths")
-            if configured_paths:
-                selected_paths = set(configured_paths)
-                selected_trace = tuple(
-                    state for state in self.trace if state.layer.name in selected_paths
-                )
-                actual_paths = [state.layer.name for state in selected_trace]
-                if actual_paths != configured_paths:
-                    available = [state.layer.name for state in self.trace]
-                    raise ValueError(
-                        "[[step]] paths must be a valid subsequence of model execution; "
-                        f"available paths are {available!r}"
-                    )
-                self.trace = selected_trace
-            self._build_virtual_source(arguments, str(model or "built-in-demo"), tokens)
+                self.tokens = ("demo",)
+                self._build_virtual_source(arguments, "built-in-demo", ())
+            self.token_index = 0
             self.layer_index = 0
             self.launched = True
             self.stop_on_entry = bool(arguments.get("stopOnEntry", True))
@@ -181,7 +186,10 @@ class LLMDebugAdapter:
                 "output",
                 {
                     "category": "console",
-                    "output": f"llmdbg: loaded {trace_name}; use Step Over to advance one layer\n",
+                    "output": (
+                        f"llmdbg: prepared {trace_name}; forward execution will begin "
+                        "after breakpoints are configured\n"
+                    ),
                 },
             )
         elif command == "configurationDone":
@@ -189,9 +197,11 @@ class LLMDebugAdapter:
             if not self.launched:
                 return True
             if self.stop_on_entry:
+                self._load_token(0)
+                self.layer_index = 0
                 self.stop("entry")
             else:
-                self._continue_to_breakpoint(include_current=True)
+                self._continue_to_breakpoint(include_current=True, before_start=True)
         elif command == "threads":
             self.send_response(request, {"threads": [{"id": self.THREAD_ID, "name": "LLM forward pass"}]})
         elif command == "stackTrace":
@@ -207,7 +217,10 @@ class LLMDebugAdapter:
                 )
             frame = {
                 "id": self.FRAME_ID,
-                "name": f"{self.layer_index:02d}: {self.state.layer.name}",
+                "name": (
+                    f"token {self.token_index}: {self.tokens[self.token_index]!r} · "
+                    f"{self.layer_index:02d}: {self.state.layer.name}"
+                ),
                 "source": source,
                 "line": self.source_lines[self.layer_index],
                 "column": 1,
@@ -225,6 +238,7 @@ class LLMDebugAdapter:
                 )
         elif command == "scopes":
             scopes = [
+                {"name": "Token", "variablesReference": self.SCOPE_TOKEN, "expensive": False},
                 {"name": "Layer", "variablesReference": self.SCOPE_LAYER, "expensive": False},
                 {"name": "Input vector", "variablesReference": self.SCOPE_INPUT, "expensive": False},
                 {"name": "Output vector", "variablesReference": self.SCOPE_OUTPUT, "expensive": False},
@@ -242,11 +256,15 @@ class LLMDebugAdapter:
                 self.send_response(request, {"result": result, "variablesReference": 0})
         elif command in ("next", "stepIn", "stepOut"):
             self.send_response(request)
-            if self.layer_index + 1 >= len(self.trace):
-                self.terminate()
-            else:
+            if self.layer_index + 1 < len(self.trace):
                 self.layer_index += 1
                 self.stop("step")
+            elif self.token_index + 1 < len(self.tokens):
+                self._load_token(self.token_index + 1)
+                self.layer_index = 0
+                self.stop("step")
+            else:
+                self.terminate()
         elif command == "continue":
             self.send_response(request, {"allThreadsContinued": True})
             self._continue_to_breakpoint(include_current=False)
@@ -262,9 +280,12 @@ class LLMDebugAdapter:
                 else None
                 for line in requested
             ]
-            self.breakpoint_lines = {line for line in resolved if line is not None}
+            configured: list[SourceBreakpoint] = []
             breakpoints = []
-            for requested_line, resolved_line in zip(requested, resolved, strict=True):
+            requested_items = arguments.get("breakpoints", [])
+            for item, requested_line, resolved_line in zip(
+                requested_items, requested, resolved, strict=True
+            ):
                 breakpoint: dict[str, Any] = {"verified": resolved_line is not None}
                 if resolved_line is None:
                     breakpoint.update(
@@ -274,8 +295,37 @@ class LLMDebugAdapter:
                         }
                     )
                 else:
+                    condition = str(item.get("condition", "")).strip()
+                    token_position = self._parse_token_condition(condition)
+                    if condition and token_position is None:
+                        breakpoint.update(
+                            {
+                                "verified": False,
+                                "line": resolved_line,
+                                "message": (
+                                    "Use a token condition such as token.position == 4"
+                                ),
+                            }
+                        )
+                        breakpoints.append(breakpoint)
+                        continue
+                    if token_position is not None and token_position >= len(self.tokens):
+                        breakpoint.update(
+                            {
+                                "verified": False,
+                                "line": resolved_line,
+                                "message": (
+                                    f"Token position {token_position} is outside the prompt "
+                                    f"range 0..{len(self.tokens) - 1}"
+                                ),
+                            }
+                        )
+                        breakpoints.append(breakpoint)
+                        continue
                     breakpoint["line"] = resolved_line
+                    configured.append(SourceBreakpoint(resolved_line, token_position))
                 breakpoints.append(breakpoint)
+            self.breakpoints = tuple(configured)
             self.send_response(request, {"breakpoints": breakpoints})
         elif command == "setExceptionBreakpoints":
             self.send_response(request)
@@ -333,32 +383,118 @@ class LLMDebugAdapter:
         self.source_content = "\n".join(lines) + "\n"
         self.source_lines = tuple(source_lines)
 
-        config_path = arguments.get("configPath")
-        if config_path:
-            path = Path(str(config_path))
-            self.source_name = path.name
-            self.source_path = str(path)
-            step_paths = arguments.get("stepPaths", [])
-            step_lines = arguments.get("stepLines", {})
-            trace_paths = [state.layer.name for state in self.trace]
-            if step_paths != trace_paths:
-                raise ValueError(
-                    "[[step]] paths must match the model execution order; "
-                    f"expected {trace_paths!r}"
-                )
-            self.source_lines = tuple(int(step_lines[name]) for name in trace_paths)
+    def _configure_model_source(self, arguments: dict[str, Any]) -> None:
+        """Bind authored [[step]] declarations to the model execution order."""
+        if self.execution is None:
+            raise RuntimeError("model execution is not prepared")
+        model = self.execution.runtime.model
+        available = ["token_embedding"]
+        for index in range(len(model.transformer.h)):
+            available.extend(
+                [f"transformer.h.{index}.attention", f"transformer.h.{index}.mlp"]
+            )
+        available.append("transformer.ln_f")
+        step_paths = list(arguments.get("stepPaths", []))
+        selected = [path for path in available if path in set(step_paths)]
+        if selected != step_paths:
+            raise ValueError(
+                "[[step]] paths must be a valid subsequence of model execution; "
+                f"available paths are {available!r}"
+            )
+        path = Path(str(arguments["configPath"]))
+        step_lines = arguments.get("stepLines", {})
+        self.source_name = path.name
+        self.source_path = str(path)
+        self.source_lines = tuple(int(step_lines[name]) for name in step_paths)
+        self.step_paths = tuple(step_paths)
 
-    def _continue_to_breakpoint(self, *, include_current: bool) -> None:
-        """Advance to the next configured source breakpoint or terminate."""
-        start = self.layer_index if include_current else self.layer_index + 1
-        for index in range(start, len(self.trace)):
-            if self.source_lines[index] in self.breakpoint_lines:
-                self.layer_index = index
-                self.stop("breakpoint")
-                return
+    def _load_token(self, position: int) -> None:
+        """Execute one prompt token and select the authored model steps."""
+        if self.execution is None:
+            self.token_index = 0
+            return
+        model_trace = self.execution.trace_token(position)
+        states_by_name = {state.layer.name: state for state in model_trace.states}
+        self.trace = tuple(states_by_name[path] for path in self.step_paths)
+        self.token_index = position
+
+    @staticmethod
+    def _parse_token_condition(condition: str) -> int | None:
+        if not condition:
+            return None
+        match = re.fullmatch(
+            r"(?:token(?:\.position)?|position)\s*==\s*(\d+)",
+            condition,
+            flags=re.IGNORECASE,
+        )
+        return int(match.group(1)) if match else None
+
+    def _continue_to_breakpoint(
+        self,
+        *,
+        include_current: bool,
+        before_start: bool = False,
+    ) -> None:
+        """Advance in token-major order to the next matching source breakpoint."""
+        token_count = len(self.tokens)
+        if before_start:
+            start_token, start_layer = 0, 0
+        elif include_current:
+            start_token, start_layer = self.token_index, self.layer_index
+        else:
+            start_token, start_layer = self.token_index, self.layer_index + 1
+        for token_position in range(start_token, token_count):
+            layer_start = start_layer if token_position == start_token else 0
+            for layer_index in range(layer_start, len(self.source_lines)):
+                line = self.source_lines[layer_index]
+                if any(
+                    breakpoint.line == line
+                    and (
+                        breakpoint.token_position is None
+                        or breakpoint.token_position == token_position
+                    )
+                    for breakpoint in self.breakpoints
+                ):
+                    self._load_token(token_position)
+                    self.layer_index = layer_index
+                    self.stop("breakpoint")
+                    return
         self.terminate()
 
     def _variables(self, reference: int) -> list[dict[str, Any]]:
+        if reference == self.SCOPE_TOKEN:
+            token_id = (
+                int(self.execution.input_ids[0, self.token_index].item())
+                if self.execution is not None
+                else 0
+            )
+            prefix = "".join(self.tokens[: self.token_index + 1])
+            return [
+                {
+                    "name": "position",
+                    "value": str(self.token_index),
+                    "type": "int",
+                    "variablesReference": 0,
+                },
+                {
+                    "name": "id",
+                    "value": str(token_id),
+                    "type": "int",
+                    "variablesReference": 0,
+                },
+                {
+                    "name": "text",
+                    "value": repr(self.tokens[self.token_index]),
+                    "type": "str",
+                    "variablesReference": 0,
+                },
+                {
+                    "name": "prefix",
+                    "value": repr(prefix),
+                    "type": "str",
+                    "variablesReference": 0,
+                },
+            ]
         if reference == self.SCOPE_LAYER:
             return [
                 {"name": "index", "value": str(self.layer_index), "type": "int", "variablesReference": 0},
@@ -385,6 +521,10 @@ class LLMDebugAdapter:
         ]
 
     def _evaluate(self, expression: str) -> str | None:
+        if expression in ("token", "token.text"):
+            return self.tokens[self.token_index]
+        if expression in ("position", "token.position"):
+            return str(self.token_index)
         if expression in ("layer", "name"):
             return self.state.layer.name
         if expression in ("meaning", "interpretation"):

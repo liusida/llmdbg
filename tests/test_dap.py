@@ -6,9 +6,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from llmdbg.dap import LLMDebugAdapter
-from llmdbg.demo_model import run_demo
 
 
 def frame(message: dict[str, object]) -> bytes:
@@ -27,6 +27,12 @@ def parse_frames(data: bytes) -> list[dict[str, object]]:
 
 
 class DAPIntegrationTest(unittest.TestCase):
+    def test_token_condition_parser(self) -> None:
+        self.assertEqual(LLMDebugAdapter._parse_token_condition("token.position == 4"), 4)
+        self.assertEqual(LLMDebugAdapter._parse_token_condition("token == 2"), 2)
+        self.assertEqual(LLMDebugAdapter._parse_token_condition("position == 1"), 1)
+        self.assertIsNone(LLMDebugAdapter._parse_token_condition("token.text == 'x'"))
+
     def test_continue_stops_at_a_source_breakpoint(self) -> None:
         requests = [
             {"seq": 1, "type": "request", "command": "initialize", "arguments": {}},
@@ -109,22 +115,29 @@ class DAPIntegrationTest(unittest.TestCase):
             config = Path(directory) / "gpt.llmdbg"
             config.write_text('[model]\nid = "openai-community/gpt2"\n', encoding="utf-8")
             adapter = object.__new__(LLMDebugAdapter)
-            adapter.trace = run_demo()
             adapter.source_name = "model.execution.llmdbg"
             adapter.source_path = None
-            adapter._build_virtual_source(
+            adapter.execution = SimpleNamespace(
+                runtime=SimpleNamespace(
+                    model=SimpleNamespace(
+                        transformer=SimpleNamespace(h=[object()])
+                    )
+                )
+            )
+            adapter._configure_model_source(
                 {
                     "configPath": str(config),
-                    "stepPaths": [state.layer.name for state in adapter.trace],
-                    "stepLines": {state.layer.name: 2 for state in adapter.trace},
-                },
-                "openai-community/gpt2",
-                (),
+                    "stepPaths": ["token_embedding", "transformer.h.0.attention"],
+                    "stepLines": {
+                        "token_embedding": 2,
+                        "transformer.h.0.attention": 3,
+                    },
+                }
             )
 
         self.assertEqual(adapter.source_name, "gpt.llmdbg")
         self.assertEqual(adapter.source_path, str(config))
-        self.assertEqual(set(adapter.source_lines), {2})
+        self.assertEqual(adapter.source_lines, (2, 3))
 
 
 if __name__ == "__main__":

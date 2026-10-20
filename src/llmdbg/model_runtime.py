@@ -18,12 +18,77 @@ class ModelTrace:
     tokens: tuple[str, ...]
 
 
-@dataclass(frozen=True)
+@dataclass
 class ModelRuntime:
     """A tokenizer and GPU-resident model reusable across debug sessions."""
 
     model: Any
     tokenizer: Any
+
+
+@dataclass
+class ModelExecution:
+    """A prompt execution that advances one token at a time with a KV cache."""
+
+    runtime: ModelRuntime
+    input_ids: Any
+    tokens: tuple[str, ...]
+    device: str
+    progress: Callable[[str], None]
+    past_key_values: Any = None
+    cached_through: int = -1
+
+    @property
+    def token_count(self) -> int:
+        return len(self.tokens)
+
+    def trace_token(self, position: int) -> ModelTrace:
+        """Prefill up to ``position`` and capture one token's layer trace."""
+        if position < 0 or position >= self.token_count:
+            raise ValueError(
+                f"token position {position} is outside the prompt range 0..{self.token_count - 1}"
+            )
+        with _runtime_lock:
+            if position <= self.cached_through:
+                self.progress(f"Resetting KV cache before token {position}.\n")
+                self.past_key_values = None
+                self.cached_through = -1
+            if position > self.cached_through + 1:
+                self._prefill(position)
+            trace, next_cache = _capture_token_trace(
+                self.runtime,
+                input_ids=self.input_ids[:, position : position + 1],
+                past_key_values=self.past_key_values,
+                total_length=position + 1,
+                device=self.device,
+                progress=self.progress,
+                token_position=position,
+            )
+            self.past_key_values = next_cache
+            self.cached_through = position
+            return ModelTrace(trace.states, self.tokens)
+
+    def _prefill(self, position: int) -> None:
+        """Run uncaptured prompt tokens into the cache before a target token."""
+        import torch
+
+        start = self.cached_through + 1
+        prefix = self.input_ids[:, start:position].to(self.device)
+        if prefix.shape[1] == 0:
+            return
+        self.progress(f"Prefilling tokens {start}..{position - 1} into the KV cache.\n")
+        attention_mask = torch.ones(
+            (1, position), dtype=torch.long, device=self.device
+        )
+        with torch.inference_mode():
+            output = self.runtime.model(
+                input_ids=prefix,
+                attention_mask=attention_mask,
+                past_key_values=self.past_key_values,
+                use_cache=True,
+            )
+        self.past_key_values = output.past_key_values
+        self.cached_through = position - 1
 
 
 _runtime_lock = RLock()
@@ -126,6 +191,27 @@ def load_model_trace(
     Model tensors are loaded through :mod:`gb10_load_llm`, as required for
     efficient cold-page transfers on GB10/GX10 systems.
     """
+    execution = prepare_model_execution(
+        model_name_or_path,
+        revision=revision,
+        prompt=prompt,
+        device=device,
+        dtype=dtype,
+        progress=progress,
+    )
+    return execution.trace_token(execution.token_count - 1)
+
+
+def prepare_model_execution(
+    model_name_or_path: str,
+    *,
+    revision: str = "main",
+    prompt: str,
+    device: str = "cuda",
+    dtype: str = "bfloat16",
+    progress: Callable[[str], None] | None = None,
+) -> ModelExecution:
+    """Load/reuse a model and tokenize a prompt without running its forward pass."""
     try:
         import torch
         import gb10_load_llm  # noqa: F401 - validates the private runtime
@@ -144,9 +230,6 @@ def load_model_trace(
         raise RuntimeError("CUDA was requested, but torch.cuda.is_available() is false")
 
     report = progress or (lambda _message: None)
-
-    # Forward hooks mutate model state temporarily, so loading and tracing share
-    # one lock even if multiple editor windows connect to the host concurrently.
     with _runtime_lock:
         runtime = _get_model_runtime(
             model_name_or_path,
@@ -155,26 +238,35 @@ def load_model_trace(
             dtype=dtype,
             progress=report,
         )
-        return _capture_trace(runtime, prompt=prompt, device=device, progress=report)
+        if getattr(runtime.model.config, "model_type", None) != "gpt2":
+            raise ValueError(
+                "the prototype currently supports GPT-2 models, "
+                f"got {runtime.model.config.model_type!r}"
+            )
+        encoded = runtime.tokenizer(prompt, return_tensors="pt")
+        input_ids = encoded["input_ids"]
+        tokens = tuple(
+            runtime.tokenizer.decode([token_id]) for token_id in input_ids[0].tolist()
+        )
+    report(f"Prepared {len(tokens)} prompt tokens; forward execution is deferred.\n")
+    return ModelExecution(runtime, input_ids, tokens, device, report)
 
 
-def _capture_trace(
+def _capture_token_trace(
     runtime: ModelRuntime,
     *,
-    prompt: str,
+    input_ids: Any,
+    past_key_values: Any,
+    total_length: int,
     device: str,
     progress: Callable[[str], None],
-) -> ModelTrace:
-    """Run one prompt through an already resident GPT-2 model."""
+    token_position: int,
+) -> tuple[ModelTrace, Any]:
+    """Capture all layer states for one token using an existing KV cache."""
     import torch
 
     model = runtime.model
     tokenizer = runtime.tokenizer
-    if getattr(model.config, "model_type", None) != "gpt2":
-        raise ValueError(
-            f"the prototype currently supports GPT-2 models, got {model.config.model_type!r}"
-        )
-
     captured: list[tuple[str, str, str, Any, bool]] = []
     handles = []
 
@@ -234,14 +326,17 @@ def _capture_trace(
     )
 
     try:
-        inputs = tokenizer(prompt, return_tensors="pt")
-        tokens = tuple(
-            tokenizer.decode([token_id]) for token_id in inputs["input_ids"][0].tolist()
+        attention_mask = torch.ones(
+            (1, total_length), dtype=torch.long, device=device
         )
-        inputs = {name: tensor.to(device) for name, tensor in inputs.items()}
-        progress(f"Running forward pass for {len(inputs['input_ids'][0])} prompt tokens...\n")
+        progress(f"Running token {token_position} as a one-token cached forward pass.\n")
         with torch.inference_mode():
-            model(**inputs)
+            model_output = model(
+                input_ids=input_ids.to(device),
+                attention_mask=attention_mask,
+                past_key_values=past_key_values,
+                use_cache=True,
+            )
     finally:
         for handle in handles:
             handle.remove()
@@ -264,5 +359,5 @@ def _capture_trace(
         )
         previous = output
 
-    progress(f"Captured {len(states)} GPT-2 layer states.\n")
-    return ModelTrace(tuple(states), tokens)
+    progress(f"Captured {len(states)} layer states for token {token_position}.\n")
+    return ModelTrace(tuple(states), ()), model_output.past_key_values

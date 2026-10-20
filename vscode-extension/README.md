@@ -54,6 +54,12 @@ Each `[[step]]` selects a model execution stop, and breakpoints can be placed
 inside those tables. Unlisted model operations are omitted from the debug
 trace.
 
+Use a conditional breakpoint such as `token.position == 3` to combine the
+source line's model layer with a zero-based prompt-token position. llmdbg
+prefills earlier tokens into the KV cache and executes the selected token as a
+one-token cached forward pass. The **Token** scope shows its position, token ID,
+decoded text, and prompt prefix.
+
 The prototype loads GPT-2 through `gb10-load-llm`, captures embedding,
 attention, and MLP outputs, and shows a logit-lens interpretation at every
 stop. The Debug Console supports `layer`, `operation`, `meaning`, `input`, and

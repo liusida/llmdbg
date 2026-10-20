@@ -81,6 +81,13 @@ execution stop. Set breakpoints inside these tables or use **Step Over** to
 advance through them. Runtime vectors appear in debugger scopes; the source
 file is never rewritten.
 
+To stop at a specific prompt token and layer, add a conditional breakpoint to
+the desired `[[step]]` and use a zero-based condition such as
+`token.position == 3`. The debugger prefills tokens before that position into
+the KV cache, then captures the selected token with a one-token forward pass.
+Stepping beyond the last selected layer advances to the next token using the
+updated cache.
+
 ## License
 
 MIT
