@@ -61,6 +61,7 @@ class LLMDebugAdapter:
     THREAD_ID = 1
     FRAME_ID = 1
     SCOPE_TOKEN = 50
+    SCOPE_TOKENS = 60
     SCOPE_LAYER = 100
     SCOPE_INPUT = 200
     SCOPE_RESIDUAL = 300
@@ -68,6 +69,7 @@ class LLMDebugAdapter:
     SCOPE_TOP_NEURONS = 1000
     NEURON_REFERENCE = 1100
     TOKEN_REFERENCE = 1200
+    LOCAL_VECTOR_REFERENCE = 2000
     DETAIL_SCOPES = {
         500: ("normalized_input", "LayerNorm output"),
         600: ("mlp_expansion_pre_activation", "MLP expansion (pre-activation)"),
@@ -102,6 +104,7 @@ class LLMDebugAdapter:
         self.execution: ModelExecution | None = None
         self.tokens: tuple[str, ...] = ()
         self.prompt = ""
+        self.model_name = "built-in demo"
         self.token_index = 0
         self.default_token: int | None = None
         self.layer_index = 0
@@ -267,6 +270,7 @@ class LLMDebugAdapter:
                 file_arguments = load_debug_config(str(arguments["config"]))
                 arguments = {**file_arguments, **arguments}
             model = arguments.get("model")
+            self.model_name = str(model) if model else "built-in demo"
             self.prompt = str(arguments.get("prompt", "The capital of France is"))
             if model:
                 self.send_event(
@@ -390,9 +394,7 @@ class LLMDebugAdapter:
                 )
         elif command == "scopes":
             scopes = [
-                {"name": "Context", "variablesReference": self.SCOPE_TOKEN, "expensive": False},
-                {"name": "Next operation", "variablesReference": self.SCOPE_LAYER, "expensive": False},
-                {"name": "Current input", "variablesReference": self.SCOPE_INPUT, "expensive": False},
+                {"name": "Local variables", "variablesReference": self.SCOPE_TOKEN, "expensive": False},
             ]
             result_state = self.previous_state
             if result_state is not None:
@@ -745,7 +747,11 @@ class LLMDebugAdapter:
 
     def _stop_at_internal_breakpoint(self) -> bool:
         """Honor breakpoints inside the current call even while stepping over it."""
-        path = self.step_paths[self.layer_index] if self.layer_index < len(self.step_paths) else ""
+        path = (
+            self.step_paths[self.layer_index]
+            if self.layer_index < len(self.step_paths)
+            else self.outer_state.layer.name
+        )
         if path.endswith(".attention"):
             lines = self.attention_source_lines
         elif path.endswith(".mlp"):
@@ -768,55 +774,109 @@ class LLMDebugAdapter:
                 return True
         return False
 
-    def _variables(self, reference: int) -> list[dict[str, Any]]:
-        if reference == self.SCOPE_TOKEN:
-            token_id = (
-                int(self.execution.input_ids[0, self.token_index].item())
-                if self.execution is not None
-                else 0
+    def _local_vector_names(self) -> list[str]:
+        """Return vector-valued names that exist at the current source line."""
+        names: list[str] = []
+        path = (
+            self.step_paths[self.layer_index]
+            if self.layer_index < len(self.step_paths)
+            else self.outer_state.layer.name
+        )
+        if self.inside_internal or self.layer_index > 0 or path != "token_embedding":
+            names.append("x")
+        if self.inside_internal:
+            function_name = "attention" if self.inside_attention else "mlp"
+            completed = {
+                operation for operation, _vector, _meaning in self.internal_steps[: self.mlp_step_index]
+            }
+            latest: dict[str, str] = {}
+            for binding in self.function_bindings.get(function_name, []):
+                if binding.get("operation") in completed:
+                    latest[str(binding["name"])] = str(binding["operation"])
+            names.extend(name for name in latest if name not in names)
+        return names
+
+    def _local_variables(self) -> list[dict[str, Any]]:
+        """Build Python-like locals for the active authored source frame."""
+        variables: list[dict[str, Any]] = [
+            {
+                "name": "model", "value": repr(self.model_name), "type": "model",
+                "variablesReference": 0,
+            },
+            {
+                "name": "prompt", "value": repr(self.prompt), "type": "str",
+                "variablesReference": 0, "evaluateName": "prompt",
+            },
+            {
+                "name": "tokens", "value": f"{len(self.tokens)} tokens", "type": "tokens",
+                "variablesReference": self.SCOPE_TOKENS,
+            },
+            {
+                "name": "token_pos", "value": str(self.token_index), "type": "int",
+                "variablesReference": 0, "evaluateName": "token_pos",
+            },
+        ]
+        path = self.step_paths[self.layer_index] if self.layer_index < len(self.step_paths) else ""
+        if self.inside_internal or ".attention" in path or ".mlp" in path:
+            variables.append(
+                {
+                    "name": "layer", "value": repr(self.outer_state.layer.name), "type": "layer",
+                    "variablesReference": 0, "evaluateName": "layer",
+                }
             )
-            prefix = "".join(self.tokens[: self.token_index + 1])
-            return [
+        for offset, name in enumerate(self._local_vector_names()):
+            vector = self._vector(self._source_expression(name))
+            variables.append(
                 {
-                    "name": "prompt",
-                    "value": repr(self.prompt),
-                    "type": "str",
-                    "variablesReference": 0,
-                    "evaluateName": "prompt",
-                },
+                    "name": name, "value": f"{len(vector)}D vector", "type": "TensorHandle",
+                    "variablesReference": self.LOCAL_VECTOR_REFERENCE + offset,
+                    "evaluateName": name,
+                }
+            )
+        variables.extend(
+            [
                 {
-                    "name": "token_pos",
-                    "value": str(self.token_index),
-                    "type": "int",
+                    "name": "token_text", "value": repr(self.tokens[self.token_index]), "type": "str",
                     "variablesReference": 0,
-                    "evaluateName": "token_pos",
-                },
-                {
-                    "name": "layer",
-                    "value": repr(self.state.layer.name),
-                    "type": "str",
-                    "variablesReference": 0,
-                    "evaluateName": "layer",
-                },
-                {
-                    "name": "token",
-                    "value": repr(self.tokens[self.token_index]),
-                    "type": "str",
-                    "variablesReference": 0,
-                    "evaluateName": "token",
                 },
                 {
                     "name": "token_id",
-                    "value": str(token_id),
-                    "type": "int",
-                    "variablesReference": 0,
+                    "value": str(
+                        int(self.execution.input_ids[0, self.token_index].item())
+                        if self.execution is not None else 0
+                    ),
+                    "type": "int", "variablesReference": 0,
                 },
+            ]
+        )
+        return variables
+
+    def _variables(self, reference: int) -> list[dict[str, Any]]:
+        if reference == self.SCOPE_TOKEN:
+            return self._local_variables()
+        if reference == self.SCOPE_TOKENS:
+            return [
                 {
-                    "name": "prefix",
-                    "value": repr(prefix),
-                    "type": "str",
+                    "name": f"[{index}]", "value": repr(text), "type": "token",
                     "variablesReference": 0,
-                },
+                }
+                for index, text in enumerate(self.tokens)
+            ]
+        if reference >= self.LOCAL_VECTOR_REFERENCE:
+            offset = reference - self.LOCAL_VECTOR_REFERENCE
+            names = self._local_vector_names()
+            if offset >= len(names):
+                return []
+            name = names[offset]
+            vector = self._vector(self._source_expression(name))
+            indices = sorted(range(len(vector)), key=lambda index: abs(vector[index]), reverse=True)[:16]
+            return [
+                {
+                    "name": f"dimension[{index}]", "value": f"{vector[index]:+.6f}",
+                    "type": "float", "variablesReference": 0,
+                    "evaluateName": f"{name}[{index}]",
+                }
+                for index in indices
             ]
         if reference == self.SCOPE_LAYER:
             variables = [

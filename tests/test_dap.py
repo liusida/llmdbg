@@ -244,12 +244,23 @@ class DAPIntegrationTest(unittest.TestCase):
                 {"name": "features", "operation": "gelu", "line": 3},
             ]
         }
+        adapter.model_name = "openai-community/gpt2"
+        adapter.prompt = "hello"
+        adapter.tokens = ("hello",)
+        adapter.token_index = 0
+        adapter.step_paths = ("transformer.h.0.mlp",)
+        adapter.execution = None
         self.assertEqual(adapter._evaluate("features[1]"), "+2.50000000")
         self.assertEqual(adapter._evaluate("features[:2]"), repr((1.5, 2.5)))
         self.assertEqual(adapter._evaluate("x[1]"), "+2.00000000")
         self.assertEqual(adapter._plot_vector("features[:2]"), (1.5, 2.5))
         self.assertEqual(adapter._plot_vector("x"), (1.0, 2.0))
         self.assertEqual(adapter._plot_vector("[1, 2.5, -3]"), (1.0, 2.5, -3.0))
+        locals_by_name = {item["name"]: item for item in adapter._local_variables()}
+        self.assertEqual(locals_by_name["layer"]["evaluateName"], "layer")
+        self.assertIn("x", locals_by_name)
+        self.assertIn("norm", locals_by_name)
+        self.assertIn("features", locals_by_name)
 
     def test_neuron_lens_snapshot_contains_direction_tokens(self) -> None:
         adapter = object.__new__(LLMDebugAdapter)
@@ -425,6 +436,10 @@ class DAPIntegrationTest(unittest.TestCase):
         self.assertTrue(all(response["success"] for response in responses.values()))
         self.assertEqual(responses[4]["body"]["threads"][0]["name"], "LLM forward pass")
         self.assertIn("token_embedding", responses[5]["body"]["stackFrames"][0]["name"])
+        scope_names = {scope["name"] for scope in responses[6]["body"]["scopes"]}
+        self.assertIn("Local variables", scope_names)
+        self.assertNotIn("Next operation", scope_names)
+        self.assertNotIn("Current input", scope_names)
         source = responses[5]["body"]["stackFrames"][0]["source"]
         self.assertEqual(source["sourceReference"], 1)
         self.assertTrue(source["name"].endswith(".execution.llmdbg"))
@@ -475,7 +490,8 @@ class DAPIntegrationTest(unittest.TestCase):
         context = {item["name"]: item for item in responses[4]["body"]["variables"]}
         self.assertEqual(context["prompt"]["evaluateName"], "prompt")
         self.assertEqual(context["token_pos"]["value"], "0")
-        self.assertEqual(context["layer"]["evaluateName"], "layer")
+        self.assertNotIn("layer", context)
+        self.assertNotIn("x", context)
         self.assertEqual(responses[5]["body"]["result"], "Hello model")
         self.assertEqual(responses[6]["body"]["result"], "0")
         self.assertTrue(responses[7]["body"]["result"])

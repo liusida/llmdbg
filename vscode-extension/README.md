@@ -132,9 +132,11 @@ The prototype loads GPT-2 through `gb10-load-llm`, captures embedding,
 attention, and MLP outputs, and shows a logit-lens interpretation at every
 stop. The Debug Console supports `layer`, `operation`, `meaning`, `input`, and
 `output`.
-The Variables pane exposes a first-class **Context** scope with `prompt`,
-`token_pos`, and `layer`; the same names work in Watch, hover, and the Debug
-Console.
+The Variables pane exposes a frame-aware **Local variables** scope with source
+names such as `model`, `prompt`, `tokens`, `token_pos`, `x`, `layer`, and
+completed function locals. Values that do not exist yet—such as `x` before
+token embedding—are omitted. The same names work in Watch, hover, and the
+Debug Console.
 
 The model is lazy-loaded on the first F5 and kept in a persistent host owned by
 the extension. Ending a debug session does not unload its GPU tensors. Later F5
