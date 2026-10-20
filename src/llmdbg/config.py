@@ -16,6 +16,7 @@ _GLOBAL_KEYS = {
     "device",
     "dtype",
     "prompt",
+    "token",
     "stop_on_entry",
 }
 
@@ -92,6 +93,11 @@ def load_debug_config(path: str) -> dict[str, Any]:
         raise ValueError('model must be assigned a non-empty string, for example model = "gpt2"')
     if not isinstance(prompt, str) or not prompt:
         raise ValueError("prompt must be assigned a non-empty string")
+    default_token = globals_.get("token")
+    if default_token is not None and (
+        not isinstance(default_token, int) or isinstance(default_token, bool) or default_token < 0
+    ):
+        raise ValueError("token must be assigned a non-negative integer")
     if not step_paths:
         raise ValueError("at least one submodule statement is required")
 
@@ -102,6 +108,7 @@ def load_debug_config(path: str) -> dict[str, Any]:
         "device": globals_.get("device", "cuda"),
         "dtype": globals_.get("dtype", "bfloat16"),
         "prompt": prompt,
+        "defaultToken": default_token,
         "stopOnEntry": globals_.get("stop_on_entry", True),
         "stepPaths": step_paths,
         "stepLines": step_lines,

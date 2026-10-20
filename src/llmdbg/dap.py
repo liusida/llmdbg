@@ -70,6 +70,7 @@ class LLMDebugAdapter:
         self.execution: ModelExecution | None = None
         self.tokens: tuple[str, ...] = ()
         self.token_index = 0
+        self.default_token: int | None = None
         self.layer_index = 0
         self.launched = False
         self.stop_on_entry = True
@@ -176,6 +177,7 @@ class LLMDebugAdapter:
                 self.tokens = ("demo",)
                 self._build_virtual_source(arguments, "built-in-demo", ())
             self.token_index = 0
+            self.default_token = arguments.get("defaultToken")
             self.layer_index = 0
             self.launched = True
             self.stop_on_entry = bool(arguments.get("stopOnEntry", True))
@@ -296,14 +298,18 @@ class LLMDebugAdapter:
                     )
                 else:
                     condition = str(item.get("condition", "")).strip()
-                    token_position = self._parse_token_condition(condition)
+                    token_position = (
+                        self._parse_token_condition(condition)
+                        if condition
+                        else self.default_token
+                    )
                     if condition and token_position is None:
                         breakpoint.update(
                             {
                                 "verified": False,
                                 "line": resolved_line,
                                 "message": (
-                                    "Use a token condition such as token.position == 4"
+                                    "Use a token condition such as token=4"
                                 ),
                             }
                         )
@@ -409,7 +415,7 @@ class LLMDebugAdapter:
         if not condition:
             return None
         match = re.fullmatch(
-            r"(?:token(?:\.position)?|position)\s*==\s*(\d+)",
+            r"token\s*=\s*(\d+)",
             condition,
             flags=re.IGNORECASE,
         )

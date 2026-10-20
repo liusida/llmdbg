@@ -28,9 +28,9 @@ def parse_frames(data: bytes) -> list[dict[str, object]]:
 
 class DAPIntegrationTest(unittest.TestCase):
     def test_token_condition_parser(self) -> None:
-        self.assertEqual(LLMDebugAdapter._parse_token_condition("token.position == 4"), 4)
-        self.assertEqual(LLMDebugAdapter._parse_token_condition("token == 2"), 2)
-        self.assertEqual(LLMDebugAdapter._parse_token_condition("position == 1"), 1)
+        self.assertEqual(LLMDebugAdapter._parse_token_condition("token=4"), 4)
+        self.assertEqual(LLMDebugAdapter._parse_token_condition("token = 2"), 2)
+        self.assertIsNone(LLMDebugAdapter._parse_token_condition("token.position == 1"))
         self.assertIsNone(LLMDebugAdapter._parse_token_condition("token.text == 'x'"))
 
     def test_continue_stops_at_a_source_breakpoint(self) -> None:
@@ -40,7 +40,7 @@ class DAPIntegrationTest(unittest.TestCase):
                 "seq": 2,
                 "type": "request",
                 "command": "launch",
-                "arguments": {"stopOnEntry": False},
+                "arguments": {"stopOnEntry": False, "defaultToken": 0},
             },
             {
                 "seq": 3,

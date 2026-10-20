@@ -18,6 +18,7 @@ revision = "main"
 device = "cuda"
 dtype = "bfloat16"
 prompt = "The capital of France is"
+token = 3
 stop_on_entry = true
 
 submodule = "token_embedding"
@@ -30,6 +31,7 @@ submodule = "transformer.h.0.mlp"
 
         self.assertEqual(config["model"], "openai-community/gpt2")
         self.assertEqual(config["prompt"], "The capital of France is")
+        self.assertEqual(config["defaultToken"], 3)
         self.assertTrue(config["stopOnEntry"])
         self.assertEqual(
             config["stepPaths"],
@@ -51,4 +53,14 @@ submodule = "transformer.h.0.mlp"
                 'submodule = "transformer.h.0.attention"\n'
             )
             with self.assertRaisesRegex(ValueError, r"does not belong to layer 1"):
+                load_debug_config(str(path))
+
+    def test_rejects_negative_default_token(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "invalid.llmdbg"
+            path.write_text(
+                'model = "gpt2"\nprompt = "hello"\ntoken = -1\n'
+                'submodule = "token_embedding"\n'
+            )
+            with self.assertRaisesRegex(ValueError, r"token must be assigned"):
                 load_debug_config(str(path))

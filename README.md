@@ -33,6 +33,7 @@ revision = "main"
 device = "cuda"
 dtype = "bfloat16"
 prompt = "The capital of France is"
+token = 3
 stop_on_entry = false
 
 submodule = "token_embedding"
@@ -74,12 +75,12 @@ authored model execution stop. Set breakpoints on these statements or use
 **Step Over** to advance through them. Runtime vectors appear in debugger
 scopes; the source file is never rewritten.
 
-To stop at a specific prompt token and layer, add a conditional breakpoint to
-the desired `submodule` statement and use a zero-based condition such as
-`token.position == 3`. The debugger prefills tokens before that position into
-the KV cache, then captures the selected token with a one-token forward pass.
-Stepping beyond the last selected layer advances to the next token using the
-updated cache.
+`token = 3` makes token position 3 the default for every ordinary source
+breakpoint. To override it for one breakpoint, use the shorter conditional
+expression `token=4`. Positions are zero-based. The debugger prefills tokens
+before the selected position into the KV cache, then captures that token with
+a one-token forward pass. Stepping beyond the last selected layer advances to
+the next token using the updated cache.
 
 ## License
 
