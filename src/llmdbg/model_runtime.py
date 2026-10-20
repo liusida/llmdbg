@@ -402,6 +402,14 @@ def _capture_token_trace(
 
         return hook
 
+    def capture_detail_input(state_name: str, detail_name: str):
+        def hook(_module, inputs) -> None:
+            tensor = inputs[0]
+            apply_interventions(tensor, state_name, detail_name)
+            detailed.setdefault(state_name, {})[detail_name] = tensor.detach()
+
+        return hook
+
     handles.append(
         model.transformer.drop.register_forward_hook(
             capture(
@@ -418,6 +426,21 @@ def _capture_token_trace(
         handles.append(
             block.ln_1.register_forward_hook(
                 capture_detail(attention_name, "normalized_input")
+            )
+        )
+        handles.append(
+            block.attn.c_attn.register_forward_hook(
+                capture_detail(attention_name, "attention_qkv")
+            )
+        )
+        handles.append(
+            block.attn.c_proj.register_forward_pre_hook(
+                capture_detail_input(attention_name, "attention_mixing")
+            )
+        )
+        handles.append(
+            block.attn.c_proj.register_forward_hook(
+                capture_detail(attention_name, "attention_projection")
             )
         )
         handles.append(

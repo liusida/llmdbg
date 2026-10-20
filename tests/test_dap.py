@@ -194,6 +194,31 @@ class DAPIntegrationTest(unittest.TestCase):
             [(3, "transformer.h.0.mlp", "normalized_input", 1, 9.0)],
         )
 
+    def test_attention_step_into_exposes_real_internal_vectors(self) -> None:
+        adapter = object.__new__(LLMDebugAdapter)
+        adapter.trace = (
+            LayerState(
+                Layer("transformer.h.0.attention", "attention", "attention", 1.0, 0.0),
+                (1.0, 2.0),
+                (1.5, 2.5),
+                "attention",
+                {
+                    "normalized_input": (0.1, 0.2),
+                    "attention_qkv": (1.0, 2.0, 3.0, 4.0, 5.0, 6.0),
+                    "attention_mixing": (0.3, 0.4),
+                    "attention_projection": (0.5, 0.5),
+                },
+            ),
+        )
+        adapter.layer_index = 0
+        adapter.inside_mlp = False
+        adapter.inside_attention = True
+        adapter.mlp_step_index = 2
+
+        self.assertEqual(adapter.state.layer.operation, "attention_mixing")
+        self.assertEqual(adapter.state.input_vector, (1.0, 2.0, 3.0, 4.0, 5.0, 6.0))
+        self.assertEqual(adapter.previous_state.layer.operation, "qkv_projection")
+
     def test_continue_stops_at_a_source_breakpoint(self) -> None:
         requests = [
             {"seq": 1, "type": "request", "command": "initialize", "arguments": {}},

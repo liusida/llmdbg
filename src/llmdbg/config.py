@@ -13,6 +13,14 @@ _BLOCK_SUBMODULE = re.compile(r"^transformer\.h\.(\d+)\.(attention|mlp)$")
 _FUNCTION = re.compile(r"^def\s+([A-Za-z_][A-Za-z0-9_]*)\(\):\s*$")
 _LAYER_CALL = re.compile(r"^(attention|mlp)\(\)\s*$")
 _MLP_OPERATIONS = ("layernorm", "expansion", "gelu", "projection", "residual_add")
+_ATTENTION_OPERATIONS = (
+    "layernorm",
+    "qkv_projection",
+    "attention_mixing",
+    "output_projection",
+    "residual_add",
+)
+_FUNCTION_OPERATIONS = {"mlp": _MLP_OPERATIONS, "attention": _ATTENTION_OPERATIONS}
 _GLOBAL_KEYS = {
     "model",
     "revision",
@@ -66,8 +74,10 @@ def load_debug_config(path: str) -> dict[str, Any]:
         function_match = _FUNCTION.fullmatch(line)
         if function_match:
             function_name = function_match.group(1)
-            if function_name != "mlp":
-                raise ValueError(f"line {line_number}: only def mlp(): is currently supported")
+            if function_name not in _FUNCTION_OPERATIONS:
+                raise ValueError(
+                    f"line {line_number}: only def attention(): and def mlp(): are supported"
+                )
             if function_name in functions:
                 raise ValueError(f"line {line_number}: duplicate function {function_name!r}")
             functions[function_name] = {}
@@ -75,8 +85,10 @@ def load_debug_config(path: str) -> dict[str, Any]:
         if raw_line[:1].isspace():
             if function_name is None:
                 raise ValueError(f"line {line_number}: indented operation is outside a function")
-            if line not in _MLP_OPERATIONS:
-                raise ValueError(f"line {line_number}: unknown MLP operation {line!r}")
+            if line not in _FUNCTION_OPERATIONS[function_name]:
+                raise ValueError(
+                    f"line {line_number}: unknown {function_name} operation {line!r}"
+                )
             if line in functions[function_name]:
                 raise ValueError(f"line {line_number}: duplicate MLP operation {line!r}")
             functions[function_name][line] = line_number
@@ -139,6 +151,11 @@ def load_debug_config(path: str) -> dict[str, Any]:
     if "mlp" in functions and tuple(functions["mlp"]) != _MLP_OPERATIONS:
         raise ValueError(
             "def mlp() operations must be, in order: " + ", ".join(_MLP_OPERATIONS)
+        )
+    if "attention" in functions and tuple(functions["attention"]) != _ATTENTION_OPERATIONS:
+        raise ValueError(
+            "def attention() operations must be, in order: "
+            + ", ".join(_ATTENTION_OPERATIONS)
         )
 
     return {

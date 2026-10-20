@@ -21,6 +21,13 @@ prompt = "The capital of France is"
 token = 3
 stop_on_entry = true
 
+def attention():
+    layernorm
+    qkv_projection
+    attention_mixing
+    output_projection
+    residual_add
+
 def mlp():
     layernorm
     expansion
@@ -45,11 +52,15 @@ mlp()
             ["layernorm", "expansion", "gelu", "projection", "residual_add"],
         )
         self.assertEqual(
+            list(config["functions"]["attention"]),
+            ["layernorm", "qkv_projection", "attention_mixing", "output_projection", "residual_add"],
+        )
+        self.assertEqual(
             config["stepPaths"],
             ["token_embedding", "transformer.h.0.attention", "transformer.h.0.mlp"],
         )
-        self.assertEqual(config["stepLines"]["transformer.h.0.attention"], 18)
-        self.assertEqual(config["stepLines"]["transformer.h.0.mlp"], 19)
+        self.assertEqual(config["stepLines"]["transformer.h.0.attention"], 25)
+        self.assertEqual(config["stepLines"]["transformer.h.0.mlp"], 26)
 
     def test_rejects_layer_call_without_layer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

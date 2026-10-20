@@ -36,6 +36,13 @@ prompt = "The capital of France is"
 token = 3
 stop_on_entry = false
 
+def attention():
+    layernorm
+    qkv_projection
+    attention_mixing
+    output_projection
+    residual_add
+
 def mlp():
     layernorm
     expansion
@@ -83,11 +90,12 @@ Set breakpoints on these calls or use
 **Step Over** to advance through them. Runtime vectors appear in debugger
 scopes; the source file is never rewritten.
 
-Press **Step Into (F11)** on any `mlp()` call to enter the
-authored `mlp()` definition in the same file. **Step Over (F10)** then walks
-through LayerNorm, expansion, GELU, projection, and the residual add. The call
-site remains visible as the parent stack frame; **Step Out (Shift+F11)** returns
-to the next model submodule.
+Press **Step Into (F11)** on `attention()` or `mlp()` to enter its authored
+definition in the same file. Attention exposes LayerNorm, the combined QKV
+projection, the concatenated per-head attention result, output projection, and
+residual add. MLP exposes LayerNorm, expansion, GELU, projection, and residual
+add. **F10** advances inside a definition; **Shift+F11** returns to the next
+model operation. The call site remains visible as the parent stack frame.
 
 `token = 3` makes token position 3 the default for every ordinary source
 breakpoint. To override it for one breakpoint, use the shorter conditional
@@ -103,8 +111,9 @@ Current Vector** from the Command Palette or debug toolbar to inspect the full
 vector as a dimension plot, histogram, or top-activation chart. An open plot
 updates automatically after each debugger stop.
 
-Attention stops additionally expose the 768D LayerNorm output used as the
-attention input. MLP stops expose the 768D LayerNorm output, the 3072D linear
+Attention stops expose the 768D LayerNorm output, combined 2304D QKV
+projection, 768D concatenated attention-head result, and 768D output
+projection. MLP stops expose the 768D LayerNorm output, the 3072D linear
 expansion before activation, the 3072D expansion after GELU, and the 768D
 projection. Use indexed Watches such as `layernorm[42]`,
 `mlp_expansion_pre_activation[42]`, `mlp_expansion[42]`, and

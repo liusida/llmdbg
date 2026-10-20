@@ -71,6 +71,9 @@ class LLMDebugAdapter:
         700: ("mlp_expansion", "MLP expansion (after activation)"),
         800: ("mlp_projection", "MLP projection"),
         900: ("normalized_output", "Normalized output"),
+        1300: ("attention_qkv", "QKV projection"),
+        1400: ("attention_mixing", "Attention mixing"),
+        1500: ("attention_projection", "Attention output projection"),
     }
     SOURCE_REFERENCE = 1
     MLP_FRAME_ID = 2
@@ -80,6 +83,13 @@ class LLMDebugAdapter:
         ("gelu", "mlp_expansion", "Apply the GELU nonlinearity."),
         ("projection", "mlp_projection", "Project active neurons back with W_down."),
         ("residual_add", "output", "Add the MLP update to the residual stream."),
+    )
+    ATTENTION_STEPS = (
+        ("layernorm", "normalized_input", "Normalize the residual stream for attention."),
+        ("qkv_projection", "attention_qkv", "Project the input into query, key, and value vectors."),
+        ("attention_mixing", "attention_mixing", "Mix value vectors across cached token positions and heads."),
+        ("output_projection", "attention_projection", "Project concatenated attention heads back to model width."),
+        ("residual_add", "output", "Add the attention update to the residual stream."),
     )
 
     def __init__(self, stream: ProtocolStream) -> None:
@@ -104,13 +114,23 @@ class LLMDebugAdapter:
         self.mlp_step_index = 0
         self.mlp_source_content = ""
         self.mlp_source_lines: tuple[int, ...] = ()
+        self.inside_attention = False
+        self.attention_source_lines: tuple[int, ...] = ()
+
+    @property
+    def internal_steps(self) -> tuple[tuple[str, str, str], ...]:
+        return self.ATTENTION_STEPS if getattr(self, "inside_attention", False) else self.MLP_STEPS
+
+    @property
+    def inside_internal(self) -> bool:
+        return getattr(self, "inside_mlp", False) or getattr(self, "inside_attention", False)
 
     @property
     def state(self) -> LayerState:
         outer = self.trace[self.layer_index]
-        if not getattr(self, "inside_mlp", False):
+        if not getattr(self, "inside_internal", False):
             return outer
-        step_name, _vector_name, meaning = self.MLP_STEPS[self.mlp_step_index]
+        step_name, _vector_name, meaning = self.internal_steps[self.mlp_step_index]
         input_vector = self._mlp_step_input(self.mlp_step_index)
         return LayerState(
             layer=outer.layer.__class__(
@@ -127,11 +147,11 @@ class LLMDebugAdapter:
 
     @property
     def previous_state(self) -> LayerState | None:
-        if getattr(self, "inside_mlp", False):
+        if getattr(self, "inside_internal", False):
             if self.mlp_step_index == 0:
                 return None
             outer = self.trace[self.layer_index]
-            step_name, vector_name, meaning = self.MLP_STEPS[self.mlp_step_index - 1]
+            step_name, vector_name, meaning = self.internal_steps[self.mlp_step_index - 1]
             output = self._mlp_vector(vector_name)
             input_vector = self._mlp_step_input(self.mlp_step_index - 1)
             details = {} if vector_name == "output" else {vector_name: output}
@@ -163,7 +183,7 @@ class LLMDebugAdapter:
     def _mlp_step_input(self, step_index: int) -> tuple[float, ...]:
         if step_index == 0:
             return self.outer_state.input_vector
-        return self._mlp_vector(self.MLP_STEPS[step_index - 1][1])
+        return self._mlp_vector(self.internal_steps[step_index - 1][1])
 
     def send_response(
         self,
@@ -334,15 +354,15 @@ class LLMDebugAdapter:
                 ),
                 "source": source,
                 "line": (
-                    self.mlp_source_lines[self.mlp_step_index]
-                    if self.inside_mlp else self.source_lines[self.layer_index]
+                    (self.attention_source_lines if self.inside_attention else self.mlp_source_lines)[self.mlp_step_index]
+                    if self.inside_internal else self.source_lines[self.layer_index]
                 ),
                 "column": 1,
                 "presentationHint": "normal",
             }
-            if self.inside_mlp:
+            if self.inside_internal:
                 frame["id"] = self.MLP_FRAME_ID
-                frame["name"] = f"{self.outer_state.layer.name} · {self.MLP_STEPS[self.mlp_step_index][0]}"
+                frame["name"] = f"{self.outer_state.layer.name} · {self.internal_steps[self.mlp_step_index][0]}"
                 parent = {
                     "id": self.FRAME_ID,
                     "name": f"token {self.token_index}: {self.tokens[self.token_index]!r} · {self.outer_state.layer.name}",
@@ -436,20 +456,25 @@ class LLMDebugAdapter:
             self.send_response(request, self._vector_snapshot())
         elif command in ("next", "stepIn", "stepOut"):
             self.send_response(request)
-            if command == "stepIn" and not self.inside_mlp and self.outer_state.layer.name.endswith(".mlp") and self.mlp_source_lines:
-                self.inside_mlp = True
+            can_enter_mlp = self.outer_state.layer.name.endswith(".mlp") and self.mlp_source_lines
+            can_enter_attention = self.outer_state.layer.name.endswith(".attention") and self.attention_source_lines
+            if command == "stepIn" and not self.inside_internal and (can_enter_mlp or can_enter_attention):
+                self.inside_mlp = bool(can_enter_mlp)
+                self.inside_attention = bool(can_enter_attention)
                 self.mlp_step_index = 0
                 self.stop("step")
-            elif self.inside_mlp and command != "stepOut" and self.mlp_step_index + 1 < len(self.MLP_STEPS):
+            elif self.inside_internal and command != "stepOut" and self.mlp_step_index + 1 < len(self.internal_steps):
                 self.mlp_step_index += 1
                 self.stop("step")
             else:
                 self.inside_mlp = False
+                self.inside_attention = False
                 self.mlp_step_index = 0
                 self._advance_outer()
         elif command == "continue":
             self.send_response(request, {"allThreadsContinued": True})
             self.inside_mlp = False
+            self.inside_attention = False
             self._continue_to_breakpoint(include_current=False)
         elif command == "pause":
             self.send_response(request)
@@ -585,6 +610,12 @@ class LLMDebugAdapter:
         self.mlp_source_lines = tuple(int(mlp_lines.get(name, 0)) for name, _, _ in self.MLP_STEPS)
         if any(line <= 0 for line in self.mlp_source_lines):
             self.mlp_source_lines = ()
+        attention_lines = functions.get("attention", {}) if isinstance(functions, dict) else {}
+        self.attention_source_lines = tuple(
+            int(attention_lines.get(name, 0)) for name, _, _ in self.ATTENTION_STEPS
+        )
+        if any(line <= 0 for line in self.attention_source_lines):
+            self.attention_source_lines = ()
 
     def _advance_outer(self) -> None:
         """Step over the current authored submodule."""
@@ -869,7 +900,8 @@ class LLMDebugAdapter:
         else:
             indexed = re.fullmatch(
                 r"(input|output|residual|residual_stream|layernorm|normalized_input|"
-                r"normalized_output|mlp_expansion_pre_activation|mlp_expansion|mlp_projection)"
+                r"normalized_output|mlp_expansion_pre_activation|mlp_expansion|mlp_projection|"
+                r"attention_qkv|attention_mixing|attention_projection)"
                 r"\[(\d+)\]",
                 expression,
             )
@@ -887,8 +919,8 @@ class LLMDebugAdapter:
             elif vector_name == "layernorm":
                 vector_name = "normalized_input"
 
-        if getattr(self, "inside_mlp", False) and vector_name == "output":
-            vector_name = self.MLP_STEPS[self.mlp_step_index - 1][1]
+        if getattr(self, "inside_internal", False) and vector_name == "output":
+            vector_name = self.internal_steps[self.mlp_step_index - 1][1]
 
         source_vector = (
             result_state.output_vector
@@ -904,7 +936,7 @@ class LLMDebugAdapter:
 
         target_layer = (
             self.outer_state.layer.name
-            if getattr(self, "inside_mlp", False)
+            if getattr(self, "inside_internal", False)
             else result_state.layer.name
         )
         self.execution.set_intervention(
@@ -931,7 +963,7 @@ class LLMDebugAdapter:
             return ()
         layer_name = (
             self.outer_state.layer.name
-            if getattr(self, "inside_mlp", False)
+            if getattr(self, "inside_internal", False)
             else result_state.layer.name
         )
         key = (self.token_index, layer_name)
@@ -964,7 +996,8 @@ class LLMDebugAdapter:
             return repr(self.previous_state.details[detail_expression])
         indexed = re.fullmatch(
             r"(input|output|residual|residual_stream|delta|layernorm|normalized_input|"
-            r"normalized_output|mlp_expansion_pre_activation|mlp_expansion|mlp_projection)"
+            r"normalized_output|mlp_expansion_pre_activation|mlp_expansion|mlp_projection|"
+            r"attention_qkv|attention_mixing|attention_projection)"
             r"\[(\d+)\]",
             expression,
         )

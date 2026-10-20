@@ -26,6 +26,13 @@ prompt = "The capital of France is"
 token = 3
 stop_on_entry = false
 
+def attention():
+    layernorm
+    qkv_projection
+    attention_mixing
+    output_projection
+    residual_add
+
 def mlp():
     layernorm
     expansion
@@ -57,10 +64,10 @@ transformer-block operation and can receive a breakpoint. The older explicit
 assignments are intentionally valid in the llmdbg source language; this file
 is not TOML. Unlisted model operations are omitted from the debug trace.
 
-Use **Step Into (F11)** at an MLP call to enter the `mlp()` definition above.
-The active line then advances through its five operations with **F10**, while
-the original `mlp()` call remains the parent stack frame. Use
-**Shift+F11** to finish the MLP and return to the next outer submodule.
+Use **Step Into (F11)** at an `attention()` or `mlp()` call to enter its
+definition above. The active line advances through the five internal operations
+with **F10**, while the outer call remains the parent stack frame. Use
+**Shift+F11** to finish the submodule and return to the next outer operation.
 
 Set `token = 3` in the source to make that zero-based position the default for
 ordinary breakpoints. A conditional breakpoint such as `token=4` overrides the
@@ -74,10 +81,13 @@ Command Palette or debug toolbar for an auto-updating dimension plot,
 activation histogram, and top-absolute-activation view. The debugger also
 exposes explicit **Residual stream (output)** and **Delta** scopes.
 
-Attention stops expose their 768D LayerNorm output. MLP stops additionally
-expose the 3072D linear expansion before activation, the 3072D expansion after
-GELU, and the 768D projection. These appear as debugger scopes and plot choices
-and support indexed Watches: `layernorm[42]`,
+Attention stops expose their 768D LayerNorm output, combined 2304D QKV
+projection, 768D attention-mixing result, and 768D output projection. Watch
+these as `attention_qkv[42]`, `attention_mixing[42]`, and
+`attention_projection[42]`. MLP stops additionally expose the 3072D linear
+expansion before activation, the 3072D expansion after GELU, and the 768D
+projection. These appear as debugger scopes and plot choices and support
+indexed Watches: `layernorm[42]`,
 `mlp_expansion_pre_activation[42]`, `mlp_expansion[42]`, and
 `mlp_projection[42]`.
 
