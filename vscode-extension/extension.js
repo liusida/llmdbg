@@ -118,7 +118,7 @@ function vectorPlotHtml(webview, extensionUri) {
         };
       } else {
         trace = {
-          type: 'scattergl', mode: 'lines', x: indices, y: values,
+          type: 'scatter', mode: 'lines', x: indices, y: values,
           line: { color: colors.positive, width: 1.5 },
           hovertemplate: 'dimension %{x}<br>value %{y:.8f}<extra></extra>'
         };
