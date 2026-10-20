@@ -3,6 +3,7 @@
 import argparse
 
 from llmdbg import __version__
+from llmdbg.dap import main as dap_main
 
 
 def main() -> None:
@@ -16,7 +17,11 @@ def main() -> None:
         action="version",
         version=f"%(prog)s {__version__}",
     )
-    parser.parse_args()
+    subparsers = parser.add_subparsers(dest="command")
+    subparsers.add_parser("dap", help="Run the Debug Adapter Protocol server on stdio.")
+    args = parser.parse_args()
+    if args.command == "dap":
+        dap_main()
 
 
 if __name__ == "__main__":

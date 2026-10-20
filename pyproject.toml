@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "llmdbg"
-version = "0.0.1a1"
+version = "0.0.2a1"
 description = "A debugger for stepping through LLM layers and interpreting internal representations."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -19,6 +19,7 @@ classifiers = [
 
 [project.scripts]
 llmdbg = "llmdbg.cli:main"
+llmdbg-dap = "llmdbg.dap:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/llmdbg"]

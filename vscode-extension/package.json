@@ -1,0 +1,91 @@
+{
+  "name": "llmdbg",
+  "displayName": "llmdbg",
+  "description": "Step through LLM layers and inspect human-readable internal representations.",
+  "version": "0.0.1",
+  "publisher": "liusida",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/liusida/llmdbg.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Debuggers",
+    "Machine Learning"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onDebug:llmdbg"
+  ],
+  "files": [
+    "extension.js",
+    "README.md",
+    "package.json"
+  ],
+  "contributes": {
+    "debuggers": [
+      {
+        "type": "llmdbg",
+        "label": "llmdbg",
+        "languages": [
+          "python"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [],
+            "properties": {
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Stop after the first model layer.",
+                "default": true
+              },
+              "python": {
+                "type": "string",
+                "description": "Python executable containing the llmdbg package."
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "llmdbg",
+            "request": "launch",
+            "name": "llmdbg: Demo model",
+            "stopOnEntry": true
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "llmdbg: Demo model",
+            "description": "Step through the built-in model layer by layer.",
+            "body": {
+              "type": "llmdbg",
+              "request": "launch",
+              "name": "llmdbg: Demo model",
+              "stopOnEntry": true
+            }
+          }
+        ]
+      }
+    ],
+    "configuration": {
+      "title": "llmdbg",
+      "properties": {
+        "llmdbg.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Python executable containing llmdbg. Empty uses .venv in the workspace, then python3."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^4.0.0"
+  }
+}
