@@ -25,15 +25,10 @@ npm run package
 code --install-extension llmdbg-0.0.1.vsix
 ```
 
-Install the Python package in the workspace environment:
-
-```console
-python -m venv .venv
-.venv/bin/python -m pip install -e .
-```
-
 Open the repository in VS Code, select **llmdbg: Demo model** in **Run and
-Debug**, and press **F5**. Use **Step Over** to advance one layer at a time.
+Debug**, and press **F5**. On first use, the extension creates a private Python
+environment in VS Code's extension storage. It does not install anything into
+the workspace. Use **Step Over** to advance one layer at a time.
 
 ## License
 

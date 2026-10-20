@@ -2,7 +2,7 @@
   "name": "llmdbg",
   "displayName": "llmdbg",
   "description": "Step through LLM layers and inspect human-readable internal representations.",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "publisher": "liusida",
   "license": "MIT",
   "repository": {
@@ -22,6 +22,7 @@
   ],
   "files": [
     "extension.js",
+    "bundled/**",
     "LICENSE",
     "README.md",
     "package.json"
@@ -43,9 +44,27 @@
                 "description": "Stop after the first model layer.",
                 "default": true
               },
-              "python": {
+              "model": {
                 "type": "string",
-                "description": "Python executable containing the llmdbg package."
+                "description": "Hugging Face model ID or local model directory."
+              },
+              "revision": {
+                "type": "string",
+                "description": "Model repository branch, tag, or commit."
+              },
+              "prompt": {
+                "type": "string",
+                "description": "Input prompt for the model."
+              },
+              "device": {
+                "type": "string",
+                "enum": ["cuda", "cpu"],
+                "default": "cuda"
+              },
+              "dtype": {
+                "type": "string",
+                "enum": ["bfloat16", "float16", "float32"],
+                "default": "bfloat16"
               }
             }
           }
@@ -75,16 +94,17 @@
     "configuration": {
       "title": "llmdbg",
       "properties": {
-        "llmdbg.pythonPath": {
+        "llmdbg.bootstrapPythonPath": {
           "type": "string",
           "default": "",
-          "description": "Python executable containing llmdbg. Empty uses .venv in the workspace, then python3."
+          "description": "Python executable used only to create llmdbg's private environment. Empty uses python3 (python on Windows)."
         }
       }
     }
   },
   "scripts": {
-    "package": "vsce package --no-dependencies"
+    "stage-adapter": "node ./scripts/stage-adapter.js",
+    "package": "npm run stage-adapter && vsce package --no-dependencies"
   },
   "devDependencies": {
     "@vscode/vsce": "^4.0.0"

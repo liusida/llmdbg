@@ -4,6 +4,7 @@ build/
 dist*/
 *.vsix
 node_modules/
+vscode-extension/bundled/
 *.egg-info/
 __pycache__/
 *.py[cod]

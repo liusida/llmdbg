@@ -4,7 +4,12 @@
     {
       "type": "llmdbg",
       "request": "launch",
-      "name": "llmdbg: Demo model",
+      "name": "llmdbg: GPT-2 Small",
+      "model": "openai-community/gpt2",
+      "revision": "main",
+      "prompt": "The capital of France is",
+      "device": "cuda",
+      "dtype": "bfloat16",
       "stopOnEntry": true
     }
   ]

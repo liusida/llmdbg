@@ -14,6 +14,17 @@ class ExtensionManifestTest(unittest.TestCase):
         debugger_types = {debugger["type"] for debugger in manifest["contributes"]["debuggers"]}
         self.assertIn("llmdbg", debugger_types)
         self.assertEqual(manifest["main"], "./extension.js")
+        self.assertIn("bundled/**", manifest["files"])
+        self.assertIn("stage-adapter", manifest["scripts"])
+
+    def test_extension_uses_a_private_runtime(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "vscode-extension" / "extension.js").read_text()
+
+        self.assertIn("context.globalStorageUri.fsPath", source)
+        self.assertIn('["-m", "venv", runtimeRoot]', source)
+        self.assertIn('["-m", "llmdbg.dap"]', source)
+        self.assertNotIn('path.join(".venv"', source)
 
 
 if __name__ == "__main__":
