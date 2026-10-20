@@ -22,6 +22,7 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertEqual(manifest["contributes"]["breakpoints"][1]["language"], "llmdbg-python")
         command_ids = {command["command"] for command in manifest["contributes"]["commands"]}
         self.assertIn("llmdbg.plotCurrentVector", command_ids)
+        self.assertIn("llmdbg.showNeuronLens", command_ids)
         self.assertIn("llmdbg.unloadModel", command_ids)
         self.assertIn("llmdbg.showModelStatus", command_ids)
 
@@ -40,7 +41,7 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn("registerDebugConfigurationProvider", source)
         self.assertIn("activeLlmdbgFile", source)
         self.assertIn('customRequest("llmdbg/plot"', source)
-        self.assertIn('customRequest("llmdbg/lens"', source)
+        self.assertIn('customRequest("llmdbg/neuronLens"', source)
         self.assertIn("context.globalState.get(LEGACY_PLOT_SNIPPETS_KEY", source)
         self.assertIn('file.endsWith(".plot.py")', source)
         self.assertIn("function plotFunctionCode(code)", source)
@@ -49,6 +50,7 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn("viewColumn: vectorPanel?.viewColumn || vscode.ViewColumn.Beside", source)
         self.assertIn('"matplotlib>=3.10,<4"', source)
         self.assertIn('registerCommand("llmdbg.plotCurrentVector"', source)
+        self.assertIn('registerCommand("llmdbg.showNeuronLens"', source)
         self.assertIn('registerCommand("llmdbg.unloadModel"', source)
         self.assertIn('registerCommand("llmdbg.showModelStatus"', source)
         self.assertIn("showInformationMessage(message, \"Unload Model\")", source)

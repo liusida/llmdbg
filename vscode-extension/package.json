@@ -2,7 +2,7 @@
   "name": "llmdbg",
   "displayName": "llmdbg",
   "description": "Step through LLM layers and inspect human-readable internal representations.",
-  "version": "0.0.44",
+  "version": "0.0.45",
   "publisher": "liusida",
   "license": "MIT",
   "repository": {
@@ -36,6 +36,11 @@
         "icon": "$(graph-line)"
       },
       {
+        "command": "llmdbg.showNeuronLens",
+        "title": "Lens",
+        "icon": "$(telescope)"
+      },
+      {
         "command": "llmdbg.unloadModel",
         "title": "llmdbg: Unload Model",
         "icon": "$(trash)"
@@ -52,6 +57,11 @@
           "command": "llmdbg.plotCurrentVector",
           "when": "debugType == llmdbg",
           "group": "navigation@20"
+        },
+        {
+          "command": "llmdbg.showNeuronLens",
+          "when": "debugType == llmdbg",
+          "group": "navigation@21"
         }
       ]
     },

@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 from llmdbg.dap import LLMDebugAdapter, SourceBreakpoint
 from llmdbg.demo_model import Layer, LayerState
-from llmdbg.model_runtime import LogitLensToken, NeuronProjection, TokenScore
+from llmdbg.model_runtime import NeuronProjection, TokenScore
 
 
 def frame(message: dict[str, object]) -> bytes:
@@ -251,30 +251,41 @@ class DAPIntegrationTest(unittest.TestCase):
         self.assertEqual(adapter._plot_vector("x"), (1.0, 2.0))
         self.assertEqual(adapter._plot_vector("[1, 2.5, -3]"), (1.0, 2.5, -3.0))
 
-    def test_logit_lens_snapshot_contains_ranked_tokens(self) -> None:
+    def test_neuron_lens_snapshot_contains_direction_tokens(self) -> None:
         adapter = object.__new__(LLMDebugAdapter)
         adapter.trace = (
             LayerState(
                 Layer("transformer.h.0.mlp", "mlp", "mlp", 1.0, 0.0),
                 (1.0, 2.0), (1.5, 2.5), "mlp",
+                {"mlp_expansion": (0.1, 3.0)},
+            ),
+            LayerState(
+                Layer("transformer.h.1.attention", "attention", "attention", 1.0, 0.0),
+                (1.5, 2.5), (1.5, 2.5), "attention",
             ),
         )
-        adapter.layer_index = 0
+        adapter.layer_index = 1
         adapter.token_index = 0
         adapter.tokens = (" test",)
         adapter.inside_mlp = False
         adapter.inside_attention = False
-        adapter.execution = SimpleNamespace(
-            logit_lens=lambda vector: (
-                LogitLensToken(42, " answer", 8.5, 0.25),
-            )
+        projection = NeuronProjection(
+            index=1,
+            activation=3.0,
+            direction_norm=2.5,
+            vocabulary=(TokenScore(42, " answer", 8.5),),
+            contribution=(),
         )
+        adapter.execution = SimpleNamespace(
+            top_mlp_neurons=lambda *_args, **_kwargs: (projection,)
+        )
+        adapter.neuron_cache = {}
 
-        result = adapter._lens_snapshot("residual_stream")
+        result = adapter._neuron_lens_snapshot()
 
-        self.assertEqual(result["dimensions"], 2)
-        self.assertEqual(result["tokens"][0]["text"], " answer")
-        self.assertEqual(result["tokens"][0]["probability"], 0.25)
+        self.assertEqual(result["neurons"][0]["index"], 1)
+        self.assertEqual(result["neurons"][0]["tokens"][0]["text"], " answer")
+        self.assertEqual(result["neurons"][0]["tokens"][0]["logit"], 8.5)
 
     def test_continue_stops_at_a_source_breakpoint(self) -> None:
         requests = [

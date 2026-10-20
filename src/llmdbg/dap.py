@@ -466,10 +466,10 @@ class LLMDebugAdapter:
                     str(arguments.get("code", "")),
                 ),
             )
-        elif command == "llmdbg/lens":
+        elif command == "llmdbg/neuronLens":
             self.send_response(
                 request,
-                self._lens_snapshot(str(arguments.get("expression", "residual_stream"))),
+                self._neuron_lens_snapshot(),
             )
         elif command in ("next", "stepIn", "stepOut"):
             self.send_response(request)
@@ -1338,27 +1338,39 @@ class LLMDebugAdapter:
             ),
         }
 
-    def _lens_snapshot(self, expression: str) -> dict[str, Any]:
-        """Project a selected residual-stream vector into ranked vocabulary tokens."""
-        if self.execution is None:
-            raise ValueError("logit lens requires a loaded model")
-        vector = self._plot_vector(expression)
-        tokens = self.execution.logit_lens(vector)
+    def _neuron_lens_snapshot(self) -> dict[str, Any]:
+        """Describe top MLP neurons through W_down and the unembedding matrix."""
+        neurons = self._top_neurons()
+        if not neurons:
+            raise ValueError(
+                "Neuron Lens is available after an MLP GELU activation has completed"
+            )
+        layer = (
+            self.outer_state.layer.name
+            if self.inside_internal
+            else self.previous_state.layer.name  # type: ignore[union-attr]
+        )
         return {
-            "expression": expression,
-            "dimensions": len(vector),
             "tokenPosition": self.token_index,
             "token": self.tokens[self.token_index],
-            "layer": self.state.layer.name,
-            "tokens": [
+            "layer": layer,
+            "neurons": [
                 {
                     "rank": rank,
-                    "id": token.token_id,
-                    "text": token.text,
-                    "logit": token.logit,
-                    "probability": token.probability,
+                    "index": neuron.index,
+                    "activation": neuron.activation,
+                    "directionNorm": neuron.direction_norm,
+                    "tokens": [
+                        {
+                            "rank": token_rank,
+                            "id": token.token_id,
+                            "text": token.text,
+                            "logit": token.score,
+                        }
+                        for token_rank, token in enumerate(neuron.vocabulary, start=1)
+                    ],
                 }
-                for rank, token in enumerate(tokens, start=1)
+                for rank, neuron in enumerate(neurons, start=1)
             ],
         }
 

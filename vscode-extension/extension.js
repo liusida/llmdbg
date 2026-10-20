@@ -114,7 +114,6 @@ function vectorPlotHtml(webview) {
     .field { display:grid; grid-template-columns:76px minmax(140px, 1fr) auto; gap:8px; align-items:center; }
     .field > label { color:var(--vscode-foreground); white-space:nowrap; }
     .icon-tools { display:flex; gap:4px; }
-    .action-tools { display:flex; gap:6px; }
     input, select { width:100%; color:var(--vscode-input-foreground); background:var(--vscode-input-background); border:1px solid var(--vscode-input-border, transparent); border-radius:2px; outline:none; }
     input, select { height:28px; padding:3px 7px; }
     input:focus, select:focus { border-color:var(--vscode-focusBorder); }
@@ -134,19 +133,6 @@ function vectorPlotHtml(webview) {
     #preview { padding-top:2px; border-top:1px solid var(--vscode-panel-border); }
     #image { display:block; max-width:100%; margin-top:10px; background:white; border:1px solid var(--vscode-panel-border); }
     #image:not([src]) { display:none; }
-    #lens-result[hidden] { display:none; }
-    .lens-summary { display:flex; flex-wrap:wrap; gap:6px 14px; margin:10px 0; color:var(--vscode-descriptionForeground); }
-    .lens-method { color:var(--vscode-foreground); }
-    .lens-table { width:100%; border-collapse:collapse; table-layout:fixed; }
-    .lens-table th { color:var(--vscode-descriptionForeground); font-weight:normal; text-align:left; border-bottom:1px solid var(--vscode-panel-border); padding:5px 7px; }
-    .lens-table td { border-bottom:1px solid var(--vscode-panel-border); padding:5px 7px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .lens-table .rank { width:42px; text-align:right; }
-    .lens-table .token-id { width:72px; color:var(--vscode-descriptionForeground); }
-    .lens-table .token { width:34%; font-family:var(--vscode-editor-font-family); white-space:pre; }
-    .lens-table .number { width:100px; text-align:right; font-variant-numeric:tabular-nums; }
-    .probability { position:relative; }
-    .probability > span { position:relative; z-index:1; }
-    .probability > i { position:absolute; inset:3px auto 3px 0; background:var(--vscode-charts-blue); opacity:.22; }
     @media (max-width:700px) {
       .field { grid-template-columns:68px minmax(0,1fr) auto; }
       .field { grid-template-columns:68px minmax(0,1fr) auto; }
@@ -155,29 +141,44 @@ function vectorPlotHtml(webview) {
 </head>
 <body>
   <main class="workbench">
-    <div class="field"><label for="expression">Vector</label><input id="expression" value="residual_stream" placeholder="hidden, qkv, residual_stream, hidden[:256]"><div class="action-tools"><button id="plot" title="Plot vector">Plot</button><button id="lens" class="secondary" title="Apply final LayerNorm and vocabulary projection">Lens</button></div></div>
+    <div class="field"><label for="expression">Vector</label><input id="expression" value="residual_stream" placeholder="hidden, qkv, residual_stream, hidden[:256]"><button id="plot" class="icon primary" title="Plot vector" aria-label="Plot vector"><svg viewBox="0 0 16 16"><path d="M4 2.5v11l9-5.5-9-5.5z"/></svg></button></div>
     <div class="field"><label for="snippets">Plot code</label><select id="snippets"></select><div class="icon-tools"><button id="open" class="icon" title="Open plot file" aria-label="Open plot file"><svg viewBox="0 0 16 16"><path d="M12.1 1.9l2 2-8.7 8.7-3 .7.7-3 9-9.4zM2 14h12v1H2v-1z"/></svg></button><button id="new" class="icon" title="New plot file" aria-label="New plot file"><svg viewBox="0 0 16 16"><path d="M7.5 1h1v6.5H15v1H8.5V15h-1V8.5H1v-1h6.5V1z"/></svg></button><button id="delete" class="icon" title="Delete plot file" aria-label="Delete plot file"><svg viewBox="0 0 16 16"><path d="M5 1h6l1 2h3v1h-1l-1 11H3L2 4H1V3h3l1-2zm1 .9L5.5 3h5L10 1.9H6zM3 4l1 10h8l1-10H3z"/></svg></button></div></div>
-    <section id="preview"><div id="status">Enter a vector expression, then choose Plot or Lens.</div><img id="image" alt="Matplotlib plot preview"><div id="lens-result" hidden></div></section>
+    <section id="preview"><div id="status">Enter a vector expression and run a Matplotlib snippet.</div><img id="image" alt="Matplotlib plot preview"></section>
   </main>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const expression = document.getElementById('expression'), snippets = document.getElementById('snippets');
-    const status = document.getElementById('status'), image = document.getElementById('image'), lensResult = document.getElementById('lens-result');
+    const status = document.getElementById('status'), image = document.getElementById('image');
     let items = [];
     window.addEventListener('message', event => {
       if (event.data.type === 'snippets') { const previous=snippets.value; items=event.data.items; snippets.replaceChildren(...items.map(item => { const o=document.createElement('option'); o.value=item.file; o.textContent=item.name; return o; })); snippets.value=items.some(item=>item.file===previous)?previous:(event.data.selected||items[0]?.file||''); }
-      if (event.data.type === 'result') { lensResult.hidden=true; image.src='data:image/png;base64,'+event.data.image; status.className=''; status.textContent=event.data.meta; }
-      if (event.data.type === 'lens') { image.removeAttribute('src'); lensResult.hidden=false; lensResult.replaceChildren(); const summary=document.createElement('div'); summary.className='lens-summary'; const method=document.createElement('span'); method.className='lens-method'; method.textContent='final LayerNorm → unembedding'; const context=document.createElement('span'); context.textContent=event.data.expression+' · '+event.data.dimensions+'D · token '+event.data.tokenPosition+' '+JSON.stringify(event.data.token)+' · '+event.data.layer; summary.append(method,context); const table=document.createElement('table'); table.className='lens-table'; table.innerHTML='<thead><tr><th class="rank">#</th><th class="token-id">ID</th><th class="token">Token</th><th class="number">Logit</th><th class="number">Probability</th></tr></thead><tbody></tbody>'; const body=table.querySelector('tbody'); const maxProbability=Math.max(...event.data.tokens.map(item=>item.probability),1e-12); for(const item of event.data.tokens){ const row=document.createElement('tr'); const rank=document.createElement('td'); rank.className='rank'; rank.textContent=item.rank; const id=document.createElement('td'); id.className='token-id'; id.textContent=item.id; const token=document.createElement('td'); token.className='token'; token.textContent=JSON.stringify(item.text); token.title=item.text; const logit=document.createElement('td'); logit.className='number'; logit.textContent=item.logit.toFixed(4); const probability=document.createElement('td'); probability.className='number probability'; const bar=document.createElement('i'); bar.style.width=(100*item.probability/maxProbability).toFixed(2)+'%'; const value=document.createElement('span'); value.textContent=(100*item.probability).toFixed(3)+'%'; probability.append(bar,value); row.append(rank,id,token,logit,probability); body.append(row); } lensResult.append(summary,table); status.className=''; status.textContent='Top '+event.data.tokens.length+' vocabulary predictions'; }
+      if (event.data.type === 'result') { image.src='data:image/png;base64,'+event.data.image; status.className=''; status.textContent=event.data.meta; }
       if (event.data.type === 'error') { status.className='error'; status.textContent='Error: '+event.data.message; }
     });
     document.getElementById('plot').onclick=()=>{ status.className=''; status.textContent='Rendering…'; vscode.postMessage({type:'plot', expression:expression.value, file:snippets.value}); };
-    document.getElementById('lens').onclick=()=>{ status.className=''; status.textContent='Computing logit lens…'; vscode.postMessage({type:'lens', expression:expression.value}); };
     document.getElementById('open').onclick=()=>vscode.postMessage({type:'open', file:snippets.value});
     document.getElementById('new').onclick=()=>vscode.postMessage({type:'new'});
     document.getElementById('delete').onclick=()=>vscode.postMessage({type:'delete', file:snippets.value});
   </script>
 </body>
 </html>`;
+}
+
+function neuronLensHtml(webview) {
+  const nonce = `${Date.now()}${Math.random().toString(36).slice(2)}`;
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+<style>
+*{box-sizing:border-box} body{margin:0;padding:16px;font:13px/1.4 var(--vscode-font-family);color:var(--vscode-foreground);background:var(--vscode-editor-background)}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px} h2{font-size:15px;font-weight:600;margin:0} button{padding:4px 12px;border:0;border-radius:2px;background:var(--vscode-button-background);color:var(--vscode-button-foreground);font:inherit;cursor:pointer} button:hover{background:var(--vscode-button-hoverBackground)}
+#context{color:var(--vscode-descriptionForeground);margin-bottom:12px}.error{color:var(--vscode-errorForeground)}
+#neurons{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:10px}.card{border:1px solid var(--vscode-panel-border);background:var(--vscode-sideBar-background)}
+.card-head{display:grid;grid-template-columns:1fr auto;gap:4px 12px;padding:9px 11px;border-bottom:1px solid var(--vscode-panel-border)}.title{font-weight:600}.stats{color:var(--vscode-descriptionForeground);font-variant-numeric:tabular-nums}
+table{width:100%;border-collapse:collapse;table-layout:fixed}th,td{padding:5px 7px;border-bottom:1px solid var(--vscode-panel-border);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}th{font-weight:normal;color:var(--vscode-descriptionForeground);text-align:left}.rank{width:34px;text-align:right}.id{width:66px;color:var(--vscode-descriptionForeground)}.token{font-family:var(--vscode-editor-font-family);white-space:pre}.logit{width:82px;text-align:right;font-variant-numeric:tabular-nums}
+</style></head><body><header><h2>Neuron Lens</h2><button id="refresh">Refresh</button></header><div id="context">Loading…</div><main id="neurons"></main>
+<script nonce="${nonce}">const vscode=acquireVsCodeApi(),context=document.getElementById('context'),neurons=document.getElementById('neurons');
+window.addEventListener('message',event=>{if(event.data.type==='error'){context.className='error';context.textContent=event.data.message;neurons.replaceChildren();return}if(event.data.type!=='lens')return;context.className='';context.textContent='token '+event.data.tokenPosition+' '+JSON.stringify(event.data.token)+' · '+event.data.layer+' · W_down → W_unembed';neurons.replaceChildren();for(const neuron of event.data.neurons){const card=document.createElement('section');card.className='card';const head=document.createElement('div');head.className='card-head';const title=document.createElement('span');title.className='title';title.textContent='#'+neuron.rank+' · neuron['+neuron.index+']';const stats=document.createElement('span');stats.className='stats';stats.textContent='activation '+neuron.activation.toFixed(6);const norm=document.createElement('span');norm.className='stats';norm.textContent='direction norm '+neuron.directionNorm.toFixed(6);head.append(title,stats,norm);const table=document.createElement('table');table.innerHTML='<thead><tr><th class="rank">#</th><th class="id">ID</th><th class="token">Token</th><th class="logit">Direction logit</th></tr></thead><tbody></tbody>';const body=table.querySelector('tbody');for(const item of neuron.tokens){const row=document.createElement('tr');for(const [className,value] of [['rank',item.rank],['id',item.id],['token',JSON.stringify(item.text)],['logit',item.logit.toFixed(5)]]){const cell=document.createElement('td');cell.className=className;cell.textContent=value;row.append(cell)}body.append(row)}card.append(head,table);neurons.append(card)}});document.getElementById('refresh').onclick=()=>vscode.postMessage({type:'refresh'});vscode.postMessage({type:'refresh'});</script></body></html>`;
 }
 
 async function createRuntime(context, runtimeRoot) {
@@ -246,6 +247,7 @@ function activate(context) {
   let hostPromise;
   let hostSource;
   let vectorPanel;
+  let neuronLensPanel;
   let residentModel;
   const modelStatus = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Right,
@@ -389,7 +391,7 @@ function activate(context) {
       );
       vectorPanel.webview.html = vectorPlotHtml(vectorPanel.webview);
       vectorPanel.webview.onDidReceiveMessage(async (message) => {
-        if (message.type === "plot" || message.type === "lens") {
+        if (message.type === "plot") {
           const active = vscode.debug.activeDebugSession;
           if (!active || active.type !== "llmdbg") {
             await vectorPanel.webview.postMessage({ type: "error", message: "Start and pause an llmdbg session first." });
@@ -397,14 +399,9 @@ function activate(context) {
           }
           try {
             const expression = String(message.expression || "residual_stream");
-            if (message.type === "lens") {
-              const result = await active.customRequest("llmdbg/lens", { expression });
-              await vectorPanel.webview.postMessage({ type: "lens", ...result });
-            } else {
-              const code = await fs.promises.readFile(await plotPath(String(message.file || "")), "utf8");
-              const result = await active.customRequest("llmdbg/plot", { expression, code });
-              await vectorPanel.webview.postMessage({ type: "result", ...result });
-            }
+            const code = await fs.promises.readFile(await plotPath(String(message.file || "")), "utf8");
+            const result = await active.customRequest("llmdbg/plot", { expression, code });
+            await vectorPanel.webview.postMessage({ type: "result", ...result });
           } catch (error) {
             await vectorPanel.webview.postMessage({ type: "error", message: error.message });
           }
@@ -436,6 +433,42 @@ function activate(context) {
       vectorPanel.reveal(vscode.ViewColumn.Beside, true);
     }
     await sendPlotSnippets();
+  }
+
+  async function refreshNeuronLens() {
+    if (!neuronLensPanel) return;
+    const active = vscode.debug.activeDebugSession;
+    if (!active || active.type !== "llmdbg") {
+      await neuronLensPanel.webview.postMessage({ type: "error", message: "Start and pause an llmdbg session first." });
+      return;
+    }
+    try {
+      const result = await active.customRequest("llmdbg/neuronLens");
+      await neuronLensPanel.webview.postMessage({ type: "lens", ...result });
+    } catch (error) {
+      await neuronLensPanel.webview.postMessage({ type: "error", message: error.message });
+    }
+  }
+
+  async function showNeuronLens() {
+    if (!vscode.debug.activeDebugSession || vscode.debug.activeDebugSession.type !== "llmdbg") {
+      vscode.window.showErrorMessage("Start and pause an llmdbg session before opening Neuron Lens.");
+      return;
+    }
+    if (!neuronLensPanel) {
+      neuronLensPanel = vscode.window.createWebviewPanel(
+        "llmdbg.neuronLens", "llmdbg Neuron Lens", vscode.ViewColumn.Beside,
+        { enableScripts: true, retainContextWhenHidden: true }
+      );
+      neuronLensPanel.webview.html = neuronLensHtml(neuronLensPanel.webview);
+      neuronLensPanel.webview.onDidReceiveMessage(
+        message => message.type === "refresh" && refreshNeuronLens(), null, context.subscriptions
+      );
+      neuronLensPanel.onDidDispose(() => { neuronLensPanel = undefined; }, null, context.subscriptions);
+    } else {
+      neuronLensPanel.reveal(vscode.ViewColumn.Beside, true);
+    }
+    await refreshNeuronLens();
   }
 
   async function ensureRuntime() {
@@ -565,6 +598,7 @@ function activate(context) {
       }
     }),
     vscode.commands.registerCommand("llmdbg.plotCurrentVector", showVectorPlot),
+    vscode.commands.registerCommand("llmdbg.showNeuronLens", showNeuronLens),
     vscode.commands.registerCommand("llmdbg.showModelStatus", showModelStatus),
     vscode.commands.registerCommand("llmdbg.unloadModel", unloadModel),
     vscode.debug.onDidReceiveDebugSessionCustomEvent((event) => {
@@ -573,6 +607,8 @@ function activate(context) {
       }
       if (event.event === "llmdbg/modelLoaded") {
         updateModelStatus(event.body);
+      } else if (event.event === "llmdbg/vectorChanged") {
+        refreshNeuronLens();
       }
     }),
     modelStatus
