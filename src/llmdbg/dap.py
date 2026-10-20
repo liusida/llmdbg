@@ -466,6 +466,11 @@ class LLMDebugAdapter:
                     str(arguments.get("code", "")),
                 ),
             )
+        elif command == "llmdbg/lens":
+            self.send_response(
+                request,
+                self._lens_snapshot(str(arguments.get("expression", "residual_stream"))),
+            )
         elif command in ("next", "stepIn", "stepOut"):
             self.send_response(request)
             can_enter_mlp = self.outer_state.layer.name.endswith(".mlp") and self.mlp_source_lines
@@ -1331,6 +1336,30 @@ class LLMDebugAdapter:
                 f"{expression} · {len(vector)}D · token {self.token_index} "
                 f"{self.tokens[self.token_index]!r} · {self.state.layer.name}"
             ),
+        }
+
+    def _lens_snapshot(self, expression: str) -> dict[str, Any]:
+        """Project a selected residual-stream vector into ranked vocabulary tokens."""
+        if self.execution is None:
+            raise ValueError("logit lens requires a loaded model")
+        vector = self._plot_vector(expression)
+        tokens = self.execution.logit_lens(vector)
+        return {
+            "expression": expression,
+            "dimensions": len(vector),
+            "tokenPosition": self.token_index,
+            "token": self.tokens[self.token_index],
+            "layer": self.state.layer.name,
+            "tokens": [
+                {
+                    "rank": rank,
+                    "id": token.token_id,
+                    "text": token.text,
+                    "logit": token.logit,
+                    "probability": token.probability,
+                }
+                for rank, token in enumerate(tokens, start=1)
+            ],
         }
 
     def run(self) -> None:

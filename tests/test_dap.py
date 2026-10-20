@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 from llmdbg.dap import LLMDebugAdapter, SourceBreakpoint
 from llmdbg.demo_model import Layer, LayerState
-from llmdbg.model_runtime import NeuronProjection, TokenScore
+from llmdbg.model_runtime import LogitLensToken, NeuronProjection, TokenScore
 
 
 def frame(message: dict[str, object]) -> bytes:
@@ -250,6 +250,31 @@ class DAPIntegrationTest(unittest.TestCase):
         self.assertEqual(adapter._plot_vector("features[:2]"), (1.5, 2.5))
         self.assertEqual(adapter._plot_vector("x"), (1.0, 2.0))
         self.assertEqual(adapter._plot_vector("[1, 2.5, -3]"), (1.0, 2.5, -3.0))
+
+    def test_logit_lens_snapshot_contains_ranked_tokens(self) -> None:
+        adapter = object.__new__(LLMDebugAdapter)
+        adapter.trace = (
+            LayerState(
+                Layer("transformer.h.0.mlp", "mlp", "mlp", 1.0, 0.0),
+                (1.0, 2.0), (1.5, 2.5), "mlp",
+            ),
+        )
+        adapter.layer_index = 0
+        adapter.token_index = 0
+        adapter.tokens = (" test",)
+        adapter.inside_mlp = False
+        adapter.inside_attention = False
+        adapter.execution = SimpleNamespace(
+            logit_lens=lambda vector: (
+                LogitLensToken(42, " answer", 8.5, 0.25),
+            )
+        )
+
+        result = adapter._lens_snapshot("residual_stream")
+
+        self.assertEqual(result["dimensions"], 2)
+        self.assertEqual(result["tokens"][0]["text"], " answer")
+        self.assertEqual(result["tokens"][0]["probability"], 0.25)
 
     def test_continue_stops_at_a_source_breakpoint(self) -> None:
         requests = [

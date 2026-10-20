@@ -114,6 +114,7 @@ function vectorPlotHtml(webview) {
     .field { display:grid; grid-template-columns:76px minmax(140px, 1fr) auto; gap:8px; align-items:center; }
     .field > label { color:var(--vscode-foreground); white-space:nowrap; }
     .icon-tools { display:flex; gap:4px; }
+    .action-tools { display:flex; gap:6px; }
     input, select { width:100%; color:var(--vscode-input-foreground); background:var(--vscode-input-background); border:1px solid var(--vscode-input-border, transparent); border-radius:2px; outline:none; }
     input, select { height:28px; padding:3px 7px; }
     input:focus, select:focus { border-color:var(--vscode-focusBorder); }
@@ -133,6 +134,19 @@ function vectorPlotHtml(webview) {
     #preview { padding-top:2px; border-top:1px solid var(--vscode-panel-border); }
     #image { display:block; max-width:100%; margin-top:10px; background:white; border:1px solid var(--vscode-panel-border); }
     #image:not([src]) { display:none; }
+    #lens-result[hidden] { display:none; }
+    .lens-summary { display:flex; flex-wrap:wrap; gap:6px 14px; margin:10px 0; color:var(--vscode-descriptionForeground); }
+    .lens-method { color:var(--vscode-foreground); }
+    .lens-table { width:100%; border-collapse:collapse; table-layout:fixed; }
+    .lens-table th { color:var(--vscode-descriptionForeground); font-weight:normal; text-align:left; border-bottom:1px solid var(--vscode-panel-border); padding:5px 7px; }
+    .lens-table td { border-bottom:1px solid var(--vscode-panel-border); padding:5px 7px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .lens-table .rank { width:42px; text-align:right; }
+    .lens-table .token-id { width:72px; color:var(--vscode-descriptionForeground); }
+    .lens-table .token { width:34%; font-family:var(--vscode-editor-font-family); white-space:pre; }
+    .lens-table .number { width:100px; text-align:right; font-variant-numeric:tabular-nums; }
+    .probability { position:relative; }
+    .probability > span { position:relative; z-index:1; }
+    .probability > i { position:absolute; inset:3px auto 3px 0; background:var(--vscode-charts-blue); opacity:.22; }
     @media (max-width:700px) {
       .field { grid-template-columns:68px minmax(0,1fr) auto; }
       .field { grid-template-columns:68px minmax(0,1fr) auto; }
@@ -141,21 +155,23 @@ function vectorPlotHtml(webview) {
 </head>
 <body>
   <main class="workbench">
-    <div class="field"><label for="expression">Vector</label><input id="expression" value="residual_stream" placeholder="hidden, qkv, residual_stream, hidden[:256]"><button id="plot" class="icon primary" title="Plot vector" aria-label="Plot vector"><svg viewBox="0 0 16 16"><path d="M4 2.5v11l9-5.5-9-5.5z"/></svg></button></div>
+    <div class="field"><label for="expression">Vector</label><input id="expression" value="residual_stream" placeholder="hidden, qkv, residual_stream, hidden[:256]"><div class="action-tools"><button id="plot" title="Plot vector">Plot</button><button id="lens" class="secondary" title="Apply final LayerNorm and vocabulary projection">Lens</button></div></div>
     <div class="field"><label for="snippets">Plot code</label><select id="snippets"></select><div class="icon-tools"><button id="open" class="icon" title="Open plot file" aria-label="Open plot file"><svg viewBox="0 0 16 16"><path d="M12.1 1.9l2 2-8.7 8.7-3 .7.7-3 9-9.4zM2 14h12v1H2v-1z"/></svg></button><button id="new" class="icon" title="New plot file" aria-label="New plot file"><svg viewBox="0 0 16 16"><path d="M7.5 1h1v6.5H15v1H8.5V15h-1V8.5H1v-1h6.5V1z"/></svg></button><button id="delete" class="icon" title="Delete plot file" aria-label="Delete plot file"><svg viewBox="0 0 16 16"><path d="M5 1h6l1 2h3v1h-1l-1 11H3L2 4H1V3h3l1-2zm1 .9L5.5 3h5L10 1.9H6zM3 4l1 10h8l1-10H3z"/></svg></button></div></div>
-    <section id="preview"><div id="status">Enter a vector expression and run a Matplotlib snippet.</div><img id="image" alt="Matplotlib plot preview"></section>
+    <section id="preview"><div id="status">Enter a vector expression, then choose Plot or Lens.</div><img id="image" alt="Matplotlib plot preview"><div id="lens-result" hidden></div></section>
   </main>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const expression = document.getElementById('expression'), snippets = document.getElementById('snippets');
-    const status = document.getElementById('status'), image = document.getElementById('image');
+    const status = document.getElementById('status'), image = document.getElementById('image'), lensResult = document.getElementById('lens-result');
     let items = [];
     window.addEventListener('message', event => {
       if (event.data.type === 'snippets') { const previous=snippets.value; items=event.data.items; snippets.replaceChildren(...items.map(item => { const o=document.createElement('option'); o.value=item.file; o.textContent=item.name; return o; })); snippets.value=items.some(item=>item.file===previous)?previous:(event.data.selected||items[0]?.file||''); }
-      if (event.data.type === 'result') { image.src='data:image/png;base64,'+event.data.image; status.className=''; status.textContent=event.data.meta; }
+      if (event.data.type === 'result') { lensResult.hidden=true; image.src='data:image/png;base64,'+event.data.image; status.className=''; status.textContent=event.data.meta; }
+      if (event.data.type === 'lens') { image.removeAttribute('src'); lensResult.hidden=false; lensResult.replaceChildren(); const summary=document.createElement('div'); summary.className='lens-summary'; const method=document.createElement('span'); method.className='lens-method'; method.textContent='final LayerNorm → unembedding'; const context=document.createElement('span'); context.textContent=event.data.expression+' · '+event.data.dimensions+'D · token '+event.data.tokenPosition+' '+JSON.stringify(event.data.token)+' · '+event.data.layer; summary.append(method,context); const table=document.createElement('table'); table.className='lens-table'; table.innerHTML='<thead><tr><th class="rank">#</th><th class="token-id">ID</th><th class="token">Token</th><th class="number">Logit</th><th class="number">Probability</th></tr></thead><tbody></tbody>'; const body=table.querySelector('tbody'); const maxProbability=Math.max(...event.data.tokens.map(item=>item.probability),1e-12); for(const item of event.data.tokens){ const row=document.createElement('tr'); const rank=document.createElement('td'); rank.className='rank'; rank.textContent=item.rank; const id=document.createElement('td'); id.className='token-id'; id.textContent=item.id; const token=document.createElement('td'); token.className='token'; token.textContent=JSON.stringify(item.text); token.title=item.text; const logit=document.createElement('td'); logit.className='number'; logit.textContent=item.logit.toFixed(4); const probability=document.createElement('td'); probability.className='number probability'; const bar=document.createElement('i'); bar.style.width=(100*item.probability/maxProbability).toFixed(2)+'%'; const value=document.createElement('span'); value.textContent=(100*item.probability).toFixed(3)+'%'; probability.append(bar,value); row.append(rank,id,token,logit,probability); body.append(row); } lensResult.append(summary,table); status.className=''; status.textContent='Top '+event.data.tokens.length+' vocabulary predictions'; }
       if (event.data.type === 'error') { status.className='error'; status.textContent='Error: '+event.data.message; }
     });
     document.getElementById('plot').onclick=()=>{ status.className=''; status.textContent='Rendering…'; vscode.postMessage({type:'plot', expression:expression.value, file:snippets.value}); };
+    document.getElementById('lens').onclick=()=>{ status.className=''; status.textContent='Computing logit lens…'; vscode.postMessage({type:'lens', expression:expression.value}); };
     document.getElementById('open').onclick=()=>vscode.postMessage({type:'open', file:snippets.value});
     document.getElementById('new').onclick=()=>vscode.postMessage({type:'new'});
     document.getElementById('delete').onclick=()=>vscode.postMessage({type:'delete', file:snippets.value});
@@ -373,19 +389,22 @@ function activate(context) {
       );
       vectorPanel.webview.html = vectorPlotHtml(vectorPanel.webview);
       vectorPanel.webview.onDidReceiveMessage(async (message) => {
-        if (message.type === "plot") {
+        if (message.type === "plot" || message.type === "lens") {
           const active = vscode.debug.activeDebugSession;
           if (!active || active.type !== "llmdbg") {
             await vectorPanel.webview.postMessage({ type: "error", message: "Start and pause an llmdbg session first." });
             return;
           }
           try {
-            const code = await fs.promises.readFile(await plotPath(String(message.file || "")), "utf8");
-            const result = await active.customRequest("llmdbg/plot", {
-              expression: String(message.expression || "residual_stream"),
-              code
-            });
-            await vectorPanel.webview.postMessage({ type: "result", ...result });
+            const expression = String(message.expression || "residual_stream");
+            if (message.type === "lens") {
+              const result = await active.customRequest("llmdbg/lens", { expression });
+              await vectorPanel.webview.postMessage({ type: "lens", ...result });
+            } else {
+              const code = await fs.promises.readFile(await plotPath(String(message.file || "")), "utf8");
+              const result = await active.customRequest("llmdbg/plot", { expression, code });
+              await vectorPanel.webview.postMessage({ type: "result", ...result });
+            }
           } catch (error) {
             await vectorPanel.webview.postMessage({ type: "error", message: error.message });
           }

@@ -97,6 +97,9 @@ VS Code extension storage as `*.plot.py` files. Each defines
 file remains valid Python without unresolved injected globals. Compact edit/new/trash icons open the files in
 VS Code, create them, or move them to the system trash; the plot panel itself
 does not embed a code editor.
+Use **Lens** beside **Plot** to apply the model's final LayerNorm and
+unembedding to the selected residual-width vector. The panel displays the top
+20 tokens with token IDs, logits, probabilities, and relative probability bars.
 The debugger also exposes explicit **Residual stream (output)** and **Delta** scopes.
 
 Attention stops expose their 768D LayerNorm output, combined 2304D QKV

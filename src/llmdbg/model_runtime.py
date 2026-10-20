@@ -46,6 +46,16 @@ class NeuronProjection:
     contribution: tuple[TokenScore, ...]
 
 
+@dataclass(frozen=True)
+class LogitLensToken:
+    """One token prediction produced by a residual-stream logit lens."""
+
+    token_id: int
+    text: str
+    logit: float
+    probability: float
+
+
 @dataclass
 class ModelExecution:
     """A prompt execution that advances one token at a time with a KV cache."""
@@ -183,6 +193,45 @@ class ModelExecution:
                 ),
             )
             for rank in range(active_indices.shape[0])
+        )
+
+    def logit_lens(
+        self,
+        vector: tuple[float, ...],
+        *,
+        token_count: int = 20,
+    ) -> tuple[LogitLensToken, ...]:
+        """Apply the model's final normalization and unembedding to a vector."""
+        import torch
+
+        model = self.runtime.model
+        unembedding = model.get_output_embeddings()
+        width = int(unembedding.weight.shape[1])
+        if len(vector) != width:
+            raise ValueError(
+                f"logit lens requires a {width}D residual-stream vector, got {len(vector)}D"
+            )
+        with _runtime_lock, torch.inference_mode():
+            hidden = torch.tensor(
+                vector,
+                dtype=unembedding.weight.dtype,
+                device=unembedding.weight.device,
+            )
+            projected = model.transformer.ln_f(hidden)
+            logits = unembedding(projected).float()
+            probabilities = torch.softmax(logits, dim=-1)
+            values, ids = torch.topk(logits, min(token_count, logits.numel()))
+            selected_probabilities = probabilities.index_select(0, ids)
+        return tuple(
+            LogitLensToken(
+                token_id=int(token_id),
+                text=self.runtime.tokenizer.decode([int(token_id)]),
+                logit=float(logit),
+                probability=float(probability),
+            )
+            for token_id, logit, probability in zip(
+                ids.tolist(), values.tolist(), selected_probabilities.tolist(), strict=True
+            )
         )
 
 
