@@ -15,6 +15,10 @@ packages to be shared efficiently across environments.
 3. Wait for the private debugger environment to be created on first use.
 4. Expand **Variables** and use **Step Over** to advance through model layers.
 
+VS Code assigns `*.llmdbg.py` the dedicated **llmdbg Python** language mode.
+This keeps Python highlighting but makes F5 select llmdbg; ordinary `*.py`
+files continue to use the normal Python debugger.
+
 The Python format uses `from llmdbg import gpt2, debug`, ordinary functions,
 loops, indexing, and slicing. See the repository `gpt2.llmdbg.py` example.
 Tensor handles keep model tensors in llmdbg's runtime, and assignments such as

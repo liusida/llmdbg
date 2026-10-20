@@ -2,7 +2,7 @@
   "name": "llmdbg",
   "displayName": "llmdbg",
   "description": "Step through LLM layers and inspect human-readable internal representations.",
-  "version": "0.0.31",
+  "version": "0.0.32",
   "publisher": "liusida",
   "license": "MIT",
   "repository": {
@@ -65,6 +65,16 @@
         "extensions": [
           ".llmdbg"
         ]
+      },
+      {
+        "id": "llmdbg-python",
+        "aliases": [
+          "llmdbg Python",
+          "Python Model Program"
+        ],
+        "extensions": [
+          ".llmdbg.py"
+        ]
       }
     ],
     "grammars": [
@@ -72,11 +82,19 @@
         "language": "llmdbg",
         "scopeName": "source.llmdbg",
         "path": "./syntaxes/llmdbg.tmLanguage.json"
+      },
+      {
+        "language": "llmdbg-python",
+        "scopeName": "source.llmdbg.python",
+        "path": "./syntaxes/llmdbg-python.tmLanguage.json"
       }
     ],
     "breakpoints": [
       {
         "language": "llmdbg"
+      },
+      {
+        "language": "llmdbg-python"
       }
     ],
     "debuggers": [
@@ -85,7 +103,7 @@
         "label": "llmdbg",
         "languages": [
           "llmdbg",
-          "python"
+          "llmdbg-python"
         ],
         "configurationAttributes": {
           "launch": {

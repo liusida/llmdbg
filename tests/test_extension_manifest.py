@@ -17,7 +17,9 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn("bundled/**", manifest["files"])
         self.assertIn("stage-adapter", manifest["scripts"])
         self.assertEqual(manifest["contributes"]["languages"][0]["extensions"], [".llmdbg"])
+        self.assertEqual(manifest["contributes"]["languages"][1]["extensions"], [".llmdbg.py"])
         self.assertEqual(manifest["contributes"]["breakpoints"][0]["language"], "llmdbg")
+        self.assertEqual(manifest["contributes"]["breakpoints"][1]["language"], "llmdbg-python")
         command_ids = {command["command"] for command in manifest["contributes"]["commands"]}
         self.assertIn("llmdbg.plotCurrentVector", command_ids)
         self.assertIn("llmdbg.unloadModel", command_ids)

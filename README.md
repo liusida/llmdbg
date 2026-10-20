@@ -27,6 +27,10 @@ code --install-extension llmdbg-0.0.1.vsix
 
 The recommended format is now a real Python program named `gpt2.llmdbg.py`:
 
+The compound suffix is intentional: VS Code recognizes it as **llmdbg Python**,
+so F5 starts llmdbg rather than the ordinary Python debugger, while the editor
+still uses Python syntax highlighting.
+
 ```python
 from llmdbg import debug, gpt2
 
