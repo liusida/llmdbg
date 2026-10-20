@@ -73,6 +73,14 @@ class LLMDebugAdapter:
         900: ("normalized_output", "Normalized output"),
     }
     SOURCE_REFERENCE = 1
+    MLP_FRAME_ID = 2
+    MLP_STEPS = (
+        ("layernorm", "normalized_input", "Normalize the residual stream for the MLP."),
+        ("expansion", "mlp_expansion_pre_activation", "Expand hidden width with W_up + bias."),
+        ("gelu", "mlp_expansion", "Apply the GELU nonlinearity."),
+        ("projection", "mlp_projection", "Project active neurons back with W_down."),
+        ("residual_add", "output", "Add the MLP update to the residual stream."),
+    )
 
     def __init__(self, stream: ProtocolStream) -> None:
         self.stream = stream
@@ -92,16 +100,70 @@ class LLMDebugAdapter:
         self.source_path: str | None = None
         self.breakpoints: tuple[SourceBreakpoint, ...] = ()
         self.neuron_cache: dict[tuple[int, str], tuple[NeuronProjection, ...]] = {}
+        self.inside_mlp = False
+        self.mlp_step_index = 0
+        self.mlp_source_content = ""
+        self.mlp_source_lines: tuple[int, ...] = ()
 
     @property
     def state(self) -> LayerState:
-        return self.trace[self.layer_index]
+        outer = self.trace[self.layer_index]
+        if not getattr(self, "inside_mlp", False):
+            return outer
+        step_name, _vector_name, meaning = self.MLP_STEPS[self.mlp_step_index]
+        input_vector = self._mlp_step_input(self.mlp_step_index)
+        return LayerState(
+            layer=outer.layer.__class__(
+                f"{outer.layer.name}.{step_name}",
+                step_name,
+                meaning,
+                1.0,
+                0.0,
+            ),
+            input_vector=input_vector,
+            output_vector=input_vector,
+            interpretation=meaning,
+        )
 
     @property
     def previous_state(self) -> LayerState | None:
+        if getattr(self, "inside_mlp", False):
+            if self.mlp_step_index == 0:
+                return None
+            outer = self.trace[self.layer_index]
+            step_name, vector_name, meaning = self.MLP_STEPS[self.mlp_step_index - 1]
+            output = self._mlp_vector(vector_name)
+            input_vector = self._mlp_step_input(self.mlp_step_index - 1)
+            details = {} if vector_name == "output" else {vector_name: output}
+            return LayerState(
+                layer=outer.layer.__class__(
+                    f"{outer.layer.name}.{step_name}",
+                    step_name,
+                    meaning,
+                    1.0,
+                    0.0,
+                ),
+                input_vector=input_vector,
+                output_vector=output,
+                interpretation=meaning,
+                details=details,
+            )
         if self.layer_index == 0:
             return None
         return self.trace[self.layer_index - 1]
+
+    @property
+    def outer_state(self) -> LayerState:
+        return self.trace[self.layer_index]
+
+    def _mlp_vector(self, vector_name: str) -> tuple[float, ...]:
+        outer = self.outer_state
+        return outer.output_vector if vector_name == "output" else outer.details[vector_name]
+
+    def _mlp_step_input(self, step_index: int) -> tuple[float, ...]:
+        if step_index == 0:
+            return self.outer_state.input_vector
+        return self._mlp_vector(self.MLP_STEPS[step_index - 1][1])
 
     def send_response(
         self,
@@ -271,11 +333,26 @@ class LLMDebugAdapter:
                     f"{self.layer_index:02d}: {self.state.layer.name}"
                 ),
                 "source": source,
-                "line": self.source_lines[self.layer_index],
+                "line": (
+                    self.mlp_source_lines[self.mlp_step_index]
+                    if self.inside_mlp else self.source_lines[self.layer_index]
+                ),
                 "column": 1,
                 "presentationHint": "normal",
             }
-            self.send_response(request, {"stackFrames": [frame], "totalFrames": 1})
+            if self.inside_mlp:
+                frame["id"] = self.MLP_FRAME_ID
+                frame["name"] = f"{self.outer_state.layer.name} · {self.MLP_STEPS[self.mlp_step_index][0]}"
+                parent = {
+                    "id": self.FRAME_ID,
+                    "name": f"token {self.token_index}: {self.tokens[self.token_index]!r} · {self.outer_state.layer.name}",
+                    "source": source,
+                    "line": self.source_lines[self.layer_index],
+                    "column": 1,
+                }
+                self.send_response(request, {"stackFrames": [frame, parent], "totalFrames": 2})
+            else:
+                self.send_response(request, {"stackFrames": [frame], "totalFrames": 1})
         elif command == "source":
             reference = int(arguments.get("sourceReference", 0))
             if reference != self.SOURCE_REFERENCE:
@@ -359,17 +436,20 @@ class LLMDebugAdapter:
             self.send_response(request, self._vector_snapshot())
         elif command in ("next", "stepIn", "stepOut"):
             self.send_response(request)
-            if self.layer_index + 1 < len(self.trace):
-                self.layer_index += 1
+            if command == "stepIn" and not self.inside_mlp and self.outer_state.layer.name.endswith(".mlp") and self.mlp_source_lines:
+                self.inside_mlp = True
+                self.mlp_step_index = 0
                 self.stop("step")
-            elif self.token_index + 1 < len(self.tokens):
-                self._load_token(self.token_index + 1)
-                self.layer_index = 0
+            elif self.inside_mlp and command != "stepOut" and self.mlp_step_index + 1 < len(self.MLP_STEPS):
+                self.mlp_step_index += 1
                 self.stop("step")
             else:
-                self.terminate()
+                self.inside_mlp = False
+                self.mlp_step_index = 0
+                self._advance_outer()
         elif command == "continue":
             self.send_response(request, {"allThreadsContinued": True})
+            self.inside_mlp = False
             self._continue_to_breakpoint(include_current=False)
         elif command == "pause":
             self.send_response(request)
@@ -500,6 +580,23 @@ class LLMDebugAdapter:
         self.source_path = str(path)
         self.source_lines = tuple(int(step_lines[name]) for name in step_paths)
         self.step_paths = tuple(step_paths)
+        functions = arguments.get("functions", {})
+        mlp_lines = functions.get("mlp", {}) if isinstance(functions, dict) else {}
+        self.mlp_source_lines = tuple(int(mlp_lines.get(name, 0)) for name, _, _ in self.MLP_STEPS)
+        if any(line <= 0 for line in self.mlp_source_lines):
+            self.mlp_source_lines = ()
+
+    def _advance_outer(self) -> None:
+        """Step over the current authored submodule."""
+        if self.layer_index + 1 < len(self.trace):
+            self.layer_index += 1
+            self.stop("step")
+        elif self.token_index + 1 < len(self.tokens):
+            self._load_token(self.token_index + 1)
+            self.layer_index = 0
+            self.stop("step")
+        else:
+            self.terminate()
 
     def _load_token(self, position: int) -> None:
         """Execute one prompt token and select the authored model steps."""
@@ -790,6 +887,9 @@ class LLMDebugAdapter:
             elif vector_name == "layernorm":
                 vector_name = "normalized_input"
 
+        if getattr(self, "inside_mlp", False) and vector_name == "output":
+            vector_name = self.MLP_STEPS[self.mlp_step_index - 1][1]
+
         source_vector = (
             result_state.output_vector
             if vector_name == "output"
@@ -802,9 +902,14 @@ class LLMDebugAdapter:
                 f"dimension {index} is outside {vector_name} range 0..{len(source_vector) - 1}"
             )
 
+        target_layer = (
+            self.outer_state.layer.name
+            if getattr(self, "inside_mlp", False)
+            else result_state.layer.name
+        )
         self.execution.set_intervention(
             self.token_index,
-            result_state.layer.name,
+            target_layer,
             vector_name,
             index,
             value,
@@ -824,10 +929,15 @@ class LLMDebugAdapter:
             or "mlp_expansion" not in result_state.details
         ):
             return ()
-        key = (self.token_index, result_state.layer.name)
+        layer_name = (
+            self.outer_state.layer.name
+            if getattr(self, "inside_mlp", False)
+            else result_state.layer.name
+        )
+        key = (self.token_index, layer_name)
         if key not in self.neuron_cache:
             self.neuron_cache[key] = self.execution.top_mlp_neurons(
-                result_state.layer.name,
+                layer_name,
                 result_state.details["mlp_expansion"],
             )
         return self.neuron_cache[key]

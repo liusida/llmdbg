@@ -136,6 +136,64 @@ class DAPIntegrationTest(unittest.TestCase):
         self.assertIsNone(LLMDebugAdapter._parse_token_condition("token.position == 1"))
         self.assertIsNone(LLMDebugAdapter._parse_token_condition("token.text == 'x'"))
 
+    def test_mlp_step_into_uses_authored_function_lines(self) -> None:
+        adapter = object.__new__(LLMDebugAdapter)
+        adapter.trace = (
+            LayerState(
+                Layer("transformer.h.0.mlp", "mlp", "mlp", 1.0, 0.0),
+                (1.0, 2.0),
+                (1.5, 2.5),
+                "mlp",
+                {
+                    "normalized_input": (0.1, 0.2),
+                    "mlp_expansion_pre_activation": (3.0, 4.0, 5.0),
+                    "mlp_expansion": (2.0, 4.0, 5.0),
+                    "mlp_projection": (0.5, 0.5),
+                },
+            ),
+        )
+        adapter.layer_index = 0
+        adapter.inside_mlp = True
+        adapter.mlp_step_index = 0
+
+        self.assertEqual(adapter.state.layer.operation, "layernorm")
+        self.assertIsNone(adapter.previous_state)
+        adapter.mlp_step_index = 1
+        self.assertEqual(adapter.state.input_vector, (0.1, 0.2))
+        self.assertEqual(adapter.previous_state.output_vector, (0.1, 0.2))
+        adapter.mlp_step_index = 3
+        self.assertEqual(adapter.state.layer.operation, "projection")
+        self.assertEqual(adapter.previous_state.output_vector, (2.0, 4.0, 5.0))
+
+    def test_setting_internal_output_targets_completed_mlp_operation(self) -> None:
+        adapter = object.__new__(LLMDebugAdapter)
+        adapter.trace = (
+            LayerState(
+                Layer("transformer.h.0.mlp", "mlp", "mlp", 1.0, 0.0),
+                (1.0, 2.0),
+                (1.5, 2.5),
+                "mlp",
+                {"normalized_input": (0.1, 0.2)},
+            ),
+        )
+        adapter.layer_index = 0
+        adapter.inside_mlp = True
+        adapter.mlp_step_index = 1
+        adapter.token_index = 3
+        adapter.neuron_cache = {}
+        interventions: list[tuple[object, ...]] = []
+        adapter.execution = SimpleNamespace(
+            set_intervention=lambda *args: interventions.append(args)
+        )
+        adapter._load_token = lambda _position: None
+
+        adapter._set_expression("output[1]", 9.0)
+
+        self.assertEqual(
+            interventions,
+            [(3, "transformer.h.0.mlp", "normalized_input", 1, 9.0)],
+        )
+
     def test_continue_stops_at_a_source_breakpoint(self) -> None:
         requests = [
             {"seq": 1, "type": "request", "command": "initialize", "arguments": {}},

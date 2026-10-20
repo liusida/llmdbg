@@ -21,6 +21,13 @@ prompt = "The capital of France is"
 token = 3
 stop_on_entry = true
 
+def mlp():
+    layernorm
+    expansion
+    gelu
+    projection
+    residual_add
+
 submodule = "token_embedding"
 layer = 0
 submodule = "transformer.h.0.attention"
@@ -33,6 +40,10 @@ submodule = "transformer.h.0.mlp"
         self.assertEqual(config["prompt"], "The capital of France is")
         self.assertEqual(config["defaultToken"], 3)
         self.assertTrue(config["stopOnEntry"])
+        self.assertEqual(
+            list(config["functions"]["mlp"]),
+            ["layernorm", "expansion", "gelu", "projection", "residual_add"],
+        )
         self.assertEqual(
             config["stepPaths"],
             ["token_embedding", "transformer.h.0.attention", "transformer.h.0.mlp"],

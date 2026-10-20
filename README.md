@@ -36,6 +36,13 @@ prompt = "The capital of France is"
 token = 3
 stop_on_entry = false
 
+def mlp():
+    layernorm
+    expansion
+    gelu
+    projection
+    residual_add
+
 submodule = "token_embedding"
 
 layer = 0
@@ -74,6 +81,12 @@ stops the host and releases the model. Each `submodule` statement is an
 authored model execution stop. Set breakpoints on these statements or use
 **Step Over** to advance through them. Runtime vectors appear in debugger
 scopes; the source file is never rewritten.
+
+Press **Step Into (F11)** on any `transformer.h.N.mlp` statement to enter the
+authored `mlp()` definition in the same file. **Step Over (F10)** then walks
+through LayerNorm, expansion, GELU, projection, and the residual add. The call
+site remains visible as the parent stack frame; **Step Out (Shift+F11)** returns
+to the next model submodule.
 
 `token = 3` makes token position 3 the default for every ordinary source
 breakpoint. To override it for one breakpoint, use the shorter conditional

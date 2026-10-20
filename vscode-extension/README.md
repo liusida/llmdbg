@@ -26,6 +26,13 @@ prompt = "The capital of France is"
 token = 3
 stop_on_entry = false
 
+def mlp():
+    layernorm
+    expansion
+    gelu
+    projection
+    residual_add
+
 submodule = "token_embedding"
 
 layer = 0
@@ -48,6 +55,11 @@ Each `submodule` statement selects a model execution stop and can receive a
 breakpoint. Repeated assignments are intentionally valid in the llmdbg source
 language; this file is not TOML. Unlisted model operations are omitted from
 the debug trace.
+
+Use **Step Into (F11)** at an MLP call to enter the `mlp()` definition above.
+The active line then advances through its five operations with **F10**, while
+the original `transformer.h.N.mlp` line remains the parent stack frame. Use
+**Shift+F11** to finish the MLP and return to the next outer submodule.
 
 Set `token = 3` in the source to make that zero-based position the default for
 ordinary breakpoints. A conditional breakpoint such as `token=4` overrides the

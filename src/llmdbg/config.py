@@ -10,6 +10,8 @@ from typing import Any
 
 _ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+?)\s*$")
 _BLOCK_SUBMODULE = re.compile(r"^transformer\.h\.(\d+)\.(attention|mlp)$")
+_FUNCTION = re.compile(r"^def\s+([A-Za-z_][A-Za-z0-9_]*)\(\):\s*$")
+_MLP_OPERATIONS = ("layernorm", "expansion", "gelu", "projection", "residual_add")
 _GLOBAL_KEYS = {
     "model",
     "revision",
@@ -51,6 +53,8 @@ def load_debug_config(path: str) -> dict[str, Any]:
     step_paths: list[str] = []
     step_lines: dict[str, int] = {}
     current_layer: int | None = None
+    function_name: str | None = None
+    functions: dict[str, dict[str, int]] = {}
 
     for line_number, raw_line in enumerate(
         config_path.read_text(encoding="utf-8").splitlines(), start=1
@@ -58,6 +62,25 @@ def load_debug_config(path: str) -> dict[str, Any]:
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
+        function_match = _FUNCTION.fullmatch(line)
+        if function_match:
+            function_name = function_match.group(1)
+            if function_name != "mlp":
+                raise ValueError(f"line {line_number}: only def mlp(): is currently supported")
+            if function_name in functions:
+                raise ValueError(f"line {line_number}: duplicate function {function_name!r}")
+            functions[function_name] = {}
+            continue
+        if raw_line[:1].isspace():
+            if function_name is None:
+                raise ValueError(f"line {line_number}: indented operation is outside a function")
+            if line not in _MLP_OPERATIONS:
+                raise ValueError(f"line {line_number}: unknown MLP operation {line!r}")
+            if line in functions[function_name]:
+                raise ValueError(f"line {line_number}: duplicate MLP operation {line!r}")
+            functions[function_name][line] = line_number
+            continue
+        function_name = None
         match = _ASSIGNMENT.fullmatch(line)
         if not match:
             raise ValueError(f"line {line_number}: expected name = value")
@@ -100,6 +123,10 @@ def load_debug_config(path: str) -> dict[str, Any]:
         raise ValueError("token must be assigned a non-negative integer")
     if not step_paths:
         raise ValueError("at least one submodule statement is required")
+    if "mlp" in functions and tuple(functions["mlp"]) != _MLP_OPERATIONS:
+        raise ValueError(
+            "def mlp() operations must be, in order: " + ", ".join(_MLP_OPERATIONS)
+        )
 
     return {
         "configPath": str(config_path),
@@ -112,4 +139,5 @@ def load_debug_config(path: str) -> dict[str, Any]:
         "stopOnEntry": globals_.get("stop_on_entry", True),
         "stepPaths": step_paths,
         "stepLines": step_lines,
+        "functions": functions,
     }
