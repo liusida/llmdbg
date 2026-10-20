@@ -2,7 +2,7 @@
   "name": "llmdbg",
   "displayName": "llmdbg",
   "description": "Step through LLM layers and inspect human-readable internal representations.",
-  "version": "0.0.20",
+  "version": "0.0.21",
   "publisher": "liusida",
   "license": "MIT",
   "repository": {
@@ -39,6 +39,11 @@
         "command": "llmdbg.unloadModel",
         "title": "llmdbg: Unload Model",
         "icon": "$(trash)"
+      },
+      {
+        "command": "llmdbg.showModelStatus",
+        "title": "llmdbg: Show Model Status",
+        "icon": "$(info)"
       }
     ],
     "menus": {

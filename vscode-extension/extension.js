@@ -198,15 +198,15 @@ function activate(context) {
     vscode.StatusBarAlignment.Right,
     100
   );
-  modelStatus.command = "llmdbg.unloadModel";
+  modelStatus.command = "llmdbg.showModelStatus";
   modelStatus.show();
 
   function updateModelStatus(model) {
     residentModel = model;
     if (model) {
-      const label = model.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || model;
+      const label = model.model.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || model.model;
       modelStatus.text = `$(database) llmdbg: ${label} loaded`;
-      modelStatus.tooltip = `${model} is resident in the llmdbg model host. Click to unload it.`;
+      modelStatus.tooltip = `${model.model} is resident. Click for details and unload options.`;
     } else {
       modelStatus.text = "$(circle-slash) llmdbg: no model loaded";
       modelStatus.tooltip = "No model is resident in the llmdbg model host.";
@@ -223,7 +223,7 @@ function activate(context) {
       vscode.window.showInformationMessage("llmdbg: no model is loaded.");
       return;
     }
-    const unloaded = residentModel;
+    const unloaded = residentModel?.model;
     const child = hostProcess;
     hostProcess = undefined;
     hostPromise = undefined;
@@ -233,6 +233,40 @@ function activate(context) {
     vscode.window.showInformationMessage(
       unloaded ? `llmdbg: unloaded ${unloaded}.` : "llmdbg: model host stopped."
     );
+  }
+
+  async function showModelStatus() {
+    if (!residentModel) {
+      await vscode.window.showInformationMessage(
+        "llmdbg: No model is currently loaded.",
+        {
+          modal: true,
+          detail: "Start an llmdbg session with F5 to load the configured model."
+        }
+      );
+      return;
+    }
+    const active = vscode.debug.activeDebugSession?.type === "llmdbg";
+    const detail = [
+      `Model: ${residentModel.model}`,
+      `Revision: ${residentModel.revision}`,
+      `Device: ${residentModel.device}`,
+      `Dtype: ${residentModel.dtype}`,
+      `Host process: ${hostProcess?.pid ?? "not running"}`,
+      `Debugger: ${active ? "active" : "stopped"}`,
+      "",
+      active
+        ? "Stop the debugger before unloading the model."
+        : "The model remains resident for fast F5 restarts."
+    ].join("\n");
+    const choice = await vscode.window.showInformationMessage(
+      "llmdbg resident model",
+      { modal: true, detail },
+      "Unload Model"
+    );
+    if (choice === "Unload Model") {
+      unloadModel();
+    }
   }
 
   updateModelStatus(undefined);
@@ -399,13 +433,14 @@ function activate(context) {
       }
     }),
     vscode.commands.registerCommand("llmdbg.plotCurrentVector", showVectorPlot),
+    vscode.commands.registerCommand("llmdbg.showModelStatus", showModelStatus),
     vscode.commands.registerCommand("llmdbg.unloadModel", unloadModel),
     vscode.debug.onDidReceiveDebugSessionCustomEvent((event) => {
       if (event.session.type !== "llmdbg") {
         return;
       }
       if (event.event === "llmdbg/modelLoaded") {
-        updateModelStatus(event.body.model);
+        updateModelStatus(event.body);
       } else if (event.event === "llmdbg/vectorChanged") {
         refreshVectorPlot(event.session);
       }

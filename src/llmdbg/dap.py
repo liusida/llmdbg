@@ -184,7 +184,15 @@ class LLMDebugAdapter:
                 )
                 self.tokens = self.execution.tokens
                 self._configure_model_source(arguments)
-                self.send_event("llmdbg/modelLoaded", {"model": str(model)})
+                self.send_event(
+                    "llmdbg/modelLoaded",
+                    {
+                        "model": str(model),
+                        "revision": str(arguments.get("revision", "main")),
+                        "device": str(arguments.get("device", "cuda")),
+                        "dtype": str(arguments.get("dtype", "bfloat16")),
+                    },
+                )
             else:
                 self.trace = run_demo()
                 self.tokens = ("demo",)
