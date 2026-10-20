@@ -45,6 +45,7 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn("function plotFunctionCode(code)", source)
         self.assertIn("def plot(vector, vector_name, plt, np):", source)
         self.assertIn("vscode.workspace.openTextDocument", source)
+        self.assertIn("viewColumn: vectorPanel?.viewColumn || vscode.ViewColumn.Beside", source)
         self.assertIn('"matplotlib>=3.10,<4"', source)
         self.assertIn('registerCommand("llmdbg.plotCurrentVector"', source)
         self.assertIn('registerCommand("llmdbg.unloadModel"', source)

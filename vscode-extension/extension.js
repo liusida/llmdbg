@@ -346,7 +346,10 @@ function activate(context) {
 
   async function openPlotFile(file) {
     const document = await vscode.workspace.openTextDocument(await plotPath(file));
-    await vscode.window.showTextDocument(document, { viewColumn: vscode.ViewColumn.One, preview: false });
+    await vscode.window.showTextDocument(document, {
+      viewColumn: vectorPanel?.viewColumn || vscode.ViewColumn.Beside,
+      preview: false
+    });
   }
 
   async function sendPlotSnippets(selected) {
