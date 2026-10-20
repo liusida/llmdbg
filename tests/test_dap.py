@@ -443,6 +443,43 @@ class DAPIntegrationTest(unittest.TestCase):
         stopped = [message for message in messages if message.get("event") == "stopped"]
         self.assertEqual([event["body"]["reason"] for event in stopped], ["entry", "step"])
 
+    def test_prompt_token_position_and_layer_are_first_class_context(self) -> None:
+        requests = [
+            {"seq": 1, "type": "request", "command": "initialize", "arguments": {}},
+            {
+                "seq": 2, "type": "request", "command": "launch",
+                "arguments": {"stopOnEntry": True, "prompt": "Hello model"},
+            },
+            {"seq": 3, "type": "request", "command": "configurationDone", "arguments": {}},
+            {
+                "seq": 4, "type": "request", "command": "variables",
+                "arguments": {"variablesReference": LLMDebugAdapter.SCOPE_TOKEN},
+            },
+            {"seq": 5, "type": "request", "command": "evaluate", "arguments": {"expression": "prompt"}},
+            {"seq": 6, "type": "request", "command": "evaluate", "arguments": {"expression": "token_pos"}},
+            {"seq": 7, "type": "request", "command": "evaluate", "arguments": {"expression": "layer"}},
+            {"seq": 8, "type": "request", "command": "disconnect", "arguments": {}},
+        ]
+        process = subprocess.run(
+            [sys.executable, "-m", "llmdbg.dap"],
+            input=b"".join(frame(request) for request in requests),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        responses = {
+            message.get("request_seq"): message
+            for message in parse_frames(process.stdout)
+            if message["type"] == "response"
+        }
+        context = {item["name"]: item for item in responses[4]["body"]["variables"]}
+        self.assertEqual(context["prompt"]["evaluateName"], "prompt")
+        self.assertEqual(context["token_pos"]["value"], "0")
+        self.assertEqual(context["layer"]["evaluateName"], "layer")
+        self.assertEqual(responses[5]["body"]["result"], "Hello model")
+        self.assertEqual(responses[6]["body"]["result"], "0")
+        self.assertTrue(responses[7]["body"]["result"])
+
     def test_config_file_is_used_as_the_debug_source(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "gpt.llmdbg"

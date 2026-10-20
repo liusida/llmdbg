@@ -101,6 +101,7 @@ class LLMDebugAdapter:
         self.trace: tuple[LayerState, ...] = ()
         self.execution: ModelExecution | None = None
         self.tokens: tuple[str, ...] = ()
+        self.prompt = ""
         self.token_index = 0
         self.default_token: int | None = None
         self.layer_index = 0
@@ -266,6 +267,7 @@ class LLMDebugAdapter:
                 file_arguments = load_debug_config(str(arguments["config"]))
                 arguments = {**file_arguments, **arguments}
             model = arguments.get("model")
+            self.prompt = str(arguments.get("prompt", "The capital of France is"))
             if model:
                 self.send_event(
                     "output",
@@ -274,7 +276,7 @@ class LLMDebugAdapter:
                 self.execution = prepare_model_execution(
                     str(model),
                     revision=str(arguments.get("revision", "main")),
-                    prompt=str(arguments.get("prompt", "The capital of France is")),
+                    prompt=self.prompt,
                     device=str(arguments.get("device", "cuda")),
                     dtype=str(arguments.get("dtype", "bfloat16")),
                     progress=lambda output: self.send_event(
@@ -388,7 +390,7 @@ class LLMDebugAdapter:
                 )
         elif command == "scopes":
             scopes = [
-                {"name": "Token", "variablesReference": self.SCOPE_TOKEN, "expensive": False},
+                {"name": "Context", "variablesReference": self.SCOPE_TOKEN, "expensive": False},
                 {"name": "Next operation", "variablesReference": self.SCOPE_LAYER, "expensive": False},
                 {"name": "Current input", "variablesReference": self.SCOPE_INPUT, "expensive": False},
             ]
@@ -776,21 +778,37 @@ class LLMDebugAdapter:
             prefix = "".join(self.tokens[: self.token_index + 1])
             return [
                 {
-                    "name": "position",
+                    "name": "prompt",
+                    "value": repr(self.prompt),
+                    "type": "str",
+                    "variablesReference": 0,
+                    "evaluateName": "prompt",
+                },
+                {
+                    "name": "token_pos",
                     "value": str(self.token_index),
                     "type": "int",
                     "variablesReference": 0,
+                    "evaluateName": "token_pos",
                 },
                 {
-                    "name": "id",
-                    "value": str(token_id),
-                    "type": "int",
+                    "name": "layer",
+                    "value": repr(self.state.layer.name),
+                    "type": "str",
                     "variablesReference": 0,
+                    "evaluateName": "layer",
                 },
                 {
-                    "name": "text",
+                    "name": "token",
                     "value": repr(self.tokens[self.token_index]),
                     "type": "str",
+                    "variablesReference": 0,
+                    "evaluateName": "token",
+                },
+                {
+                    "name": "token_id",
+                    "value": str(token_id),
+                    "type": "int",
                     "variablesReference": 0,
                 },
                 {
@@ -1061,9 +1079,11 @@ class LLMDebugAdapter:
 
     def _evaluate(self, expression: str) -> str | None:
         expression = self._source_expression(expression)
+        if expression == "prompt":
+            return self.prompt
         if expression in ("token", "token.text"):
             return self.tokens[self.token_index]
-        if expression in ("position", "token.position"):
+        if expression in ("token_pos", "position", "token.position"):
             return str(self.token_index)
         if expression in ("layer", "name"):
             return self.state.layer.name
