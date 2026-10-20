@@ -57,11 +57,11 @@ function vectorPlotHtml(webview) {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <style>
-    body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); padding: 12px; }
-    header { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); padding: 8px; }
+    header { display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; }
     select { color: var(--vscode-dropdown-foreground); background: var(--vscode-dropdown-background); border: 1px solid var(--vscode-dropdown-border); padding: 4px 8px; }
-    #meta { margin: 10px 0; color: var(--vscode-descriptionForeground); }
-    canvas { width: 100%; height: 440px; border: 1px solid var(--vscode-panel-border); }
+    #meta { margin: 8px 0; color: var(--vscode-descriptionForeground); }
+    canvas { width: 100%; height: 260px; border: 1px solid var(--vscode-panel-border); }
     #value { min-width: 210px; font-family: var(--vscode-editor-font-family); }
   </style>
 </head>
