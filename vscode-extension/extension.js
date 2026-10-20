@@ -65,23 +65,40 @@ function vectorPlotHtml(webview) {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; img-src data:;">
   <style>
-    body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); padding: 10px; }
-    .row { display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap; }
-    input, select, textarea, button { color:var(--vscode-input-foreground); background:var(--vscode-input-background); border:1px solid var(--vscode-input-border); padding:5px 7px; }
-    #expression { flex:1; min-width:220px; } #name { width:150px; }
-    textarea { width:100%; min-height:145px; box-sizing:border-box; font-family:var(--vscode-editor-font-family); resize:vertical; }
-    button { background:var(--vscode-button-background); color:var(--vscode-button-foreground); cursor:pointer; }
+    * { box-sizing: border-box; }
+    body { margin:0; padding:16px; font:13px/1.4 var(--vscode-font-family); color:var(--vscode-foreground); background:var(--vscode-editor-background); }
+    .workbench { display:grid; gap:10px; max-width:1100px; }
+    .field { display:grid; grid-template-columns:76px minmax(140px, 1fr) auto; gap:8px; align-items:center; }
+    .field > label { color:var(--vscode-foreground); white-space:nowrap; }
+    .snippet-tools { display:grid; grid-template-columns:minmax(120px, 180px) minmax(110px, 1fr) auto auto; gap:6px; }
+    input, select, textarea { width:100%; color:var(--vscode-input-foreground); background:var(--vscode-input-background); border:1px solid var(--vscode-input-border, transparent); border-radius:2px; outline:none; }
+    input, select { height:28px; padding:3px 7px; }
+    input:focus, select:focus, textarea:focus { border-color:var(--vscode-focusBorder); }
+    input::placeholder { color:var(--vscode-input-placeholderForeground); }
+    textarea { min-height:168px; padding:8px 10px; resize:vertical; color:var(--vscode-editor-foreground); background:var(--vscode-editor-background); border-color:var(--vscode-panel-border); font:var(--vscode-editor-font-size) var(--vscode-editor-font-family); line-height:1.45; tab-size:4; }
+    button { min-height:28px; padding:4px 12px; border:1px solid transparent; border-radius:2px; background:var(--vscode-button-background); color:var(--vscode-button-foreground); font:inherit; cursor:pointer; white-space:nowrap; }
+    button:hover { background:var(--vscode-button-hoverBackground); }
+    button:focus { outline:1px solid var(--vscode-focusBorder); outline-offset:1px; }
     button.secondary { background:var(--vscode-button-secondaryBackground); color:var(--vscode-button-secondaryForeground); }
-    #status { min-height:20px; color:var(--vscode-descriptionForeground); }
-    #image { display:block; max-width:100%; background:white; border:1px solid var(--vscode-panel-border); }
+    button.secondary:hover { background:var(--vscode-button-secondaryHoverBackground); }
+    #status { min-height:19px; color:var(--vscode-descriptionForeground); }
+    #status.error { color:var(--vscode-errorForeground); }
+    #preview { padding-top:2px; border-top:1px solid var(--vscode-panel-border); }
+    #image { display:block; max-width:100%; margin-top:10px; background:white; border:1px solid var(--vscode-panel-border); }
+    #image:not([src]) { display:none; }
+    @media (max-width:700px) {
+      .field { grid-template-columns:68px minmax(0,1fr) auto; }
+      .snippet-tools { grid-template-columns:1fr 1fr; }
+    }
   </style>
 </head>
 <body>
-  <div class="row"><label for="expression">Vector</label><input id="expression" value="residual_stream" placeholder="hidden, qkv, residual_stream, hidden[:256]"><button id="plot">Plot</button></div>
-  <div class="row"><label for="snippets">Plot code</label><select id="snippets"></select><input id="name" placeholder="snippet name"><button id="save" class="secondary">Save as New</button><button id="delete" class="secondary">Delete</button></div>
-  <textarea id="code" spellcheck="false"></textarea>
-  <div id="status">Enter a vector expression and run a Matplotlib snippet.</div>
-  <img id="image" alt="Matplotlib plot preview">
+  <main class="workbench">
+    <div class="field"><label for="expression">Vector</label><input id="expression" value="residual_stream" placeholder="hidden, qkv, residual_stream, hidden[:256]"><button id="plot">Plot</button></div>
+    <div class="field"><label for="snippets">Plot code</label><div class="snippet-tools"><select id="snippets"></select><input id="name" placeholder="New snippet name"><button id="save" class="secondary">Save as New</button><button id="delete" class="secondary">Delete</button></div><span></span></div>
+    <textarea id="code" aria-label="Matplotlib plotting code" spellcheck="false"></textarea>
+    <section id="preview"><div id="status">Enter a vector expression and run a Matplotlib snippet.</div><img id="image" alt="Matplotlib plot preview"></section>
+  </main>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const expression = document.getElementById('expression'), snippets = document.getElementById('snippets');
@@ -91,11 +108,11 @@ function vectorPlotHtml(webview) {
     function selectSnippet() { const item = items.find(x => x.name === snippets.value); if (item) code.value = item.code; }
     window.addEventListener('message', event => {
       if (event.data.type === 'snippets') { items = event.data.items; snippets.replaceChildren(...items.map(item => { const o=document.createElement('option'); o.value=item.name; o.textContent=item.name; return o; })); selectSnippet(); }
-      if (event.data.type === 'result') { image.src='data:image/png;base64,'+event.data.image; status.textContent=event.data.meta; }
-      if (event.data.type === 'error') status.textContent='Error: '+event.data.message;
+      if (event.data.type === 'result') { image.src='data:image/png;base64,'+event.data.image; status.className=''; status.textContent=event.data.meta; }
+      if (event.data.type === 'error') { status.className='error'; status.textContent='Error: '+event.data.message; }
     });
     snippets.addEventListener('change', selectSnippet);
-    document.getElementById('plot').onclick=()=>{ status.textContent='Rendering…'; vscode.postMessage({type:'plot', expression:expression.value, code:code.value}); };
+    document.getElementById('plot').onclick=()=>{ status.className=''; status.textContent='Rendering…'; vscode.postMessage({type:'plot', expression:expression.value, code:code.value}); };
     document.getElementById('save').onclick=()=>vscode.postMessage({type:'save', name:name.value, code:code.value});
     document.getElementById('delete').onclick=()=>vscode.postMessage({type:'delete', name:snippets.value});
   </script>
