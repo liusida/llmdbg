@@ -475,6 +475,8 @@ class LLMDebugAdapter:
                 self.inside_attention = bool(can_enter_attention)
                 self.mlp_step_index = 0
                 self.stop("step")
+            elif command == "next" and not self.inside_internal and self._stop_at_internal_breakpoint():
+                pass
             elif self.inside_internal and command != "stepOut" and self.mlp_step_index + 1 < len(self.internal_steps):
                 self.mlp_step_index += 1
                 self.stop("step")
@@ -733,6 +735,31 @@ class LLMDebugAdapter:
                         self.stop("breakpoint")
                         return
         self.terminate()
+
+    def _stop_at_internal_breakpoint(self) -> bool:
+        """Honor breakpoints inside the current call even while stepping over it."""
+        path = self.step_paths[self.layer_index] if self.layer_index < len(self.step_paths) else ""
+        if path.endswith(".attention"):
+            lines = self.attention_source_lines
+        elif path.endswith(".mlp"):
+            lines = self.mlp_source_lines
+        else:
+            return False
+        for index, line in enumerate(lines):
+            if any(
+                breakpoint.line == line
+                and (
+                    breakpoint.token_position is None
+                    or breakpoint.token_position == self.token_index
+                )
+                for breakpoint in self.breakpoints
+            ):
+                self.inside_attention = path.endswith(".attention")
+                self.inside_mlp = path.endswith(".mlp")
+                self.mlp_step_index = index
+                self.stop("breakpoint")
+                return True
+        return False
 
     def _variables(self, reference: int) -> list[dict[str, Any]]:
         if reference == self.SCOPE_TOKEN:

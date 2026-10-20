@@ -336,6 +336,28 @@ class DAPIntegrationTest(unittest.TestCase):
         self.assertTrue(adapter.inside_mlp)
         self.assertEqual(adapter.mlp_step_index, 4)
 
+    def test_step_over_outer_call_honors_internal_breakpoint(self) -> None:
+        adapter = object.__new__(LLMDebugAdapter)
+        adapter.tokens = ("a",)
+        adapter.source_lines = (35,)
+        adapter.step_paths = ("transformer.h.2.mlp",)
+        adapter.mlp_source_lines = (24, 25, 26, 27, 28)
+        adapter.attention_source_lines = ()
+        adapter.breakpoints = (SourceBreakpoint(27),)
+        adapter.token_index = 0
+        adapter.layer_index = 0
+        adapter.inside_mlp = False
+        adapter.inside_attention = False
+        adapter.mlp_step_index = 0
+        stops: list[str] = []
+        adapter.stop = stops.append
+
+        self.assertTrue(adapter._stop_at_internal_breakpoint())
+
+        self.assertEqual(stops, ["breakpoint"])
+        self.assertTrue(adapter.inside_mlp)
+        self.assertEqual(adapter.mlp_step_index, 3)
+
     def test_layer_step_and_variables(self) -> None:
         requests = [
             {"seq": 1, "type": "request", "command": "initialize", "arguments": {}},
