@@ -29,6 +29,55 @@ def parse_frames(data: bytes) -> list[dict[str, object]]:
 
 
 class DAPIntegrationTest(unittest.TestCase):
+    def test_qwen_source_dispatches_each_hybrid_mixer(self) -> None:
+        arguments = {
+            "configPath": "/tmp/Qwen35-0.8B.llmdbg.py",
+            "pythonProgram": True,
+            "callLines": {
+                "token_embedding": 45, "full_attention": 48,
+                "gated_linear_attention": 50, "mlp": 51, "final_layernorm": 52,
+            },
+            "functions": {
+                "full_attention": {
+                    "input_layernorm": 17, "full_attention": 18,
+                    "output_projection": 19, "residual_add": 20,
+                },
+                "gated_linear_attention": {
+                    "input_layernorm": 25, "gated_delta": 26,
+                    "output_projection": 27, "residual_add": 28,
+                },
+                "mlp": {
+                    "post_attention_layernorm": 33, "gate_projection": 34,
+                    "silu": 35, "up_projection": 36, "gated_multiply": 37,
+                    "down_projection": 38, "residual_add": 39,
+                },
+            },
+            "functionBindings": {},
+        }
+        runtime = SimpleNamespace(
+            layers=[object(), object(), object(), object()],
+            architecture="qwen3_5",
+            layer_kind=lambda index: "full_attention" if index == 3 else "gated_linear_attention",
+            state_name=lambda index, kind: f"model.layers.{index}.{kind}",
+            final_norm_name="model.norm",
+        )
+        adapter = object.__new__(LLMDebugAdapter)
+        adapter.execution = SimpleNamespace(runtime=runtime)
+        adapter._configure_model_source(arguments)
+
+        self.assertEqual(
+            adapter.step_paths[:5],
+            (
+                "token_embedding",
+                "model.layers.0.gated_linear_attention", "model.layers.0.mlp",
+                "model.layers.1.gated_linear_attention", "model.layers.1.mlp",
+            ),
+        )
+        self.assertIn("model.layers.3.full_attention", adapter.step_paths)
+        self.assertEqual(len(adapter.function_source_lines["gated_linear_attention"]), 4)
+        self.assertEqual(len(adapter.function_source_lines["full_attention"]), 4)
+        self.assertEqual(len(adapter.function_source_lines["mlp"]), 7)
+
     def test_detailed_vectors_support_indexed_watches(self) -> None:
         adapter = object.__new__(LLMDebugAdapter)
         adapter.trace = (
@@ -286,6 +335,7 @@ class DAPIntegrationTest(unittest.TestCase):
             direction_norm=2.5,
             vocabulary=(TokenScore(42, " answer", 8.5),),
             contribution=(),
+            r_lens=(TokenScore(84, " transported", 6.25),),
         )
         adapter.execution = SimpleNamespace(
             top_mlp_neurons=lambda *_args, **_kwargs: (projection,)
@@ -297,6 +347,41 @@ class DAPIntegrationTest(unittest.TestCase):
         self.assertEqual(result["neurons"][0]["index"], 1)
         self.assertEqual(result["neurons"][0]["tokens"][0]["text"], " answer")
         self.assertEqual(result["neurons"][0]["tokens"][0]["logit"], 8.5)
+        self.assertEqual(result["neurons"][0]["logitTokens"][0]["text"], " answer")
+        self.assertEqual(result["neurons"][0]["rLensTokens"][0]["text"], " transported")
+
+    def test_qwen_neuron_lens_reports_relative_activation_and_scale_side(self) -> None:
+        adapter = object.__new__(LLMDebugAdapter)
+        adapter.trace = (
+            LayerState(
+                Layer("model.layers.0.mlp", "mlp", "mlp", 1.0, 0.0),
+                (1.0,), (2.0,), "mlp", {"mlp_expansion": (0.25,)},
+            ),
+            LayerState(
+                Layer("model.layers.1.full_attention", "attention", "attention", 1.0, 0.0),
+                (2.0,), (2.0,), "attention",
+            ),
+        )
+        adapter.layer_index = 1
+        adapter.token_index = 0
+        adapter.tokens = (" test",)
+        adapter.inside_mlp = False
+        adapter.inside_attention = False
+        adapter.model_name = "Qwen/Qwen3.5-0.8B"
+        projection = NeuronProjection(
+            index=0, activation=0.2561914622783661, direction_norm=1.0,
+            vocabulary=(TokenScore(1, " token", 1.0),), contribution=(),
+        )
+        adapter.execution = SimpleNamespace(
+            top_mlp_neurons=lambda *_args, **_kwargs: (projection,)
+        )
+        adapter.neuron_cache = {}
+
+        neuron = adapter._neuron_lens_snapshot()["neurons"][0]
+
+        self.assertAlmostEqual(neuron["relativeActivation"], 2.0)
+        self.assertEqual(neuron["scaleSide"], "negative")
+        self.assertGreater(neuron["activationScale"], 0)
 
     def test_continue_stops_at_a_source_breakpoint(self) -> None:
         requests = [

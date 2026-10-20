@@ -1,0 +1,17 @@
+{
+  "files.exclude": {
+    "**/__pycache__": true,
+    ".pytest_cache": true,
+    ".venv": true,
+    "build": true,
+    "dist": true,
+    "vscode-extension/bundled": true,
+    "vscode-extension/node_modules": true
+  },
+  "search.exclude": {
+    "build": true,
+    "dist": true,
+    "vscode-extension/bundled": true,
+    "vscode-extension/node_modules": true
+  }
+}

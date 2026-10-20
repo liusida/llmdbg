@@ -8,6 +8,64 @@ from llmdbg.config import load_debug_config
 
 
 class DebugConfigTest(unittest.TestCase):
+    def test_loads_qwen35_hybrid_python_program(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "Qwen35-0.8B.llmdbg.py"
+            source.write_text(
+                '''from llmdbg import debug, qwen35
+model = qwen35("Qwen/Qwen3.5-0.8B")
+prompt = "hello"
+tokens = model.tokenize(prompt)
+def full_attention(x, layer):
+    normalized = layer.input_layernorm(x)
+    mixed = layer.full_attention(normalized)
+    update = layer.output_projection(mixed)
+    return x + update
+def gated_linear_attention(x, layer):
+    normalized = layer.input_layernorm(x)
+    mixed = layer.gated_delta(normalized)
+    update = layer.output_projection(mixed)
+    return x + update
+def mlp(x, layer):
+    normalized = layer.post_attention_layernorm(x)
+    gate = layer.gate_projection(normalized)
+    gate = layer.silu(gate)
+    up = layer.up_projection(normalized)
+    hidden = gate * up
+    update = layer.down_projection(hidden)
+    return x + update
+with debug(model, tokens, token=token):
+    x = model.token_embedding(tokens)
+    for layer in model.layers:
+        if layer.kind == "full_attention":
+            x = full_attention(x, layer)
+        else:
+            x = gated_linear_attention(x, layer)
+        x = mlp(x, layer)
+    x = model.final_layernorm(x)
+''',
+                encoding="utf-8",
+            )
+            config = load_debug_config(str(source))
+
+        self.assertEqual(config["modelKind"], "qwen35")
+        self.assertEqual(config["model"], "Qwen/Qwen3.5-0.8B")
+        self.assertLess(
+            config["callLines"]["full_attention"],
+            config["callLines"]["gated_linear_attention"],
+        )
+        self.assertEqual(
+            list(config["functions"]["mlp"]),
+            [
+                "post_attention_layernorm", "gate_projection", "silu",
+                "up_projection", "gated_multiply", "down_projection", "residual_add",
+            ],
+        )
+        self.assertEqual(
+            config["functionBindings"]["mlp"][4],
+            {"name": "hidden", "operation": "gated_multiply", "line": 20},
+        )
+
     def test_loads_pure_python_llmdbg_program(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "gpt2.llmdbg.py"

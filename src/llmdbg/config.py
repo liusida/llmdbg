@@ -21,7 +21,26 @@ _ATTENTION_OPERATIONS = (
     "output_projection",
     "residual_add",
 )
-_FUNCTION_OPERATIONS = {"mlp": _MLP_OPERATIONS, "attention": _ATTENTION_OPERATIONS}
+_QWEN_MLP_OPERATIONS = (
+    "post_attention_layernorm", "gate_projection", "silu",
+    "up_projection", "gated_multiply", "down_projection", "residual_add",
+)
+_FULL_ATTENTION_OPERATIONS = (
+    "input_layernorm", "full_attention", "output_projection", "residual_add",
+)
+_GATED_LINEAR_ATTENTION_OPERATIONS = (
+    "input_layernorm", "gated_delta", "output_projection", "residual_add",
+)
+_FUNCTION_VARIANTS = {
+    "mlp": (_MLP_OPERATIONS, _QWEN_MLP_OPERATIONS),
+    "attention": (_ATTENTION_OPERATIONS,),
+    "full_attention": (_FULL_ATTENTION_OPERATIONS,),
+    "gated_linear_attention": (_GATED_LINEAR_ATTENTION_OPERATIONS,),
+}
+_FUNCTION_OPERATIONS = {
+    name: tuple(dict.fromkeys(operation for variant in variants for operation in variant))
+    for name, variants in _FUNCTION_VARIANTS.items()
+}
 _GLOBAL_KEYS = {
     "model",
     "revision",
@@ -227,8 +246,24 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
                             "line": node.lineno,
                         }
                     )
+                elif (
+                    isinstance(node, ast.Assign)
+                    and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and isinstance(node.value, ast.BinOp)
+                    and isinstance(node.value.op, ast.Mult)
+                ):
+                    bindings.append(
+                        {
+                            "name": node.targets[0].id,
+                            "operation": "gated_multiply",
+                            "line": node.lineno,
+                        }
+                    )
                 elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
                     operations.setdefault("residual_add", node.lineno)
+                elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
+                    operations.setdefault("gated_multiply", node.lineno)
             functions[statement.name] = operations
             function_bindings[statement.name] = sorted(bindings, key=lambda item: item["line"])
 
@@ -257,7 +292,7 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
                     )
                 elif node.func.attr in {"token_embedding", "final_layernorm"}:
                     call_lines.setdefault(node.func.attr, node.lineno)
-            elif isinstance(node.func, ast.Name) and node.func.id in {"attention", "mlp"}:
+            elif isinstance(node.func, ast.Name) and node.func.id in _FUNCTION_OPERATIONS:
                 call_lines.setdefault(node.func.id, node.lineno)
 
     if model_call is None or not model_call.args:
@@ -270,9 +305,14 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
         prompt = globals_.get("prompt")
     if not isinstance(prompt, str) or not prompt:
         raise ValueError("Python llmdbg program must tokenize a non-empty prompt")
-    for name, expected in _FUNCTION_OPERATIONS.items():
-        if name in functions and tuple(functions[name]) != expected:
-            raise ValueError(f"def {name}() operations must be, in order: {', '.join(expected)}")
+    for name, variants in _FUNCTION_VARIANTS.items():
+        if name in functions and tuple(functions[name]) not in variants:
+            expected = " or ".join(", ".join(variant) for variant in variants)
+            raise ValueError(f"def {name}() operations must be, in order: {expected}")
+
+    model_kind = model_call.func.id if isinstance(model_call.func, ast.Name) else "gpt2"
+    if model_kind not in {"gpt2", "qwen35"}:
+        raise ValueError("model constructor must be gpt2(...) or qwen35(...)")
 
     return {
         "configPath": str(path), "model": model,
@@ -281,5 +321,5 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
         "prompt": prompt, "defaultToken": token if token is not None else globals_.get("token"),
         "stopOnEntry": globals_.get("stop_on_entry", stop_on_entry),
         "pythonProgram": True, "callLines": call_lines, "functions": functions,
-        "functionBindings": function_bindings,
+        "functionBindings": function_bindings, "modelKind": model_kind,
     }

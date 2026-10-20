@@ -2,7 +2,7 @@
   "name": "llmdbg",
   "displayName": "llmdbg",
   "description": "Step through LLM layers and inspect human-readable internal representations.",
-  "version": "0.0.49",
+  "version": "0.0.54",
   "publisher": "liusida",
   "license": "MIT",
   "repository": {
@@ -214,7 +214,7 @@
   },
   "scripts": {
     "stage-adapter": "node ./scripts/stage-adapter.js",
-    "package": "npm run stage-adapter && vsce package --no-dependencies"
+    "package": "npm run stage-adapter && node ./scripts/package-extension.js"
   },
   "devDependencies": {
     "@vscode/vsce": "^4.0.0"

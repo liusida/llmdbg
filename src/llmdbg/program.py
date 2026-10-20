@@ -42,6 +42,12 @@ class TensorHandle(Sequence[float]):
             return NotImplemented
         return self._session.output(update.layer)
 
+    def __mul__(self, other: "TensorHandle") -> "TensorHandle":
+        if not isinstance(other, TensorHandle):
+            return NotImplemented
+        layer = self.layer if self.layer.endswith(".mlp") else other.layer
+        return self._session.detail(layer, "mlp_expansion")
+
     def __repr__(self) -> str:
         preview = ", ".join(f"{value:+.5f}" for value in self._values[:6])
         suffix = ", ..." if len(self) > 6 else ""
@@ -53,7 +59,11 @@ class LayerHandle:
         self.session, self.index = session, index
 
     def _name(self, kind: str) -> str:
-        return f"transformer.h.{self.index}.{kind}"
+        return self.session.layer_name(self.index, kind)
+
+    @property
+    def kind(self) -> str:
+        return self.session.layer_kind(self.index)
 
     def layernorm(self, _x: TensorHandle) -> TensorHandle:
         caller = inspect.currentframe().f_back.f_code.co_name  # type: ignore[union-attr]
@@ -67,7 +77,9 @@ class LayerHandle:
         return self.session.detail(self._name("attention"), "attention_mixing")
 
     def output_projection(self, _mixed: TensorHandle) -> TensorHandle:
-        return self.session.detail(self._name("attention"), "attention_projection")
+        caller = inspect.currentframe().f_back.f_code.co_name  # type: ignore[union-attr]
+        kind = caller if caller in {"full_attention", "gated_linear_attention"} else "attention"
+        return self.session.detail(self._name(kind), "attention_projection")
 
     def expansion(self, _x: TensorHandle) -> TensorHandle:
         return self.session.detail(self._name("mlp"), "mlp_expansion_pre_activation")
@@ -78,10 +90,35 @@ class LayerHandle:
     def projection(self, _hidden: TensorHandle) -> TensorHandle:
         return self.session.detail(self._name("mlp"), "mlp_projection")
 
+    def input_layernorm(self, _x: TensorHandle) -> TensorHandle:
+        return self.session.detail(self._name(self.kind), "normalized_input")
+
+    def full_attention(self, _x: TensorHandle) -> TensorHandle:
+        return self.session.detail(self._name("full_attention"), "full_attention_mixing")
+
+    def gated_delta(self, _x: TensorHandle) -> TensorHandle:
+        return self.session.detail(self._name("gated_linear_attention"), "gated_delta_mixing")
+
+    def post_attention_layernorm(self, _x: TensorHandle) -> TensorHandle:
+        return self.session.detail(self._name("mlp"), "normalized_input")
+
+    def gate_projection(self, _x: TensorHandle) -> TensorHandle:
+        return self.session.detail(self._name("mlp"), "mlp_gate_pre_activation")
+
+    def silu(self, _gate: TensorHandle) -> TensorHandle:
+        return self.session.detail(self._name("mlp"), "mlp_gate_activation")
+
+    def up_projection(self, _x: TensorHandle) -> TensorHandle:
+        return self.session.detail(self._name("mlp"), "mlp_up_projection")
+
+    def down_projection(self, _hidden: TensorHandle) -> TensorHandle:
+        return self.session.detail(self._name("mlp"), "mlp_projection")
+
 
 class RemoteModel:
-    def __init__(self, model: str, *, revision: str, device: str, dtype: str):
-        self.model, self.revision, self.device, self.dtype = model, revision, device, dtype
+    def __init__(self, model: str, *, architecture: str, revision: str, device: str, dtype: str):
+        self.model, self.architecture = model, architecture
+        self.revision, self.device, self.dtype = revision, device, dtype
         self._session: DebugSession | None = None
 
     def tokenize(self, prompt: str) -> Prompt:
@@ -96,7 +133,8 @@ class RemoteModel:
         return self._require_session().output("token_embedding")
 
     def final_layernorm(self, _x: TensorHandle) -> TensorHandle:
-        return self._require_session().output("transformer.ln_f")
+        session = self._require_session()
+        return session.output(session.final_norm_name)
 
     def vocabulary_projection(self, x: TensorHandle) -> TensorHandle:
         return self._require_session().vocabulary_projection(x)
@@ -128,7 +166,20 @@ class DebugSession:
     @property
     def layer_count(self) -> int:
         assert self.execution is not None
-        return len(self.execution.runtime.model.transformer.h)
+        return len(self.execution.runtime.layers)
+
+    def layer_kind(self, index: int) -> str:
+        assert self.execution is not None
+        return self.execution.runtime.layer_kind(index)
+
+    def layer_name(self, index: int, kind: str) -> str:
+        assert self.execution is not None
+        return self.execution.runtime.state_name(index, kind)
+
+    @property
+    def final_norm_name(self) -> str:
+        assert self.execution is not None
+        return self.execution.runtime.final_norm_name
 
     def _refresh(self) -> None:
         assert self.execution is not None
@@ -167,7 +218,17 @@ def gpt2(
     device: str = "cuda",
     dtype: str = "bfloat16",
 ) -> RemoteModel:
-    return RemoteModel(model, revision=revision, device=device, dtype=dtype)
+    return RemoteModel(model, architecture="gpt2", revision=revision, device=device, dtype=dtype)
+
+
+def qwen35(
+    model: str,
+    *,
+    revision: str = "main",
+    device: str = "cuda",
+    dtype: str = "bfloat16",
+) -> RemoteModel:
+    return RemoteModel(model, architecture="qwen3_5", revision=revision, device=device, dtype=dtype)
 
 
 def debug(model: RemoteModel, tokens: Prompt, *, token: int = 0) -> DebugSession:

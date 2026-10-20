@@ -25,6 +25,34 @@ class ModelRuntime:
     model: Any
     tokenizer: Any
 
+    @property
+    def architecture(self) -> str:
+        model_type = getattr(self.model.config, "model_type", "")
+        return "qwen3_5" if model_type in {"qwen3_5", "qwen3_5_text"} else model_type
+
+    @property
+    def layers(self) -> Any:
+        return self.model.transformer.h if self.architecture == "gpt2" else self.model.model.layers
+
+    @property
+    def final_norm(self) -> Any:
+        return self.model.transformer.ln_f if self.architecture == "gpt2" else self.model.model.norm
+
+    def layer_kind(self, index: int) -> str:
+        if self.architecture == "gpt2":
+            return "attention"
+        kind = self.model.config.layer_types[index]
+        return "gated_linear_attention" if kind == "linear_attention" else "full_attention"
+
+    def state_name(self, index: int, kind: str) -> str:
+        if self.architecture == "gpt2":
+            return f"transformer.h.{index}.{kind}"
+        return f"model.layers.{index}.{kind}"
+
+    @property
+    def final_norm_name(self) -> str:
+        return "transformer.ln_f" if self.architecture == "gpt2" else "model.norm"
+
 
 @dataclass(frozen=True)
 class TokenScore:
@@ -37,13 +65,14 @@ class TokenScore:
 
 @dataclass(frozen=True)
 class NeuronProjection:
-    """An activated MLP neuron and its direct vocabulary projections."""
+    """An activated MLP neuron and its vocabulary readouts."""
 
     index: int
     activation: float
     direction_norm: float
     vocabulary: tuple[TokenScore, ...]
     contribution: tuple[TokenScore, ...]
+    r_lens: tuple[TokenScore, ...] = ()
 
 
 @dataclass
@@ -130,18 +159,35 @@ class ModelExecution:
         *,
         neuron_count: int = 5,
         token_count: int = 5,
+        include_r_lens: bool = False,
     ) -> tuple[NeuronProjection, ...]:
-        """Project the most active MLP neurons directly into vocabulary space."""
+        """Project the most active MLP neurons through Logit Lens and R-Lens."""
         import re
 
         import torch
 
-        match = re.fullmatch(r"transformer\.h\.(\d+)\.mlp", layer_name)
+        match = re.fullmatch(r"(?:transformer\.h|model\.layers)\.(\d+)\.mlp", layer_name)
         if match is None:
             return ()
-        block = self.runtime.model.transformer.h[int(match.group(1))]
-        down_projection = block.mlp.c_proj.weight
+        layer_index = int(match.group(1))
+        block = self.runtime.layers[layer_index]
+        down_projection = (
+            block.mlp.c_proj.weight
+            if self.runtime.architecture == "gpt2"
+            else block.mlp.down_proj.weight.T
+        )
         unembedding = self.runtime.model.get_output_embeddings().weight
+        from llmdbg.r_lens import source_map
+
+        r_lens_source = (
+            source_map(
+                str(getattr(self.runtime.model.config, "_name_or_path", "")),
+                layer_index,
+                int(down_projection.shape[1]),
+            )
+            if include_r_lens
+            else None
+        )
         with _runtime_lock, torch.inference_mode():
             activation_tensor = torch.tensor(
                 activation,
@@ -161,6 +207,18 @@ class ModelExecution:
                 contribution_scores, min(token_count, contribution_scores.shape[1]), dim=1
             )
             direction_norms = directions.float().norm(dim=1)
+            r_lens_values = r_lens_ids = None
+            if r_lens_source is not None:
+                mapping, _ = r_lens_source
+                mapping = mapping.to(device=directions.device, dtype=torch.float32)
+                mapped = torch.einsum("oi,bi->bo", mapping, directions.float())
+                normalized = self.runtime.final_norm(
+                    mapped.to(dtype=down_projection.dtype)[:, None, :]
+                )[:, 0]
+                r_lens_scores = (normalized @ unembedding.T).float()
+                r_lens_values, r_lens_ids = torch.topk(
+                    r_lens_scores, min(token_count, r_lens_scores.shape[1]), dim=1
+                )
 
         def token_scores(ids: Any, values: Any) -> tuple[TokenScore, ...]:
             return tuple(
@@ -180,6 +238,11 @@ class ModelExecution:
                 vocabulary=token_scores(vocabulary_ids[rank], vocabulary_values[rank]),
                 contribution=token_scores(
                     contribution_ids[rank], contribution_values[rank]
+                ),
+                r_lens=(
+                    token_scores(r_lens_ids[rank], r_lens_values[rank])
+                    if r_lens_ids is not None and r_lens_values is not None
+                    else ()
                 ),
             )
             for rank in range(active_indices.shape[0])
@@ -256,7 +319,8 @@ def _logit_lens(model, tokenizer, hidden, *, apply_final_norm: bool) -> str:
     import torch
 
     with torch.inference_mode():
-        projected = model.transformer.ln_f(hidden) if apply_final_norm else hidden
+        runtime = ModelRuntime(model, tokenizer)
+        projected = runtime.final_norm(hidden) if apply_final_norm else hidden
         logits = model.lm_head(projected)[0, -1].float()
         values, indices = torch.topk(logits, k=5)
     predictions = []
@@ -280,7 +344,7 @@ def load_model_trace(
     dtype: str = "bfloat16",
     progress: Callable[[str], None] | None = None,
 ) -> ModelTrace:
-    """Load GPT-2 and return a layer-by-layer trace for one prompt.
+    """Load a supported model and return a layer-by-layer trace for one prompt.
 
     Model tensors are loaded through :mod:`gb10_load_llm`, as required for
     efficient cold-page transfers on GB10/GX10 systems.
@@ -332,9 +396,9 @@ def prepare_model_execution(
             dtype=dtype,
             progress=report,
         )
-        if getattr(runtime.model.config, "model_type", None) != "gpt2":
+        if runtime.architecture not in {"gpt2", "qwen3_5"}:
             raise ValueError(
-                "the prototype currently supports GPT-2 models, "
+                "llmdbg supports GPT-2 and Qwen3.5 models, "
                 f"got {runtime.model.config.model_type!r}"
             )
         encoded = runtime.tokenizer(prompt, return_tensors="pt")
@@ -346,7 +410,7 @@ def prepare_model_execution(
     return ModelExecution(runtime, input_ids, tokens, device, report)
 
 
-def _capture_token_trace(
+def _capture_gpt2_token_trace(
     runtime: ModelRuntime,
     *,
     input_ids: Any,
@@ -538,3 +602,210 @@ def _capture_token_trace(
 
     progress(f"Captured {len(states)} layer states for token {token_position}.\n")
     return ModelTrace(tuple(states), ()), model_output.past_key_values
+
+
+def _capture_qwen35_token_trace(
+    runtime: ModelRuntime,
+    *,
+    input_ids: Any,
+    past_key_values: Any,
+    total_length: int,
+    device: str,
+    progress: Callable[[str], None],
+    token_position: int,
+    interventions: dict[tuple[int, str, str, int], float],
+) -> tuple[ModelTrace, Any]:
+    """Capture Qwen3.5 residual, hybrid-attention, and gated-MLP states."""
+    import torch
+
+    model = runtime.model
+    captured: list[tuple[str, str, str, Any, bool]] = []
+    detailed: dict[str, dict[str, Any]] = {}
+    handles = []
+
+    def apply_interventions(tensor: Any, state_name: str, vector_name: str) -> Any:
+        for (position, layer, vector, index), value in interventions.items():
+            if position == token_position and layer == state_name and vector == vector_name:
+                if index < 0 or index >= tensor.shape[-1]:
+                    raise ValueError(
+                        f"dimension {index} is outside {state_name}.{vector_name} "
+                        f"range 0..{tensor.shape[-1] - 1}"
+                    )
+                tensor[..., index] = value
+        return tensor
+
+    def capture(name: str, operation: str, meaning: str, apply_final_norm: bool):
+        def hook(_module, _inputs, output) -> None:
+            tensor = _tensor_from_output(output)
+            apply_interventions(tensor, name, "output")
+            captured.append((name, operation, meaning, tensor.detach(), apply_final_norm))
+        return hook
+
+    def capture_input(name: str, operation: str, meaning: str):
+        def hook(_module, inputs) -> None:
+            tensor = inputs[0]
+            apply_interventions(tensor, name, "output")
+            captured.append((name, operation, meaning, tensor.detach(), True))
+        return hook
+
+    def capture_detail(state_name: str, detail_name: str):
+        def hook(_module, _inputs, output) -> None:
+            tensor = _tensor_from_output(output)
+            apply_interventions(tensor, state_name, detail_name)
+            detailed.setdefault(state_name, {})[detail_name] = tensor.detach()
+        return hook
+
+    def capture_detail_input(state_name: str, detail_name: str):
+        def hook(_module, inputs) -> None:
+            tensor = inputs[0]
+            apply_interventions(tensor, state_name, detail_name)
+            detailed.setdefault(state_name, {})[detail_name] = tensor.detach()
+        return hook
+
+    def capture_qwen_gate(state_name: str):
+        def hook(_module, _inputs, output) -> None:
+            gate = _tensor_from_output(output)
+            apply_interventions(gate, state_name, "mlp_gate_pre_activation")
+            detailed.setdefault(state_name, {})["mlp_gate_pre_activation"] = gate.detach()
+            gate_activation = torch.nn.functional.silu(gate)
+            apply_interventions(gate_activation, state_name, "mlp_gate_activation")
+            detailed.setdefault(state_name, {})["mlp_gate_activation"] = gate_activation.detach()
+        return hook
+
+    handles.append(
+        model.model.embed_tokens.register_forward_hook(
+            capture(
+                "token_embedding",
+                "token embedding",
+                "Encodes the prompt token into the initial residual stream; positions enter through RoPE.",
+                True,
+            )
+        )
+    )
+    for index, block in enumerate(runtime.layers):
+        attention_kind = runtime.layer_kind(index)
+        attention_name = runtime.state_name(index, attention_kind)
+        mlp_name = runtime.state_name(index, "mlp")
+        handles.append(
+            block.input_layernorm.register_forward_hook(
+                capture_detail(attention_name, "normalized_input")
+            )
+        )
+        mixer = block.self_attn if attention_kind == "full_attention" else block.linear_attn
+        output_projection = mixer.o_proj if attention_kind == "full_attention" else mixer.out_proj
+        mixing_detail = (
+            "full_attention_mixing"
+            if attention_kind == "full_attention"
+            else "gated_delta_mixing"
+        )
+        handles.append(
+            output_projection.register_forward_pre_hook(
+                capture_detail_input(attention_name, mixing_detail)
+            )
+        )
+        handles.append(
+            output_projection.register_forward_hook(
+                capture_detail(attention_name, "attention_projection")
+            )
+        )
+        handles.append(
+            block.post_attention_layernorm.register_forward_pre_hook(
+                capture_input(
+                    attention_name,
+                    attention_kind.replace("_", " ") + " + residual",
+                    f"Layer {index} has applied {attention_kind.replace('_', ' ')}.",
+                )
+            )
+        )
+        handles.append(
+            block.post_attention_layernorm.register_forward_hook(
+                capture_detail(mlp_name, "normalized_input")
+            )
+        )
+        handles.append(
+            block.mlp.gate_proj.register_forward_hook(capture_qwen_gate(mlp_name))
+        )
+        handles.append(
+            block.mlp.up_proj.register_forward_hook(
+                capture_detail(mlp_name, "mlp_up_projection")
+            )
+        )
+        handles.append(
+            block.mlp.down_proj.register_forward_pre_hook(
+                capture_detail_input(mlp_name, "mlp_expansion")
+            )
+        )
+        handles.append(
+            block.mlp.down_proj.register_forward_hook(
+                capture_detail(mlp_name, "mlp_projection")
+            )
+        )
+        handles.append(
+            block.register_forward_hook(
+                capture(
+                    mlp_name,
+                    "SwiGLU MLP + residual",
+                    f"Layer {index} has applied its gated feature transformation.",
+                    True,
+                )
+            )
+        )
+    handles.append(
+        runtime.final_norm.register_forward_hook(
+            capture(
+                runtime.final_norm_name,
+                "final RMS normalization",
+                "Normalizes the final residual stream before vocabulary projection.",
+                False,
+            )
+        )
+    )
+    handles.append(
+        runtime.final_norm.register_forward_hook(
+            capture_detail(runtime.final_norm_name, "normalized_output")
+        )
+    )
+
+    try:
+        attention_mask = torch.ones((1, total_length), dtype=torch.long, device=device)
+        progress(f"Running token {token_position} as a one-token cached forward pass.\n")
+        with torch.inference_mode():
+            model_output = model(
+                input_ids=input_ids.to(device),
+                attention_mask=attention_mask,
+                past_key_values=past_key_values,
+                use_cache=True,
+            )
+    finally:
+        for handle in handles:
+            handle.remove()
+
+    states: list[LayerState] = []
+    previous: tuple[float, ...] | None = None
+    for name, operation, meaning, hidden, apply_final_norm in captured:
+        output = _last_token_vector(hidden)
+        interpretation = (
+            f"{meaning} "
+            f"{_logit_lens(model, runtime.tokenizer, hidden, apply_final_norm=apply_final_norm)}"
+        )
+        states.append(
+            LayerState(
+                Layer(name, operation, meaning, 1.0, 0.0),
+                previous if previous is not None else output,
+                output,
+                interpretation,
+                {
+                    detail_name: _last_token_vector(detail_tensor)
+                    for detail_name, detail_tensor in detailed.get(name, {}).items()
+                },
+            )
+        )
+        previous = output
+    progress(f"Captured {len(states)} layer states for token {token_position}.\n")
+    return ModelTrace(tuple(states), ()), model_output.past_key_values
+
+
+def _capture_token_trace(runtime: ModelRuntime, **kwargs: Any) -> tuple[ModelTrace, Any]:
+    if runtime.architecture == "qwen3_5":
+        return _capture_qwen35_token_trace(runtime, **kwargs)
+    return _capture_gpt2_token_trace(runtime, **kwargs)

@@ -176,6 +176,29 @@ the top five tokens from `W_down[neuron] @ W_unembed`, and the top five direct
 token contributions after scaling by the current activation. Token IDs and
 decoded text are both displayed. Results are cached for the current token and
 layer.
+The toolbar's **Lens** view has a selector for **Logit Lens**, **R-Lens**, or
+**Both**. Logit Lens projects the neuron's down-projection direction directly
+through the unembedding. R-Lens first transports that direction through a
+learned, layer-specific residual Jacobian, then applies the final norm and
+unembedding. If no compatible artifact is installed, the R-Lens side reports
+that it is unavailable rather than substituting a direct projection.
+
+Qwen 3.5 R-Lens data can be reproduced independently of the debugger:
+
+```console
+uv pip install datasets "git+https://github.com/anthropics/jacobian-lens.git"
+uv run python scripts/fit_qwen35_r_lens.py \
+  --model Qwen/Qwen3.5-0.8B-Base --prompts 25
+```
+
+The script uses `gb10-load-llm`, verifies that its RelP substitutions preserve
+the ordinary forward pass exactly and checkpoints after every prompt. Fitted
+artifacts are written under `build/r_lens/artifacts/` for validation and Hub
+publication; they are not bundled into the wheel or extension. Neuron Lens
+lazily downloads a compatible map from `sida/llmdbg` into the standard
+Hugging Face cache when R-Lens is first selected. A Base artifact may be used
+by the matching Instruct model only when its hidden width agrees.
+
 Add `top_neurons` to **Watch** to keep this tree visible while stepping; VS
 Code reevaluates it at every stop and preserves the expandable neuron/token
 structure. At non-MLP stops it reads `available at MLP stops`.

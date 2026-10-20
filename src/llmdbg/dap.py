@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 from llmdbg.config import load_debug_config
+from llmdbg.activation_scales import mlp_activation_scale
 from llmdbg.demo_model import FEATURES, LayerState, run_demo
 from llmdbg.model_runtime import ModelExecution, NeuronProjection, prepare_model_execution
 
@@ -79,6 +80,11 @@ class LLMDebugAdapter:
         1300: ("attention_qkv", "QKV projection"),
         1400: ("attention_mixing", "Attention mixing"),
         1500: ("attention_projection", "Attention output projection"),
+        1600: ("full_attention_mixing", "Full-attention mixing"),
+        1700: ("gated_delta_mixing", "Gated DeltaNet mixing"),
+        1800: ("mlp_gate_pre_activation", "MLP gate (pre-activation)"),
+        1900: ("mlp_gate_activation", "MLP gate (after SiLU)"),
+        1950: ("mlp_up_projection", "MLP value branch"),
     }
     SOURCE_REFERENCE = 1
     MLP_FRAME_ID = 2
@@ -95,6 +101,27 @@ class LLMDebugAdapter:
         ("attention_mixing", "attention_mixing", "Mix value vectors across cached token positions and heads."),
         ("output_projection", "attention_projection", "Project concatenated attention heads back to model width."),
         ("residual_add", "output", "Add the attention update to the residual stream."),
+    )
+    FULL_ATTENTION_STEPS = (
+        ("input_layernorm", "normalized_input", "RMS-normalize the residual stream."),
+        ("full_attention", "full_attention_mixing", "Apply causal multi-head attention and its output gate."),
+        ("output_projection", "attention_projection", "Project the mixed attention heads to model width."),
+        ("residual_add", "output", "Add the full-attention update to the residual stream."),
+    )
+    GATED_LINEAR_ATTENTION_STEPS = (
+        ("input_layernorm", "normalized_input", "RMS-normalize the residual stream."),
+        ("gated_delta", "gated_delta_mixing", "Apply the recurrent Gated DeltaNet token mixer."),
+        ("output_projection", "attention_projection", "Project the recurrent mixer output to model width."),
+        ("residual_add", "output", "Add the linear-attention update to the residual stream."),
+    )
+    QWEN_MLP_STEPS = (
+        ("post_attention_layernorm", "normalized_input", "RMS-normalize the post-attention residual stream."),
+        ("gate_projection", "mlp_gate_pre_activation", "Project into the SwiGLU gate branch."),
+        ("silu", "mlp_gate_activation", "Apply SiLU to the gate branch."),
+        ("up_projection", "mlp_up_projection", "Project into the SwiGLU value branch."),
+        ("gated_multiply", "mlp_expansion", "Multiply the activated gate and value branches."),
+        ("down_projection", "mlp_projection", "Project active features back to model width."),
+        ("residual_add", "output", "Add the MLP update to the residual stream."),
     )
 
     def __init__(self, stream: ProtocolStream) -> None:
@@ -116,7 +143,7 @@ class LLMDebugAdapter:
         self.source_name = "model.execution.llmdbg"
         self.source_path: str | None = None
         self.breakpoints: tuple[SourceBreakpoint, ...] = ()
-        self.neuron_cache: dict[tuple[int, str], tuple[NeuronProjection, ...]] = {}
+        self.neuron_cache: dict[tuple[int, str, bool], tuple[NeuronProjection, ...]] = {}
         self.inside_mlp = False
         self.mlp_step_index = 0
         self.mlp_source_content = ""
@@ -124,10 +151,36 @@ class LLMDebugAdapter:
         self.inside_attention = False
         self.attention_source_lines: tuple[int, ...] = ()
         self.function_bindings: dict[str, list[dict[str, Any]]] = {}
+        self.function_source_lines: dict[str, tuple[int, ...]] = {}
 
     @property
     def internal_steps(self) -> tuple[tuple[str, str, str], ...]:
-        return self.ATTENTION_STEPS if getattr(self, "inside_attention", False) else self.MLP_STEPS
+        function_name = self._function_name_for_path(self.outer_state.layer.name)
+        return {
+            "attention": self.ATTENTION_STEPS,
+            "full_attention": self.FULL_ATTENTION_STEPS,
+            "gated_linear_attention": self.GATED_LINEAR_ATTENTION_STEPS,
+            "mlp": self.QWEN_MLP_STEPS if self.outer_state.layer.name.startswith("model.layers.") else self.MLP_STEPS,
+        }.get(function_name, self.MLP_STEPS)
+
+    @staticmethod
+    def _function_name_for_path(path: str) -> str:
+        for name in ("gated_linear_attention", "full_attention", "attention", "mlp"):
+            if path.endswith("." + name):
+                return name
+        return ""
+
+    def _internal_source_lines(self, path: str | None = None) -> tuple[int, ...]:
+        target = path or self.outer_state.layer.name
+        function_name = self._function_name_for_path(target)
+        configured = getattr(self, "function_source_lines", {})
+        if function_name in configured:
+            return configured[function_name]
+        if function_name == "mlp":
+            return getattr(self, "mlp_source_lines", ())
+        if function_name == "attention":
+            return getattr(self, "attention_source_lines", ())
+        return ()
 
     @property
     def inside_internal(self) -> bool:
@@ -364,7 +417,7 @@ class LLMDebugAdapter:
                 ),
                 "source": source,
                 "line": (
-                    (self.attention_source_lines if self.inside_attention else self.mlp_source_lines)[self.mlp_step_index]
+                    self._internal_source_lines()[self.mlp_step_index]
                     if self.inside_internal else self.source_lines[self.layer_index]
                 ),
                 "column": 1,
@@ -473,12 +526,19 @@ class LLMDebugAdapter:
         elif command == "llmdbg/neuronLens":
             self.send_response(
                 request,
-                self._neuron_lens_snapshot(),
+                self._neuron_lens_snapshot(
+                    include_r_lens=str(arguments.get("mode", "logit"))
+                    in {"r-lens", "both"}
+                ),
             )
         elif command in ("next", "stepIn", "stepOut"):
             self.send_response(request)
-            can_enter_mlp = self.outer_state.layer.name.endswith(".mlp") and self.mlp_source_lines
-            can_enter_attention = self.outer_state.layer.name.endswith(".attention") and self.attention_source_lines
+            function_name = self._function_name_for_path(self.outer_state.layer.name)
+            internal_lines = self._internal_source_lines()
+            can_enter_mlp = function_name == "mlp" and internal_lines
+            can_enter_attention = function_name in {
+                "attention", "full_attention", "gated_linear_attention"
+            } and internal_lines
             if command == "stepIn" and not self.inside_internal and (can_enter_mlp or can_enter_attention):
                 self.inside_mlp = bool(can_enter_mlp)
                 self.inside_attention = bool(can_enter_attention)
@@ -504,8 +564,11 @@ class LLMDebugAdapter:
             requested = [int(item.get("line", 0)) for item in arguments.get("breakpoints", [])]
             valid_lines = sorted(
                 set(self.source_lines)
-                | set(self.mlp_source_lines)
-                | set(self.attention_source_lines)
+                | {
+                    line
+                    for lines in self.function_source_lines.values()
+                    for line in lines
+                }
             )
             resolved = [
                 min(valid_lines, key=lambda candidate: abs(candidate - line))
@@ -613,13 +676,36 @@ class LLMDebugAdapter:
         """Bind authored submodule statements to the model execution order."""
         if self.execution is None:
             raise RuntimeError("model execution is not prepared")
-        model = self.execution.runtime.model
-        available = ["token_embedding"]
-        for index in range(len(model.transformer.h)):
-            available.extend(
-                [f"transformer.h.{index}.attention", f"transformer.h.{index}.mlp"]
+        runtime = self.execution.runtime
+        runtime_layers = getattr(runtime, "layers", None)
+        if runtime_layers is None:
+            runtime_layers = getattr(
+                getattr(getattr(runtime, "model", None), "transformer", None),
+                "h",
+                (),
             )
-        available.append("transformer.ln_f")
+        runtime_architecture = getattr(runtime, "architecture", "gpt2")
+
+        def layer_kind(index: int) -> str:
+            return runtime.layer_kind(index) if hasattr(runtime, "layer_kind") else "attention"
+
+        def state_name(index: int, kind: str) -> str:
+            return (
+                runtime.state_name(index, kind)
+                if hasattr(runtime, "state_name")
+                else f"transformer.h.{index}.{kind}"
+            )
+
+        final_norm_name = getattr(runtime, "final_norm_name", "transformer.ln_f")
+        available = ["token_embedding"]
+        for index in range(len(runtime_layers)):
+            available.extend(
+                [
+                    state_name(index, layer_kind(index)),
+                    state_name(index, "mlp"),
+                ]
+            )
+        available.append(final_norm_name)
         if arguments.get("pythonProgram"):
             call_lines = arguments.get("callLines", {})
             step_paths = []
@@ -627,15 +713,16 @@ class LLMDebugAdapter:
             if "token_embedding" in call_lines:
                 step_paths.append("token_embedding")
                 step_lines["token_embedding"] = int(call_lines["token_embedding"])
-            for index in range(len(model.transformer.h)):
-                for kind in ("attention", "mlp"):
+            for index in range(len(runtime_layers)):
+                mixer_kind = layer_kind(index)
+                for kind in (mixer_kind, "mlp"):
                     if kind in call_lines:
-                        name = f"transformer.h.{index}.{kind}"
+                        name = state_name(index, kind)
                         step_paths.append(name)
                         step_lines[name] = int(call_lines[kind])
             if "final_layernorm" in call_lines:
-                step_paths.append("transformer.ln_f")
-                step_lines["transformer.ln_f"] = int(call_lines["final_layernorm"])
+                step_paths.append(final_norm_name)
+                step_lines[final_norm_name] = int(call_lines["final_layernorm"])
         else:
             step_paths = list(arguments.get("stepPaths", []))
             step_lines = arguments.get("stepLines", {})
@@ -652,16 +739,21 @@ class LLMDebugAdapter:
         self.step_paths = tuple(step_paths)
         functions = arguments.get("functions", {})
         self.function_bindings = dict(arguments.get("functionBindings", {}))
-        mlp_lines = functions.get("mlp", {}) if isinstance(functions, dict) else {}
-        self.mlp_source_lines = tuple(int(mlp_lines.get(name, 0)) for name, _, _ in self.MLP_STEPS)
-        if any(line <= 0 for line in self.mlp_source_lines):
-            self.mlp_source_lines = ()
-        attention_lines = functions.get("attention", {}) if isinstance(functions, dict) else {}
-        self.attention_source_lines = tuple(
-            int(attention_lines.get(name, 0)) for name, _, _ in self.ATTENTION_STEPS
-        )
-        if any(line <= 0 for line in self.attention_source_lines):
-            self.attention_source_lines = ()
+        step_sets = {
+            "attention": self.ATTENTION_STEPS,
+            "full_attention": self.FULL_ATTENTION_STEPS,
+            "gated_linear_attention": self.GATED_LINEAR_ATTENTION_STEPS,
+            "mlp": self.QWEN_MLP_STEPS if runtime_architecture == "qwen3_5" else self.MLP_STEPS,
+        }
+        self.function_source_lines = {}
+        if isinstance(functions, dict):
+            for function_name, steps in step_sets.items():
+                operation_lines = functions.get(function_name, {})
+                lines = tuple(int(operation_lines.get(name, 0)) for name, _, _ in steps)
+                if lines and all(line > 0 for line in lines):
+                    self.function_source_lines[function_name] = lines
+        self.mlp_source_lines = self.function_source_lines.get("mlp", ())
+        self.attention_source_lines = self.function_source_lines.get("attention", ())
 
     def _advance_outer(self) -> None:
         """Step over the current authored submodule."""
@@ -711,15 +803,10 @@ class LLMDebugAdapter:
                     (self.source_lines[layer_index], None)
                 ]
                 path = self.step_paths[layer_index] if layer_index < len(self.step_paths) else ""
-                if path.endswith(".attention"):
-                    locations.extend(
-                        (line, index)
-                        for index, line in enumerate(self.attention_source_lines)
-                    )
-                elif path.endswith(".mlp"):
-                    locations.extend(
-                        (line, index) for index, line in enumerate(self.mlp_source_lines)
-                    )
+                locations.extend(
+                    (line, index)
+                    for index, line in enumerate(self._internal_source_lines(path))
+                )
                 for location_index, (line, internal_index) in enumerate(locations):
                     position = (token_position, layer_index, location_index)
                     if not before_start and (
@@ -736,10 +823,12 @@ class LLMDebugAdapter:
                     ):
                         self._load_token(token_position)
                         self.layer_index = layer_index
+                        function_name = self._function_name_for_path(path)
                         self.inside_attention = (
-                            path.endswith(".attention") and internal_index is not None
+                            function_name in {"attention", "full_attention", "gated_linear_attention"}
+                            and internal_index is not None
                         )
-                        self.inside_mlp = path.endswith(".mlp") and internal_index is not None
+                        self.inside_mlp = function_name == "mlp" and internal_index is not None
                         self.mlp_step_index = internal_index or 0
                         self.stop("breakpoint")
                         return
@@ -752,11 +841,8 @@ class LLMDebugAdapter:
             if self.layer_index < len(self.step_paths)
             else self.outer_state.layer.name
         )
-        if path.endswith(".attention"):
-            lines = self.attention_source_lines
-        elif path.endswith(".mlp"):
-            lines = self.mlp_source_lines
-        else:
+        lines = self._internal_source_lines(path)
+        if not lines:
             return False
         for index, line in enumerate(lines):
             if any(
@@ -767,8 +853,11 @@ class LLMDebugAdapter:
                 )
                 for breakpoint in self.breakpoints
             ):
-                self.inside_attention = path.endswith(".attention")
-                self.inside_mlp = path.endswith(".mlp")
+                function_name = self._function_name_for_path(path)
+                self.inside_attention = function_name in {
+                    "attention", "full_attention", "gated_linear_attention"
+                }
+                self.inside_mlp = function_name == "mlp"
                 self.mlp_step_index = index
                 self.stop("breakpoint")
                 return True
@@ -785,7 +874,7 @@ class LLMDebugAdapter:
         if self.inside_internal or self.layer_index > 0 or path != "token_embedding":
             names.append("x")
         if self.inside_internal:
-            function_name = "attention" if self.inside_attention else "mlp"
+            function_name = self._function_name_for_path(self.outer_state.layer.name)
             completed = {
                 operation for operation, _vector, _meaning in self.internal_steps[: self.mlp_step_index]
             }
@@ -817,7 +906,7 @@ class LLMDebugAdapter:
             },
         ]
         path = self.step_paths[self.layer_index] if self.layer_index < len(self.step_paths) else ""
-        if self.inside_internal or ".attention" in path or ".mlp" in path:
+        if self.inside_internal or self._function_name_for_path(path):
             variables.append(
                 {
                     "name": "layer", "value": repr(self.outer_state.layer.name), "type": "layer",
@@ -1064,7 +1153,9 @@ class LLMDebugAdapter:
             indexed = re.fullmatch(
                 r"(input|output|residual|residual_stream|layernorm|normalized_input|"
                 r"normalized_output|mlp_expansion_pre_activation|mlp_expansion|mlp_projection|"
-                r"attention_qkv|attention_mixing|attention_projection)"
+                r"mlp_gate_pre_activation|mlp_gate_activation|mlp_up_projection|"
+                r"attention_qkv|attention_mixing|attention_projection|"
+                r"full_attention_mixing|gated_delta_mixing)"
                 r"\[(\d+)\]",
                 expression,
             )
@@ -1115,7 +1206,7 @@ class LLMDebugAdapter:
         self.neuron_cache.clear()
         return value
 
-    def _top_neurons(self) -> tuple[NeuronProjection, ...]:
+    def _top_neurons(self, include_r_lens: bool = False) -> tuple[NeuronProjection, ...]:
         """Return cached direct vocabulary projections for the current MLP state."""
         result_state = self.previous_state
         if (
@@ -1129,11 +1220,12 @@ class LLMDebugAdapter:
             if getattr(self, "inside_internal", False)
             else result_state.layer.name
         )
-        key = (self.token_index, layer_name)
+        key = (self.token_index, layer_name, include_r_lens)
         if key not in self.neuron_cache:
             self.neuron_cache[key] = self.execution.top_mlp_neurons(
                 layer_name,
                 result_state.details["mlp_expansion"],
+                include_r_lens=include_r_lens,
             )
         return self.neuron_cache[key]
 
@@ -1165,7 +1257,9 @@ class LLMDebugAdapter:
         indexed = re.fullmatch(
             r"(x|input|output|residual|residual_stream|delta|layernorm|normalized_input|"
             r"normalized_output|mlp_expansion_pre_activation|mlp_expansion|mlp_projection|"
-            r"attention_qkv|attention_mixing|attention_projection)"
+            r"mlp_gate_pre_activation|mlp_gate_activation|mlp_up_projection|"
+            r"attention_qkv|attention_mixing|attention_projection|"
+            r"full_attention_mixing|gated_delta_mixing)"
             r"\[(\d+)\]",
             expression,
         )
@@ -1200,7 +1294,7 @@ class LLMDebugAdapter:
         aliases = {"x": "x", "residual_stream": "x"}
         if not getattr(self, "inside_internal", False):
             return self._replace_expression_name(expression, aliases)
-        function_name = "attention" if getattr(self, "inside_attention", False) else "mlp"
+        function_name = self._function_name_for_path(self.outer_state.layer.name)
         bindings = getattr(self, "function_bindings", {}).get(function_name, [])
         operation_vectors = {
             operation: vector for operation, vector, _meaning in self.internal_steps
@@ -1418,9 +1512,9 @@ class LLMDebugAdapter:
             ),
         }
 
-    def _neuron_lens_snapshot(self) -> dict[str, Any]:
-        """Describe top MLP neurons through W_down and the unembedding matrix."""
-        neurons = self._top_neurons()
+    def _neuron_lens_snapshot(self, include_r_lens: bool = False) -> dict[str, Any]:
+        """Describe top MLP neurons through direct and residual-transport lenses."""
+        neurons = self._top_neurons(include_r_lens=include_r_lens)
         if not neurons:
             raise ValueError(
                 "Neuron Lens is available after an MLP GELU activation has completed"
@@ -1430,16 +1524,36 @@ class LLMDebugAdapter:
             if self.inside_internal
             else self.previous_state.layer.name  # type: ignore[union-attr]
         )
+        scale_record = mlp_activation_scale(getattr(self, "model_name", ""), layer)
+        scale = float(scale_record["scale"]) if scale_record is not None else None
         return {
             "tokenPosition": self.token_index,
             "token": self.tokens[self.token_index],
             "layer": layer,
+            "rLensResolved": include_r_lens,
             "neurons": [
                 {
                     "rank": rank,
                     "index": neuron.index,
                     "activation": neuron.activation,
+                    "relativeActivation": (
+                        neuron.activation / scale if scale is not None and scale > 0 else None
+                    ),
+                    "activationScale": scale,
+                    "scaleSide": (
+                        str(scale_record["side"]) if scale_record is not None else None
+                    ),
                     "directionNorm": neuron.direction_norm,
+                    "logitTokens": [
+                        {
+                            "rank": token_rank,
+                            "id": token.token_id,
+                            "text": token.text,
+                            "logit": token.score,
+                        }
+                        for token_rank, token in enumerate(neuron.vocabulary, start=1)
+                    ],
+                    # Compatibility for older extension builds.
                     "tokens": [
                         {
                             "rank": token_rank,
@@ -1448,6 +1562,15 @@ class LLMDebugAdapter:
                             "logit": token.score,
                         }
                         for token_rank, token in enumerate(neuron.vocabulary, start=1)
+                    ],
+                    "rLensTokens": [
+                        {
+                            "rank": token_rank,
+                            "id": token.token_id,
+                            "text": token.text,
+                            "logit": token.score,
+                        }
+                        for token_rank, token in enumerate(neuron.r_lens, start=1)
                     ],
                 }
                 for rank, neuron in enumerate(neurons, start=1)

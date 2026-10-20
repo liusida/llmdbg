@@ -1,0 +1,234 @@
+{
+  "schema_version": 1,
+  "model_id": "Qwen/Qwen3.5-0.8B",
+  "model_revision": "main",
+  "activation": "input to mlp.down_proj (silu(gate_proj(x)) * up_proj(x))",
+  "statistic": "median across analyzed tokens of token p99(abs(activation))",
+  "quantile": 0.99,
+  "side_definition": "sign of the actual neuron activation nearest the p99 magnitude at the token supplying the layer median",
+  "prompt_file": "diverse_32_sentences.txt",
+  "prompt_sha256": "cb64a81e8f0ccd27000b912b3a0c22d49661cf598e8b0fd67348ce235b6ac7a8",
+  "prefix": "Context:\n",
+  "excluded_prefix_tokens": 3,
+  "analyzed_tokens": 672,
+  "intermediate_size": 3584,
+  "touched_model_bytes": 1504786304,
+  "layers": [
+    {
+      "layer": 0,
+      "scale": 0.12809573113918304,
+      "side": "negative",
+      "signed_reference": -0.1279296875,
+      "captured_token_position": 581,
+      "analysis_token_position": 578,
+      "nearest_neuron": 3463
+    },
+    {
+      "layer": 1,
+      "scale": 0.1396484375,
+      "side": "negative",
+      "signed_reference": -0.1396484375,
+      "captured_token_position": 670,
+      "analysis_token_position": 667,
+      "nearest_neuron": 221
+    },
+    {
+      "layer": 2,
+      "scale": 0.1591796875,
+      "side": "positive",
+      "signed_reference": 0.1591796875,
+      "captured_token_position": 417,
+      "analysis_token_position": 414,
+      "nearest_neuron": 116
+    },
+    {
+      "layer": 3,
+      "scale": 0.1640625,
+      "side": "negative",
+      "signed_reference": -0.1640625,
+      "captured_token_position": 600,
+      "analysis_token_position": 597,
+      "nearest_neuron": 1364
+    },
+    {
+      "layer": 4,
+      "scale": 0.16325198113918304,
+      "side": "positive",
+      "signed_reference": 0.1630859375,
+      "captured_token_position": 45,
+      "analysis_token_position": 42,
+      "nearest_neuron": 1985
+    },
+    {
+      "layer": 5,
+      "scale": 0.14958010613918304,
+      "side": "positive",
+      "signed_reference": 0.1494140625,
+      "captured_token_position": 242,
+      "analysis_token_position": 239,
+      "nearest_neuron": 907
+    },
+    {
+      "layer": 6,
+      "scale": 0.171875,
+      "side": "positive",
+      "signed_reference": 0.171875,
+      "captured_token_position": 659,
+      "analysis_token_position": 656,
+      "nearest_neuron": 105
+    },
+    {
+      "layer": 7,
+      "scale": 0.15365241467952728,
+      "side": "negative",
+      "signed_reference": -0.1533203125,
+      "captured_token_position": 287,
+      "analysis_token_position": 284,
+      "nearest_neuron": 1189
+    },
+    {
+      "layer": 8,
+      "scale": 0.13705085217952728,
+      "side": "positive",
+      "signed_reference": 0.13671875,
+      "captured_token_position": 355,
+      "analysis_token_position": 352,
+      "nearest_neuron": 2849
+    },
+    {
+      "layer": 9,
+      "scale": 0.16032229363918304,
+      "side": "positive",
+      "signed_reference": 0.16015625,
+      "captured_token_position": 609,
+      "analysis_token_position": 606,
+      "nearest_neuron": 1758
+    },
+    {
+      "layer": 10,
+      "scale": 0.16520510613918304,
+      "side": "negative",
+      "signed_reference": -0.1650390625,
+      "captured_token_position": 607,
+      "analysis_token_position": 604,
+      "nearest_neuron": 125
+    },
+    {
+      "layer": 11,
+      "scale": 0.18571291863918304,
+      "side": "negative",
+      "signed_reference": -0.185546875,
+      "captured_token_position": 402,
+      "analysis_token_position": 399,
+      "nearest_neuron": 120
+    },
+    {
+      "layer": 12,
+      "scale": 0.19059573113918304,
+      "side": "negative",
+      "signed_reference": -0.1904296875,
+      "captured_token_position": 544,
+      "analysis_token_position": 541,
+      "nearest_neuron": 215
+    },
+    {
+      "layer": 13,
+      "scale": 0.22672854363918304,
+      "side": "negative",
+      "signed_reference": -0.2265625,
+      "captured_token_position": 37,
+      "analysis_token_position": 34,
+      "nearest_neuron": 250
+    },
+    {
+      "layer": 14,
+      "scale": 0.357421875,
+      "side": "negative",
+      "signed_reference": -0.357421875,
+      "captured_token_position": 607,
+      "analysis_token_position": 604,
+      "nearest_neuron": 111
+    },
+    {
+      "layer": 15,
+      "scale": 0.44630879163742065,
+      "side": "positive",
+      "signed_reference": 0.4453125,
+      "captured_token_position": 670,
+      "analysis_token_position": 667,
+      "nearest_neuron": 56
+    },
+    {
+      "layer": 16,
+      "scale": 0.31740254163742065,
+      "side": "negative",
+      "signed_reference": -0.31640625,
+      "captured_token_position": 476,
+      "analysis_token_position": 473,
+      "nearest_neuron": 24
+    },
+    {
+      "layer": 17,
+      "scale": 0.30568379163742065,
+      "side": "positive",
+      "signed_reference": 0.3046875,
+      "captured_token_position": 355,
+      "analysis_token_position": 352,
+      "nearest_neuron": 1650
+    },
+    {
+      "layer": 18,
+      "scale": 0.3558008372783661,
+      "side": "negative",
+      "signed_reference": -0.35546875,
+      "captured_token_position": 82,
+      "analysis_token_position": 79,
+      "nearest_neuron": 181
+    },
+    {
+      "layer": 19,
+      "scale": 0.4375,
+      "side": "negative",
+      "signed_reference": -0.4375,
+      "captured_token_position": 316,
+      "analysis_token_position": 313,
+      "nearest_neuron": 217
+    },
+    {
+      "layer": 20,
+      "scale": 0.44792982935905457,
+      "side": "positive",
+      "signed_reference": 0.447265625,
+      "captured_token_position": 411,
+      "analysis_token_position": 408,
+      "nearest_neuron": 714
+    },
+    {
+      "layer": 21,
+      "scale": 0.48960962891578674,
+      "side": "negative",
+      "signed_reference": -0.48828125,
+      "captured_token_position": 266,
+      "analysis_token_position": 263,
+      "nearest_neuron": 15
+    },
+    {
+      "layer": 22,
+      "scale": 0.6608204245567322,
+      "side": "negative",
+      "signed_reference": -0.66015625,
+      "captured_token_position": 565,
+      "analysis_token_position": 562,
+      "nearest_neuron": 1856
+    },
+    {
+      "layer": 23,
+      "scale": 1.3919533491134644,
+      "side": "positive",
+      "signed_reference": 1.390625,
+      "captured_token_position": 633,
+      "analysis_token_position": 630,
+      "nearest_neuron": 388
+    }
+  ]
+}
