@@ -42,6 +42,8 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn('customRequest("llmdbg/plot"', source)
         self.assertIn("context.globalState.get(LEGACY_PLOT_SNIPPETS_KEY", source)
         self.assertIn('file.endsWith(".plot.py")', source)
+        self.assertIn("function plotFunctionCode(code)", source)
+        self.assertIn("def plot(vector, vector_name, plt, np):", source)
         self.assertIn("vscode.workspace.openTextDocument", source)
         self.assertIn('"matplotlib>=3.10,<4"', source)
         self.assertIn('registerCommand("llmdbg.plotCurrentVector"', source)

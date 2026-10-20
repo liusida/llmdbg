@@ -10,13 +10,24 @@ const vscode = require("vscode");
 const execFile = util.promisify(childProcess.execFile);
 const RUNTIME_VERSION = "3";
 const LEGACY_PLOT_SNIPPETS_KEY = "llmdbg.plotSnippets";
-const DEFAULT_PLOT_CODE = `fig, ax = plt.subplots(figsize=(9, 2.6))
-ax.plot(vector, linewidth=1)
-ax.axhline(0, color="gray", linewidth=0.5)
-ax.set_xlabel("dimension")
-ax.set_ylabel("activation")
-ax.set_title(vector_name)
-fig.tight_layout()`;
+const DEFAULT_PLOT_CODE = `def plot(vector, vector_name, plt, np):
+    fig, ax = plt.subplots(figsize=(9, 2.6))
+    ax.plot(vector, linewidth=1)
+    ax.axhline(0, color="gray", linewidth=0.5)
+    ax.set_xlabel("dimension")
+    ax.set_ylabel("activation")
+    ax.set_title(vector_name)
+    fig.tight_layout()
+    return fig
+`;
+
+function plotFunctionCode(code) {
+  if (/^\s*def\s+plot\s*\(/m.test(code)) {
+    return code;
+  }
+  const body = code.trimEnd().split("\n").map(line => `    ${line}`).join("\n");
+  return `def plot(vector, vector_name, plt, np):\n${body || "    pass"}\n    return locals().get("fig")\n`;
+}
 
 function runtimePython(runtimeRoot) {
   return process.platform === "win32"
@@ -310,6 +321,14 @@ function activate(context) {
       }
       await context.globalState.update(LEGACY_PLOT_SNIPPETS_KEY, undefined);
       files = (await fs.promises.readdir(plotRoot)).filter(file => file.endsWith(".plot.py"));
+    }
+    for (const file of files) {
+      const target = path.join(plotRoot, file);
+      const code = await fs.promises.readFile(target, "utf8");
+      const normalized = plotFunctionCode(code);
+      if (normalized !== code) {
+        await fs.promises.writeFile(target, normalized);
+      }
     }
     return files.sort().map(file => ({
       file,

@@ -1267,7 +1267,12 @@ class LLMDebugAdapter:
             "vector_name": expression,
         }
         exec(compile(code, "<llmdbg plot snippet>", "exec"), namespace, namespace)
-        figure = namespace.get("fig") or plt.gcf()
+        plot = namespace.get("plot")
+        if callable(plot):
+            figure = plot(namespace["vector"], expression, plt, np) or plt.gcf()
+        else:
+            # Keep old snippets usable when sent by an older extension.
+            figure = namespace.get("fig") or plt.gcf()
         output = io.BytesIO()
         figure.savefig(output, format="png", dpi=120, bbox_inches="tight")
         plt.close("all")
