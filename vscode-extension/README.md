@@ -29,11 +29,30 @@ prompt = "The capital of France is"
 
 [debug]
 stop_on_entry = true
+
+[[step]]
+kind = "embedding"
+path = "token_embedding"
+
+[[step]]
+kind = "attention"
+path = "transformer.h.0.attention"
+
+[[step]]
+kind = "mlp"
+path = "transformer.h.0.mlp"
 ```
 
 The extension can start directly from the active `.llmdbg` file, so a
 `launch.json` is optional. If one is used, it only needs a `llmdbg` launch with
 `"config": "${file}"`.
+
+The debugger keeps that same `.llmdbg` document active while stepping. Runtime
+state appears in the debugger panels; it does not create or switch to a second
+`*.execution.llmdbg` editor and never rewrites the configuration file.
+Each `[[step]]` selects a model execution stop, and breakpoints can be placed
+inside those tables. Unlisted model operations are omitted from the debug
+trace.
 
 The prototype loads GPT-2 through `gb10-load-llm`, captures embedding,
 attention, and MLP outputs, and shows a logit-lens interpretation at every

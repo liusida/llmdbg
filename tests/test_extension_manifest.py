@@ -17,6 +17,7 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn("bundled/**", manifest["files"])
         self.assertIn("stage-adapter", manifest["scripts"])
         self.assertEqual(manifest["contributes"]["languages"][0]["extensions"], [".llmdbg"])
+        self.assertEqual(manifest["contributes"]["breakpoints"][0]["language"], "llmdbg")
 
     def test_extension_uses_a_private_runtime(self) -> None:
         root = Path(__file__).resolve().parents[1]

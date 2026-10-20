@@ -39,6 +39,18 @@ prompt = "The capital of France is"
 
 [debug]
 stop_on_entry = true
+
+[[step]]
+kind = "embedding"
+path = "token_embedding"
+
+[[step]]
+kind = "attention"
+path = "transformer.h.0.attention"
+
+[[step]]
+kind = "mlp"
+path = "transformer.h.0.mlp"
 ```
 
 Open that file and press **F5**. If VS Code asks for a debugger, choose
@@ -64,8 +76,10 @@ extension storage. It does not install anything into the workspace. The first
 GPT-2 run downloads and loads the model, then keeps its tensors resident in a
 persistent model-host process. Stopping and restarting the debugger reuses the
 resident model and runs only a new forward pass. Closing/reloading VS Code
-stops the host and releases the model. Use **Step Over** to advance through
-embedding, attention, and MLP steps.
+stops the host and releases the model. Each `[[step]]` is an authored model
+execution stop. Set breakpoints inside these tables or use **Step Over** to
+advance through them. Runtime vectors appear in debugger scopes; the source
+file is never rewritten.
 
 ## License
 

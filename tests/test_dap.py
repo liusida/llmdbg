@@ -3,7 +3,12 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tempfile
 import unittest
+from pathlib import Path
+
+from llmdbg.dap import LLMDebugAdapter
+from llmdbg.demo_model import run_demo
 
 
 def frame(message: dict[str, object]) -> bytes:
@@ -22,6 +27,43 @@ def parse_frames(data: bytes) -> list[dict[str, object]]:
 
 
 class DAPIntegrationTest(unittest.TestCase):
+    def test_continue_stops_at_a_source_breakpoint(self) -> None:
+        requests = [
+            {"seq": 1, "type": "request", "command": "initialize", "arguments": {}},
+            {
+                "seq": 2,
+                "type": "request",
+                "command": "launch",
+                "arguments": {"stopOnEntry": False},
+            },
+            {
+                "seq": 3,
+                "type": "request",
+                "command": "setBreakpoints",
+                "arguments": {"breakpoints": [{"line": 10}]},
+            },
+            {"seq": 4, "type": "request", "command": "configurationDone", "arguments": {}},
+            {"seq": 5, "type": "request", "command": "stackTrace", "arguments": {}},
+            {"seq": 6, "type": "request", "command": "disconnect", "arguments": {}},
+        ]
+        process = subprocess.run(
+            [sys.executable, "-m", "llmdbg.dap"],
+            input=b"".join(frame(request) for request in requests),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        messages = parse_frames(process.stdout)
+        responses = {
+            message.get("request_seq"): message
+            for message in messages
+            if message["type"] == "response"
+        }
+        self.assertTrue(responses[3]["body"]["breakpoints"][0]["verified"])
+        stopped = [message for message in messages if message.get("event") == "stopped"]
+        self.assertEqual(stopped[0]["body"]["reason"], "breakpoint")
+        self.assertEqual(responses[5]["body"]["stackFrames"][0]["line"], 10)
+
     def test_layer_step_and_variables(self) -> None:
         requests = [
             {"seq": 1, "type": "request", "command": "initialize", "arguments": {}},
@@ -61,6 +103,28 @@ class DAPIntegrationTest(unittest.TestCase):
         self.assertIn('kind = "embedding"', virtual_source)
         stopped = [message for message in messages if message.get("event") == "stopped"]
         self.assertEqual([event["body"]["reason"] for event in stopped], ["entry", "step"])
+
+    def test_config_file_is_used_as_the_debug_source(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "gpt.llmdbg"
+            config.write_text('[model]\nid = "openai-community/gpt2"\n', encoding="utf-8")
+            adapter = object.__new__(LLMDebugAdapter)
+            adapter.trace = run_demo()
+            adapter.source_name = "model.execution.llmdbg"
+            adapter.source_path = None
+            adapter._build_virtual_source(
+                {
+                    "configPath": str(config),
+                    "stepPaths": [state.layer.name for state in adapter.trace],
+                    "stepLines": {state.layer.name: 2 for state in adapter.trace},
+                },
+                "openai-community/gpt2",
+                (),
+            )
+
+        self.assertEqual(adapter.source_name, "gpt.llmdbg")
+        self.assertEqual(adapter.source_path, str(config))
+        self.assertEqual(set(adapter.source_lines), {2})
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
   "name": "llmdbg",
   "displayName": "llmdbg",
   "description": "Step through LLM layers and inspect human-readable internal representations.",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "publisher": "liusida",
   "license": "MIT",
   "repository": {
@@ -41,6 +41,11 @@
         "language": "llmdbg",
         "scopeName": "source.llmdbg",
         "path": "./syntaxes/llmdbg.tmLanguage.json"
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "llmdbg"
       }
     ],
     "debuggers": [
