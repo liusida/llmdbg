@@ -84,7 +84,9 @@ enters the corresponding call and stops on the selected line.
 
 Set `token = 3` in the source to make that zero-based position the default for
 ordinary breakpoints. A conditional breakpoint such as `token=4` overrides the
-default for one submodule. llmdbg prefills earlier tokens into the KV cache and
+default for one submodule. In a `.llmdbg.py` program, comment out the `token = N`
+assignment to let ordinary breakpoints stop at every token position; the existing
+`with debug(..., token=token)` call may remain unchanged. llmdbg prefills earlier tokens into the KV cache and
 executes the selected token as a one-token cached forward pass. The **Token**
 scope shows its position, token ID, decoded text, and prompt prefix.
 

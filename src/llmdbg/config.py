@@ -238,11 +238,14 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
                 if isinstance(item.context_expr, ast.Call) and isinstance(item.context_expr.func, ast.Name) and item.context_expr.func.id == "debug":
                     for keyword in item.context_expr.keywords:
                         if keyword.arg == "token":
-                            token = int(
-                                globals_["token"]
-                                if "token" in globals_
-                                else _literal(keyword.value, "token")
-                            )
+                            if "token" in globals_:
+                                token = int(globals_["token"])
+                            elif isinstance(keyword.value, ast.Name) and keyword.value.id == "token":
+                                # Allow `# token = 3` while leaving `token=token`
+                                # in the debug call: no value means all positions.
+                                token = None
+                            else:
+                                token = int(_literal(keyword.value, "token"))
         if isinstance(node, ast.Call):
             if isinstance(node.func, ast.Attribute):
                 if node.func.attr == "tokenize" and node.args:

@@ -107,6 +107,24 @@ mlp()
         self.assertEqual(config["stepLines"]["transformer.h.0.attention"], 25)
         self.assertEqual(config["stepLines"]["transformer.h.0.mlp"], 26)
 
+    def test_commented_python_token_runs_all_positions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "all-tokens.llmdbg.py"
+            path.write_text(
+                '''from llmdbg import debug, gpt2
+model = gpt2("openai-community/gpt2")
+prompt = "hello world"
+# token = 1
+tokens = model.tokenize(prompt)
+with debug(model, tokens, token=token):
+    x = model.token_embedding(tokens)
+''',
+                encoding="utf-8",
+            )
+            config = load_debug_config(str(path))
+
+        self.assertIsNone(config["defaultToken"])
+
     def test_rejects_layer_call_without_layer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "invalid.llmdbg"

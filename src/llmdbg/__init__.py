@@ -1,6 +1,6 @@
 """LLM layer debugger."""
 
-__version__ = "0.0.3a29"
+__version__ = "0.0.3a30"
 
 from llmdbg.program import TensorHandle, debug, gpt2
 
