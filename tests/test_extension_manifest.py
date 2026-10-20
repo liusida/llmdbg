@@ -22,8 +22,12 @@ class ExtensionManifestTest(unittest.TestCase):
         source = (root / "vscode-extension" / "extension.js").read_text()
 
         self.assertIn("context.globalStorageUri.fsPath", source)
-        self.assertIn('["-m", "venv", runtimeRoot]', source)
         self.assertIn('["-m", "llmdbg.dap"]', source)
+        self.assertIn('"gb10-load-llm==0.1.2"', source)
+        self.assertIn('["venv", "--python", bootstrapPython(), runtimeRoot]', source)
+        self.assertIn('"pip", "install"', source)
+        self.assertIn('get("uvPath", "uv")', source)
+        self.assertIn("session.configuration.adapterSource", source)
         self.assertNotIn('path.join(".venv"', source)
 
 

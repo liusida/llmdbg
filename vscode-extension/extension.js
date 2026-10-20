@@ -8,6 +8,7 @@ const util = require("util");
 const vscode = require("vscode");
 
 const execFile = util.promisify(childProcess.execFile);
+const RUNTIME_VERSION = "2";
 
 function runtimePython(runtimeRoot) {
   return process.platform === "win32"
@@ -26,6 +27,10 @@ function bootstrapPython() {
   return process.platform === "win32" ? "python" : "python3";
 }
 
+function uvExecutable() {
+  return vscode.workspace.getConfiguration("llmdbg").get("uvPath", "uv").trim() || "uv";
+}
+
 async function createRuntime(context, runtimeRoot) {
   await fs.promises.mkdir(context.globalStorageUri.fsPath, { recursive: true });
   await vscode.window.withProgress(
@@ -35,7 +40,28 @@ async function createRuntime(context, runtimeRoot) {
       cancellable: false
     },
     async () => {
-      await execFile(bootstrapPython(), ["-m", "venv", runtimeRoot]);
+      const python = runtimePython(runtimeRoot);
+      if (!fs.existsSync(python)) {
+        await execFile(
+          uvExecutable(),
+          ["venv", "--python", bootstrapPython(), runtimeRoot],
+          { maxBuffer: 10 * 1024 * 1024 }
+        );
+      }
+      await execFile(
+        uvExecutable(),
+        [
+          "pip", "install",
+          "--python", python,
+          "--upgrade",
+          "gb10-load-llm==0.1.2"
+        ],
+        { maxBuffer: 10 * 1024 * 1024 }
+      );
+      await fs.promises.writeFile(
+        path.join(runtimeRoot, ".llmdbg-runtime"),
+        `${RUNTIME_VERSION}\n`
+      );
     }
   );
 }
@@ -46,7 +72,11 @@ function activate(context) {
 
   async function ensureRuntime() {
     const python = runtimePython(runtimeRoot);
-    if (fs.existsSync(python)) {
+    const marker = path.join(runtimeRoot, ".llmdbg-runtime");
+    const ready = fs.existsSync(python)
+      && fs.existsSync(marker)
+      && fs.readFileSync(marker, "utf8").trim() === RUNTIME_VERSION;
+    if (ready) {
       return python;
     }
     if (!runtimePromise) {
@@ -65,7 +95,13 @@ function activate(context) {
   const factory = {
     async createDebugAdapterDescriptor(session) {
       const python = await ensureRuntime();
-      const bundledRoot = path.join(context.extensionPath, "bundled");
+      const configuredSource = session.configuration.adapterSource;
+      const bundledRoot = configuredSource
+        ? path.resolve(configuredSource)
+        : path.join(context.extensionPath, "bundled");
+      if (!fs.existsSync(path.join(bundledRoot, "llmdbg", "dap.py"))) {
+        throw new Error(`llmdbg adapter source not found under ${bundledRoot}`);
+      }
       const inheritedPythonPath = process.env.PYTHONPATH;
       const pythonPath = inheritedPythonPath
         ? `${bundledRoot}${path.delimiter}${inheritedPythonPath}`

@@ -1,5 +1,5 @@
 """LLM layer debugger."""
 
-__version__ = "0.0.2a2"
+__version__ = "0.0.3a1"
 
 __all__ = ["__version__"]

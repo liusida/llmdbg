@@ -2,7 +2,7 @@
   "name": "llmdbg",
   "displayName": "llmdbg",
   "description": "Step through LLM layers and inspect human-readable internal representations.",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "publisher": "liusida",
   "license": "MIT",
   "repository": {
@@ -65,6 +65,10 @@
                 "type": "string",
                 "enum": ["bfloat16", "float16", "float32"],
                 "default": "bfloat16"
+              },
+              "adapterSource": {
+                "type": "string",
+                "description": "Development-only path containing the llmdbg Python package. Published use defaults to the adapter bundled in the extension."
               }
             }
           }
@@ -98,6 +102,11 @@
           "type": "string",
           "default": "",
           "description": "Python executable used only to create llmdbg's private environment. Empty uses python3 (python on Windows)."
+        },
+        "llmdbg.uvPath": {
+          "type": "string",
+          "default": "uv",
+          "description": "uv executable used to create and update llmdbg's private environment."
         }
       }
     }

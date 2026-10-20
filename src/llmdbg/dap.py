@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 from llmdbg.demo_model import FEATURES, LayerState, run_demo
+from llmdbg.model_runtime import load_model_trace
 
 
 class ProtocolStream:
@@ -125,16 +126,34 @@ class LLMDebugAdapter:
             )
             self.send_event("initialized")
         elif command == "launch":
-            self.trace = run_demo()
+            model = arguments.get("model")
+            if model:
+                self.send_event(
+                    "output",
+                    {"category": "console", "output": f"llmdbg: loading {model}\n"},
+                )
+                self.trace = load_model_trace(
+                    str(model),
+                    revision=str(arguments.get("revision", "main")),
+                    prompt=str(arguments.get("prompt", "The capital of France is")),
+                    device=str(arguments.get("device", "cuda")),
+                    dtype=str(arguments.get("dtype", "bfloat16")),
+                    progress=lambda output: self.send_event(
+                        "output", {"category": "console", "output": f"llmdbg: {output}"}
+                    ),
+                )
+            else:
+                self.trace = run_demo()
             self.layer_index = 0
             self.launched = True
             self.stop_on_entry = bool(arguments.get("stopOnEntry", True))
             self.send_response(request)
+            trace_name = str(model) if model else "built-in demo"
             self.send_event(
                 "output",
                 {
                     "category": "console",
-                    "output": "llmdbg: loaded built-in demo trace; use Step Over to advance one layer\n",
+                    "output": f"llmdbg: loaded {trace_name}; use Step Over to advance one layer\n",
                 },
             )
         elif command == "configurationDone":
@@ -209,6 +228,11 @@ class LLMDebugAdapter:
         vector = self.state.input_vector if reference == self.SCOPE_INPUT else self.state.output_vector
         if reference not in (self.SCOPE_INPUT, self.SCOPE_OUTPUT):
             return []
+        if len(vector) == len(FEATURES):
+            displayed = list(zip(FEATURES, vector, strict=True))
+        else:
+            indices = sorted(range(len(vector)), key=lambda index: abs(vector[index]), reverse=True)[:16]
+            displayed = [(f"dimension[{index}]", vector[index]) for index in indices]
         return [
             {
                 "name": feature,
@@ -216,7 +240,7 @@ class LLMDebugAdapter:
                 "type": "float",
                 "variablesReference": 0,
             }
-            for feature, value in zip(FEATURES, vector)
+            for feature, value in displayed
         ]
 
     def _evaluate(self, expression: str) -> str | None:
