@@ -2,7 +2,7 @@
   "name": "llmdbg",
   "displayName": "llmdbg",
   "description": "Step through LLM layers and inspect human-readable internal representations.",
-  "version": "0.0.12",
+  "version": "0.0.13",
   "publisher": "liusida",
   "license": "MIT",
   "repository": {
@@ -29,6 +29,22 @@
     "syntaxes/**"
   ],
   "contributes": {
+    "commands": [
+      {
+        "command": "llmdbg.plotCurrentVector",
+        "title": "llmdbg: Plot Current Vector",
+        "icon": "$(graph-line)"
+      }
+    ],
+    "menus": {
+      "debug/toolBar": [
+        {
+          "command": "llmdbg.plotCurrentVector",
+          "when": "debugType == llmdbg",
+          "group": "navigation@20"
+        }
+      ]
+    },
     "languages": [
       {
         "id": "llmdbg",

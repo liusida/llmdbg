@@ -82,6 +82,13 @@ before the selected position into the KV cache, then captures that token with
 a one-token forward pass. Stepping beyond the last selected layer advances to
 the next token using the updated cache.
 
+Watch one zero-based dimension with `residual_stream[42]`, `input[42]`,
+`output[42]`, or `delta[42]`. The **Residual stream (output)** debugger scope
+exposes the current hidden representation explicitly. Run **llmdbg: Plot
+Current Vector** from the Command Palette or debug toolbar to inspect the full
+vector as a dimension plot, histogram, or top-activation chart. An open plot
+updates automatically after each debugger stop.
+
 ## License
 
 MIT

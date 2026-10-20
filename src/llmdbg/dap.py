@@ -60,7 +60,8 @@ class LLMDebugAdapter:
     SCOPE_TOKEN = 50
     SCOPE_LAYER = 100
     SCOPE_INPUT = 200
-    SCOPE_OUTPUT = 300
+    SCOPE_RESIDUAL = 300
+    SCOPE_DELTA = 400
     SOURCE_REFERENCE = 1
 
     def __init__(self, stream: ProtocolStream) -> None:
@@ -129,6 +130,10 @@ class LLMDebugAdapter:
                 "threadId": self.THREAD_ID,
                 "allThreadsStopped": True,
             },
+        )
+        self.send_event(
+            "llmdbg/vectorChanged",
+            {"tokenPosition": self.token_index, "layer": self.state.layer.name},
         )
 
     def terminate(self) -> None:
@@ -243,7 +248,12 @@ class LLMDebugAdapter:
                 {"name": "Token", "variablesReference": self.SCOPE_TOKEN, "expensive": False},
                 {"name": "Layer", "variablesReference": self.SCOPE_LAYER, "expensive": False},
                 {"name": "Input vector", "variablesReference": self.SCOPE_INPUT, "expensive": False},
-                {"name": "Output vector", "variablesReference": self.SCOPE_OUTPUT, "expensive": False},
+                {
+                    "name": "Residual stream (output)",
+                    "variablesReference": self.SCOPE_RESIDUAL,
+                    "expensive": False,
+                },
+                {"name": "Delta", "variablesReference": self.SCOPE_DELTA, "expensive": False},
             ]
             self.send_response(request, {"scopes": scopes})
         elif command == "variables":
@@ -256,6 +266,8 @@ class LLMDebugAdapter:
                 self.send_response(request, success=False, message=f"Unknown expression: {expression}")
             else:
                 self.send_response(request, {"result": result, "variablesReference": 0})
+        elif command == "llmdbg/vector":
+            self.send_response(request, self._vector_snapshot())
         elif command in ("next", "stepIn", "stepOut"):
             self.send_response(request)
             if self.layer_index + 1 < len(self.trace):
@@ -494,8 +506,18 @@ class LLMDebugAdapter:
                 {"name": "operation", "value": self.state.layer.operation, "type": "str", "variablesReference": 0},
                 {"name": "meaning", "value": self.state.interpretation, "type": "str", "variablesReference": 0},
             ]
-        vector = self.state.input_vector if reference == self.SCOPE_INPUT else self.state.output_vector
-        if reference not in (self.SCOPE_INPUT, self.SCOPE_OUTPUT):
+        if reference == self.SCOPE_INPUT:
+            vector = self.state.input_vector
+        elif reference == self.SCOPE_RESIDUAL:
+            vector = self.state.output_vector
+        elif reference == self.SCOPE_DELTA:
+            vector = tuple(
+                output - input_
+                for input_, output in zip(
+                    self.state.input_vector, self.state.output_vector, strict=True
+                )
+            )
+        else:
             return []
         if len(vector) == len(FEATURES):
             displayed = list(zip(FEATURES, vector, strict=True))
@@ -525,9 +547,54 @@ class LLMDebugAdapter:
             return self.state.layer.operation
         if expression == "input":
             return repr(self.state.input_vector)
-        if expression == "output":
+        if expression in ("output", "residual", "residual_stream"):
             return repr(self.state.output_vector)
+        if expression == "delta":
+            return repr(self._vector("delta"))
+        indexed = re.fullmatch(
+            r"(input|output|residual|residual_stream|delta)\[(\d+)\]",
+            expression,
+        )
+        if indexed:
+            vector_name, raw_index = indexed.groups()
+            vector = self._vector(vector_name)
+            index = int(raw_index)
+            if index >= len(vector):
+                raise ValueError(
+                    f"dimension {index} is outside the vector range 0..{len(vector) - 1}"
+                )
+            return f"{vector[index]:+.8f}"
         return None
+
+    def _vector(self, name: str) -> tuple[float, ...]:
+        if name == "input":
+            return self.state.input_vector
+        if name in ("output", "residual", "residual_stream"):
+            return self.state.output_vector
+        if name == "delta":
+            return tuple(
+                output - input_
+                for input_, output in zip(
+                    self.state.input_vector, self.state.output_vector, strict=True
+                )
+            )
+        raise ValueError(f"unknown vector: {name}")
+
+    def _vector_snapshot(self) -> dict[str, Any]:
+        input_vector = self._vector("input")
+        residual = self._vector("residual_stream")
+        delta = self._vector("delta")
+        return {
+            "tokenPosition": self.token_index,
+            "token": self.tokens[self.token_index],
+            "layer": self.state.layer.name,
+            "dimensions": len(residual),
+            "vectors": {
+                "input": list(input_vector),
+                "residual_stream": list(residual),
+                "delta": list(delta),
+            },
+        }
 
     def run(self) -> None:
         while request := self.stream.read():

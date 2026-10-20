@@ -55,6 +55,12 @@ default for one submodule. llmdbg prefills earlier tokens into the KV cache and
 executes the selected token as a one-token cached forward pass. The **Token**
 scope shows its position, token ID, decoded text, and prompt prefix.
 
+Watch one zero-based dimension with `residual_stream[42]`, `output[42]`,
+`input[42]`, or `delta[42]`. Run **llmdbg: Plot Current Vector** from the
+Command Palette or debug toolbar for an auto-updating dimension plot,
+activation histogram, and top-absolute-activation view. The debugger also
+exposes explicit **Residual stream (output)** and **Delta** scopes.
+
 The prototype loads GPT-2 through `gb10-load-llm`, captures embedding,
 attention, and MLP outputs, and shows a logit-lens interpretation at every
 stop. The Debug Console supports `layer`, `operation`, `meaning`, `input`, and

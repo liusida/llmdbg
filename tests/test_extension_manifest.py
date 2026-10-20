@@ -18,6 +18,8 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn("stage-adapter", manifest["scripts"])
         self.assertEqual(manifest["contributes"]["languages"][0]["extensions"], [".llmdbg"])
         self.assertEqual(manifest["contributes"]["breakpoints"][0]["language"], "llmdbg")
+        command_ids = {command["command"] for command in manifest["contributes"]["commands"]}
+        self.assertIn("llmdbg.plotCurrentVector", command_ids)
 
     def test_extension_uses_a_private_runtime(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -33,6 +35,9 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn("session.configuration.adapterSource", source)
         self.assertIn("registerDebugConfigurationProvider", source)
         self.assertIn("activeLlmdbgFile", source)
+        self.assertIn('customRequest("llmdbg/vector")', source)
+        self.assertIn('registerCommand("llmdbg.plotCurrentVector"', source)
+        self.assertIn('event.event === "llmdbg/vectorChanged"', source)
         self.assertNotIn('path.join(".venv"', source)
 
 

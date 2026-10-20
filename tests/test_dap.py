@@ -82,7 +82,11 @@ class DAPIntegrationTest(unittest.TestCase):
             {"seq": 8, "type": "request", "command": "next", "arguments": {"threadId": 1}},
             {"seq": 9, "type": "request", "command": "evaluate", "arguments": {"expression": "layer"}},
             {"seq": 10, "type": "request", "command": "source", "arguments": {"sourceReference": 1}},
-            {"seq": 11, "type": "request", "command": "disconnect", "arguments": {}},
+            {"seq": 11, "type": "request", "command": "evaluate", "arguments": {"expression": "output[2]"}},
+            {"seq": 12, "type": "request", "command": "evaluate", "arguments": {"expression": "residual_stream[2]"}},
+            {"seq": 13, "type": "request", "command": "evaluate", "arguments": {"expression": "delta[2]"}},
+            {"seq": 14, "type": "request", "command": "llmdbg/vector", "arguments": {}},
+            {"seq": 15, "type": "request", "command": "disconnect", "arguments": {}},
         ]
         process = subprocess.run(
             [sys.executable, "-m", "llmdbg.dap"],
@@ -103,6 +107,12 @@ class DAPIntegrationTest(unittest.TestCase):
         layer_variables = responses[7]["body"]["variables"]
         self.assertTrue(any(variable["name"] == "meaning" for variable in layer_variables))
         self.assertEqual(responses[9]["body"]["result"], "attention_0")
+        self.assertEqual(responses[11]["body"]["result"], responses[12]["body"]["result"])
+        self.assertRegex(responses[13]["body"]["result"], r"^[+-]\d+\.\d{8}$")
+        snapshot = responses[14]["body"]
+        self.assertEqual(snapshot["layer"], "attention_0")
+        self.assertEqual(snapshot["dimensions"], len(snapshot["vectors"]["residual_stream"]))
+        self.assertEqual(set(snapshot["vectors"]), {"input", "residual_stream", "delta"})
         virtual_source = responses[10]["body"]["content"]
         self.assertIn('model = "built-in-demo"', virtual_source)
         self.assertIn('submodule = "token_embedding"', virtual_source)
