@@ -1017,6 +1017,8 @@ class LLMDebugAdapter:
             return self.state.layer.operation
         if expression == "input":
             return repr(self.state.input_vector)
+        if expression == "x":
+            return repr(self._vector("x"))
         if expression in ("output", "residual", "residual_stream"):
             return repr(self._vector("output"))
         if expression == "delta":
@@ -1025,7 +1027,7 @@ class LLMDebugAdapter:
         if self.previous_state is not None and detail_expression in self.previous_state.details:
             return repr(self.previous_state.details[detail_expression])
         indexed = re.fullmatch(
-            r"(input|output|residual|residual_stream|delta|layernorm|normalized_input|"
+            r"(x|input|output|residual|residual_stream|delta|layernorm|normalized_input|"
             r"normalized_output|mlp_expansion_pre_activation|mlp_expansion|mlp_projection|"
             r"attention_qkv|attention_mixing|attention_projection)"
             r"\[(\d+)\]",
@@ -1151,6 +1153,8 @@ class LLMDebugAdapter:
         return {"result": result, "variablesReference": 0}
 
     def _vector(self, name: str) -> tuple[float, ...]:
+        if name == "x":
+            return self.outer_state.input_vector
         if name == "input":
             return self.state.input_vector
         if name in ("output", "residual", "residual_stream"):

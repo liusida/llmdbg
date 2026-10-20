@@ -152,6 +152,9 @@ such as `hidden`, `qkv`, `residual_stream`, or `hidden[:256]`, then choose or
 edit a named plotting snippet. Snippets are saved in VS Code extension storage;
 the included **Line plot** receives `vector`, `vector_name`, `plt`, and `np`.
 Pasted Python lists and tuples are also accepted as vectors.
+Source variables are supported directly: `x` is the residual stream entering
+the current outer `attention()` or `mlp()` call, including while stepped into
+that function.
 
 Attention stops expose the 768D LayerNorm output, combined 2304D QKV
 projection, 768D concatenated attention-head result, and 768D output

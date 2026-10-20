@@ -2,7 +2,7 @@
   "name": "llmdbg",
   "displayName": "llmdbg",
   "description": "Step through LLM layers and inspect human-readable internal representations.",
-  "version": "0.0.35",
+  "version": "0.0.36",
   "publisher": "liusida",
   "license": "MIT",
   "repository": {
