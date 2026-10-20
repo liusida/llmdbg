@@ -42,8 +42,14 @@ class DAPIntegrationTest(unittest.TestCase):
                     "mlp_expansion": (3.0, 4.0, 5.0, 6.0),
                 },
             ),
+            LayerState(
+                Layer("next", "next", "next", 1.0, 0.0),
+                (1.5, 1.0),
+                (1.5, 1.0),
+                "next",
+            ),
         )
-        adapter.layer_index = 0
+        adapter.layer_index = 1
         self.assertEqual(adapter._evaluate("layernorm[1]"), "+0.20000000")
         self.assertEqual(adapter._evaluate("mlp_expansion[2]"), "+5.00000000")
         self.assertEqual(adapter._vector("delta"), (0.5, -1.0))
@@ -58,6 +64,12 @@ class DAPIntegrationTest(unittest.TestCase):
                 "test",
                 {"mlp_expansion": (0.1, 3.0, 0.2)},
             ),
+            LayerState(
+                Layer("transformer.h.1.attention", "attention", "attention", 1.0, 0.0),
+                (1.5, 1.0),
+                (1.5, 1.0),
+                "next",
+            ),
         )
         projection = NeuronProjection(
             index=1,
@@ -69,7 +81,7 @@ class DAPIntegrationTest(unittest.TestCase):
         adapter.execution = SimpleNamespace(
             top_mlp_neurons=lambda *_args, **_kwargs: (projection,)
         )
-        adapter.layer_index = 0
+        adapter.layer_index = 1
         adapter.token_index = 3
         adapter.neuron_cache = {}
 
@@ -83,6 +95,40 @@ class DAPIntegrationTest(unittest.TestCase):
         watch = adapter._evaluate_body("top_neurons")
         self.assertEqual(watch["variablesReference"], adapter.SCOPE_TOP_NEURONS)
         self.assertEqual(watch["namedVariables"], 5)
+
+    def test_setting_watch_expression_records_an_intervention(self) -> None:
+        adapter = object.__new__(LLMDebugAdapter)
+        adapter.trace = (
+            LayerState(
+                Layer("transformer.h.0.mlp", "mlp", "mlp", 1.0, 0.0),
+                (1.0, 2.0),
+                (1.5, 1.0),
+                "test",
+                {"mlp_expansion": (0.1, 3.0, 0.2)},
+            ),
+            LayerState(
+                Layer("transformer.h.1.attention", "attention", "attention", 1.0, 0.0),
+                (1.5, 1.0),
+                (1.5, 1.0),
+                "next",
+            ),
+        )
+        interventions: list[tuple[object, ...]] = []
+        adapter.execution = SimpleNamespace(
+            set_intervention=lambda *args: interventions.append(args)
+        )
+        adapter.layer_index = 1
+        adapter.token_index = 3
+        adapter.neuron_cache = {}
+        adapter._load_token = lambda _position: None
+
+        value = adapter._set_expression("mlp_expansion[1]", 0.0)
+
+        self.assertEqual(value, 0.0)
+        self.assertEqual(
+            interventions,
+            [(3, "transformer.h.0.mlp", "mlp_expansion", 1, 0.0)],
+        )
 
     def test_token_condition_parser(self) -> None:
         self.assertEqual(LLMDebugAdapter._parse_token_condition("token=4"), 4)

@@ -103,7 +103,10 @@ function vectorPlotHtml(webview, extensionUri) {
       const values = snapshot.vectors[vectorSelect.value];
       const colors = theme();
       const indices = values.map((_item, index) => index);
-      meta.textContent = 'token ' + snapshot.tokenPosition + ' ' + JSON.stringify(snapshot.token) + ' · ' + snapshot.layer + ' · ' + values.length + 'D';
+      const location = snapshot.previousLayer
+        ? 'after ' + snapshot.previousLayer + ' → before ' + snapshot.layer
+        : 'before ' + snapshot.layer;
+      meta.textContent = 'token ' + snapshot.tokenPosition + ' ' + JSON.stringify(snapshot.token) + ' · ' + location + ' · ' + values.length + 'D';
       let trace;
       if (viewSelect.value === 'histogram') {
         trace = { type: 'histogram', x: values, nbinsx: 40, marker: { color: colors.positive }, hovertemplate: 'value %{x}<br>count %{y}<extra></extra>' };

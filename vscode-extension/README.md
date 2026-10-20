@@ -75,6 +75,12 @@ scaled by the current activation.
 Add `top_neurons` to **Watch** to keep the expandable neuron and token results
 updated while stepping between MLP stops.
 
+Stops occur before the highlighted submodule. After **Step Over**, its values
+appear as the previous operation's output. Use **Set Value** on Watch entries
+such as `output[42]`, `mlp_expansion[1843]`, or
+`top_neurons[0].activation` to replay the token with that intervention and
+observe changed downstream layers.
+
 The prototype loads GPT-2 through `gb10-load-llm`, captures embedding,
 attention, and MLP outputs, and shows a logit-lens interpretation at every
 stop. The Debug Console supports `layer`, `operation`, `meaning`, `input`, and

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from threading import RLock
 from typing import Any
 
@@ -57,6 +57,7 @@ class ModelExecution:
     progress: Callable[[str], None]
     past_key_values: Any = None
     cached_through: int = -1
+    interventions: dict[tuple[int, str, str, int], float] = field(default_factory=dict)
 
     @property
     def token_count(self) -> int:
@@ -83,10 +84,22 @@ class ModelExecution:
                 device=self.device,
                 progress=self.progress,
                 token_position=position,
+                interventions=self.interventions,
             )
             self.past_key_values = next_cache
             self.cached_through = position
             return ModelTrace(trace.states, self.tokens)
+
+    def set_intervention(
+        self,
+        token_position: int,
+        layer_name: str,
+        vector_name: str,
+        index: int,
+        value: float,
+    ) -> None:
+        """Persist one vector override for subsequent replays of a token."""
+        self.interventions[(token_position, layer_name, vector_name, index)] = value
 
     def _prefill(self, position: int) -> None:
         """Run uncaptured prompt tokens into the cache before a target token."""
@@ -343,6 +356,7 @@ def _capture_token_trace(
     device: str,
     progress: Callable[[str], None],
     token_position: int,
+    interventions: dict[tuple[int, str, str, int], float],
 ) -> tuple[ModelTrace, Any]:
     """Capture all layer states for one token using an existing KV cache."""
     import torch
@@ -353,9 +367,21 @@ def _capture_token_trace(
     detailed: dict[str, dict[str, Any]] = {}
     handles = []
 
+    def apply_interventions(tensor: Any, state_name: str, vector_name: str) -> Any:
+        for (position, layer, vector, index), value in interventions.items():
+            if position == token_position and layer == state_name and vector == vector_name:
+                if index < 0 or index >= tensor.shape[-1]:
+                    raise ValueError(
+                        f"dimension {index} is outside {state_name}.{vector_name} "
+                        f"range 0..{tensor.shape[-1] - 1}"
+                    )
+                tensor[..., index] = value
+        return tensor
+
     def capture(name: str, operation: str, meaning: str, apply_final_norm: bool):
         def hook(_module, _inputs, output) -> None:
             tensor = _tensor_from_output(output)
+            apply_interventions(tensor, name, "output")
             captured.append((name, operation, meaning, tensor.detach(), apply_final_norm))
 
         return hook
@@ -363,6 +389,7 @@ def _capture_token_trace(
     def capture_input(name: str, operation: str, meaning: str):
         def hook(_module, inputs) -> None:
             hidden = inputs[0]
+            apply_interventions(hidden, name, "output")
             captured.append((name, operation, meaning, hidden.detach(), True))
 
         return hook
@@ -370,6 +397,7 @@ def _capture_token_trace(
     def capture_detail(state_name: str, detail_name: str):
         def hook(_module, _inputs, output) -> None:
             tensor = _tensor_from_output(output)
+            apply_interventions(tensor, state_name, detail_name)
             detailed.setdefault(state_name, {})[detail_name] = tensor.detach()
 
         return hook

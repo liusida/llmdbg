@@ -97,6 +97,12 @@ class LLMDebugAdapter:
     def state(self) -> LayerState:
         return self.trace[self.layer_index]
 
+    @property
+    def previous_state(self) -> LayerState | None:
+        if self.layer_index == 0:
+            return None
+        return self.trace[self.layer_index - 1]
+
     def send_response(
         self,
         request: dict[str, Any],
@@ -162,6 +168,9 @@ class LLMDebugAdapter:
                     "supportsConfigurationDoneRequest": True,
                     "supportsEvaluateForHovers": True,
                     "supportsConditionalBreakpoints": True,
+                    "supportsSetExpression": True,
+                    "supportsSetVariable": True,
+                    "supportsInvalidatedEvent": True,
                     "supportsStepBack": False,
                     "supportsRestartRequest": False,
                 },
@@ -279,25 +288,35 @@ class LLMDebugAdapter:
         elif command == "scopes":
             scopes = [
                 {"name": "Token", "variablesReference": self.SCOPE_TOKEN, "expensive": False},
-                {"name": "Layer", "variablesReference": self.SCOPE_LAYER, "expensive": False},
-                {"name": "Input vector", "variablesReference": self.SCOPE_INPUT, "expensive": False},
-                {
-                    "name": "Residual stream (output)",
-                    "variablesReference": self.SCOPE_RESIDUAL,
-                    "expensive": False,
-                },
-                {"name": "Delta", "variablesReference": self.SCOPE_DELTA, "expensive": False},
+                {"name": "Next operation", "variablesReference": self.SCOPE_LAYER, "expensive": False},
+                {"name": "Current input", "variablesReference": self.SCOPE_INPUT, "expensive": False},
             ]
-            scopes.extend(
-                {
-                    "name": label,
-                    "variablesReference": reference,
-                    "expensive": len(self.state.details[detail_name]) > 1024,
-                }
-                for reference, (detail_name, label) in self.DETAIL_SCOPES.items()
-                if detail_name in self.state.details
-            )
-            if "mlp_expansion" in self.state.details and self.execution is not None:
+            result_state = self.previous_state
+            if result_state is not None:
+                scopes.extend(
+                    [
+                        {
+                            "name": f"Previous output — {result_state.layer.name}",
+                            "variablesReference": self.SCOPE_RESIDUAL,
+                            "expensive": False,
+                        },
+                        {"name": "Previous delta", "variablesReference": self.SCOPE_DELTA, "expensive": False},
+                    ]
+                )
+                scopes.extend(
+                    {
+                        "name": label,
+                        "variablesReference": reference,
+                        "expensive": len(result_state.details[detail_name]) > 1024,
+                    }
+                    for reference, (detail_name, label) in self.DETAIL_SCOPES.items()
+                    if detail_name in result_state.details
+                )
+            if (
+                result_state is not None
+                and "mlp_expansion" in result_state.details
+                and self.execution is not None
+            ):
                 scopes.append(
                     {
                         "name": "Top activated neurons",
@@ -309,6 +328,17 @@ class LLMDebugAdapter:
         elif command == "variables":
             reference = int(arguments.get("variablesReference", 0))
             self.send_response(request, {"variables": self._variables(reference)})
+        elif command == "setVariable":
+            reference = int(arguments.get("variablesReference", 0))
+            name = str(arguments.get("name", ""))
+            expression = self._variable_expression(reference, name)
+            value = float(str(arguments.get("value", "")).strip())
+            updated = self._set_expression(expression, value)
+            self.send_response(
+                request,
+                {"value": f"{updated:+.8f}", "type": "float", "variablesReference": 0},
+            )
+            self.send_event("invalidated", {"areas": ["variables", "watch"]})
         elif command == "evaluate":
             expression = str(arguments.get("expression", "")).strip().lower()
             body = self._evaluate_body(expression)
@@ -316,6 +346,15 @@ class LLMDebugAdapter:
                 self.send_response(request, success=False, message=f"Unknown expression: {expression}")
             else:
                 self.send_response(request, body)
+        elif command == "setExpression":
+            expression = str(arguments.get("expression", "")).strip().lower()
+            value = float(str(arguments.get("value", "")).strip())
+            updated = self._set_expression(expression, value)
+            self.send_response(
+                request,
+                {"value": f"{updated:+.8f}", "type": "float", "variablesReference": 0},
+            )
+            self.send_event("invalidated", {"areas": ["variables", "watch"]})
         elif command == "llmdbg/vector":
             self.send_response(request, self._vector_snapshot())
         elif command in ("next", "stepIn", "stepOut"):
@@ -550,12 +589,23 @@ class LLMDebugAdapter:
                 },
             ]
         if reference == self.SCOPE_LAYER:
-            return [
+            variables = [
                 {"name": "index", "value": str(self.layer_index), "type": "int", "variablesReference": 0},
                 {"name": "name", "value": self.state.layer.name, "type": "str", "variablesReference": 0},
+                {"name": "phase", "value": "before execution", "type": "str", "variablesReference": 0},
                 {"name": "operation", "value": self.state.layer.operation, "type": "str", "variablesReference": 0},
-                {"name": "meaning", "value": self.state.interpretation, "type": "str", "variablesReference": 0},
+                {"name": "meaning", "value": self.state.layer.meaning, "type": "str", "variablesReference": 0},
             ]
+            if self.previous_state is not None:
+                variables.append(
+                    {
+                        "name": "previous",
+                        "value": self.previous_state.layer.name,
+                        "type": "completed operation",
+                        "variablesReference": 0,
+                    }
+                )
+            return variables
         if reference == self.SCOPE_TOP_NEURONS:
             return [
                 {
@@ -585,6 +635,7 @@ class LLMDebugAdapter:
                     "value": f"{neuron.activation:+.8f}",
                     "type": "float",
                     "variablesReference": 0,
+                    "evaluateName": f"top_neurons[{rank}].activation",
                 },
                 {
                     "name": "output direction norm",
@@ -625,22 +676,34 @@ class LLMDebugAdapter:
                 }
                 for item in scores
             ]
+        vector_name: str | None = None
         if reference == self.SCOPE_INPUT:
             vector = self.state.input_vector
+            vector_name = "input"
         elif reference == self.SCOPE_RESIDUAL:
-            vector = self.state.output_vector
+            if self.previous_state is None:
+                return []
+            vector = self.previous_state.output_vector
+            vector_name = "output"
         elif reference == self.SCOPE_DELTA:
+            if self.previous_state is None:
+                return []
             vector = tuple(
                 output - input_
                 for input_, output in zip(
-                    self.state.input_vector, self.state.output_vector, strict=True
+                    self.previous_state.input_vector,
+                    self.previous_state.output_vector,
+                    strict=True,
                 )
             )
         elif reference in self.DETAIL_SCOPES:
-            detail_name = self.DETAIL_SCOPES[reference][0]
-            if detail_name not in self.state.details:
+            if self.previous_state is None:
                 return []
-            vector = self.state.details[detail_name]
+            detail_name = self.DETAIL_SCOPES[reference][0]
+            if detail_name not in self.previous_state.details:
+                return []
+            vector = self.previous_state.details[detail_name]
+            vector_name = detail_name
         else:
             return []
         if len(vector) == len(FEATURES):
@@ -654,19 +717,118 @@ class LLMDebugAdapter:
                 "value": f"{value:+.6f}",
                 "type": "float",
                 "variablesReference": 0,
+                **(
+                    {
+                        "evaluateName": (
+                            f"{vector_name}["
+                            f"{feature.removeprefix('dimension[').removesuffix(']')}]"
+                        )
+                    }
+                    if vector_name is not None and feature.startswith("dimension[")
+                    else {}
+                ),
             }
             for feature, value in displayed
         ]
 
+    def _variable_expression(self, reference: int, name: str) -> str:
+        """Resolve a Variables-pane Set Value request to a Watch expression."""
+        dimension = re.fullmatch(r"dimension\[(\d+)\]", name)
+        if dimension:
+            vector_names = {
+                self.SCOPE_INPUT: "input",
+                self.SCOPE_RESIDUAL: "output",
+                **{
+                    scope_reference: detail_name
+                    for scope_reference, (detail_name, _label) in self.DETAIL_SCOPES.items()
+                },
+            }
+            vector_name = vector_names.get(reference)
+            if vector_name is not None:
+                return f"{vector_name}[{dimension.group(1)}]"
+        if (
+            self.NEURON_REFERENCE <= reference < self.NEURON_REFERENCE + 5
+            and name == "activation"
+        ):
+            return f"top_neurons[{reference - self.NEURON_REFERENCE}].activation"
+        raise ValueError(f"{name!r} cannot be changed in this scope")
+
+    def _set_expression(self, expression: str, value: float) -> float:
+        """Record an intervention and replay the token to refresh downstream values."""
+        if self.execution is None:
+            raise ValueError("vector intervention requires a loaded model")
+        result_state = self.previous_state
+        if result_state is None:
+            raise ValueError("step over an operation before changing its output")
+
+        neuron_match = re.fullmatch(r"top_neurons\[(\d+)\]\.activation", expression)
+        if neuron_match:
+            rank = int(neuron_match.group(1))
+            neurons = self._top_neurons()
+            if rank >= len(neurons):
+                raise ValueError(f"top neuron rank must be in 0..{len(neurons) - 1}")
+            vector_name = "mlp_expansion"
+            index = neurons[rank].index
+        else:
+            indexed = re.fullmatch(
+                r"(input|output|residual|residual_stream|layernorm|normalized_input|"
+                r"normalized_output|mlp_expansion_pre_activation|mlp_expansion|mlp_projection)"
+                r"\[(\d+)\]",
+                expression,
+            )
+            if indexed is None:
+                raise ValueError(
+                    "set a vector dimension such as output[42], mlp_expansion[10], "
+                    "or top_neurons[0].activation"
+                )
+            vector_name, raw_index = indexed.groups()
+            index = int(raw_index)
+            if vector_name == "input":
+                vector_name = "output"
+            elif vector_name in ("residual", "residual_stream"):
+                vector_name = "output"
+            elif vector_name == "layernorm":
+                vector_name = "normalized_input"
+
+        source_vector = (
+            result_state.output_vector
+            if vector_name == "output"
+            else result_state.details.get(vector_name)
+        )
+        if source_vector is None:
+            raise ValueError(f"{vector_name} is not available for {result_state.layer.name}")
+        if index < 0 or index >= len(source_vector):
+            raise ValueError(
+                f"dimension {index} is outside {vector_name} range 0..{len(source_vector) - 1}"
+            )
+
+        self.execution.set_intervention(
+            self.token_index,
+            result_state.layer.name,
+            vector_name,
+            index,
+            value,
+        )
+        current_layer = self.layer_index
+        self._load_token(self.token_index)
+        self.layer_index = current_layer
+        self.neuron_cache.clear()
+        return value
+
     def _top_neurons(self) -> tuple[NeuronProjection, ...]:
         """Return cached direct vocabulary projections for the current MLP state."""
-        if self.execution is None or "mlp_expansion" not in self.state.details:
+        result_state = self.previous_state
+        if (
+            self.execution is None
+            or result_state is None
+            or "mlp_expansion" not in result_state.details
+        ):
             return ()
-        key = (self.token_index, self.state.layer.name)
+        key = (self.token_index, result_state.layer.name)
         if key not in self.neuron_cache:
             self.neuron_cache[key] = self.execution.top_mlp_neurons(
-                self.state.layer.name,
-                self.state.details["mlp_expansion"],
+                result_state.layer.name,
+                result_state.details["mlp_expansion"],
             )
         return self.neuron_cache[key]
 
@@ -678,18 +840,18 @@ class LLMDebugAdapter:
         if expression in ("layer", "name"):
             return self.state.layer.name
         if expression in ("meaning", "interpretation"):
-            return self.state.interpretation
+            return self.state.layer.meaning
         if expression == "operation":
             return self.state.layer.operation
         if expression == "input":
             return repr(self.state.input_vector)
         if expression in ("output", "residual", "residual_stream"):
-            return repr(self.state.output_vector)
+            return repr(self._vector("output"))
         if expression == "delta":
             return repr(self._vector("delta"))
         detail_expression = "normalized_input" if expression == "layernorm" else expression
-        if detail_expression in self.state.details:
-            return repr(self.state.details[detail_expression])
+        if self.previous_state is not None and detail_expression in self.previous_state.details:
+            return repr(self.previous_state.details[detail_expression])
         indexed = re.fullmatch(
             r"(input|output|residual|residual_stream|delta|layernorm|normalized_input|"
             r"normalized_output|mlp_expansion_pre_activation|mlp_expansion|mlp_projection)"
@@ -710,7 +872,12 @@ class LLMDebugAdapter:
     def _evaluate_body(self, expression: str) -> dict[str, Any] | None:
         """Build a DAP evaluate result, including expandable synthetic values."""
         if expression in ("top_neurons", "top_activated_neurons"):
-            if self.execution is None or "mlp_expansion" not in self.state.details:
+            result_state = self.previous_state
+            if (
+                self.execution is None
+                or result_state is None
+                or "mlp_expansion" not in result_state.details
+            ):
                 return {
                     "result": "available at MLP stops",
                     "type": "MLP neurons",
@@ -722,6 +889,47 @@ class LLMDebugAdapter:
                 "variablesReference": self.SCOPE_TOP_NEURONS,
                 "namedVariables": 5,
             }
+        neuron_match = re.fullmatch(
+            r"(?:top_neurons|top_activated_neurons)\[(\d+)\]"
+            r"(?:\.(index|activation|direction_norm|vocabulary|contribution))?",
+            expression,
+        )
+        if neuron_match:
+            rank = int(neuron_match.group(1))
+            attribute = neuron_match.group(2)
+            neurons = self._top_neurons()
+            if rank >= len(neurons):
+                return {
+                    "result": f"rank {rank} is outside 0..{len(neurons) - 1}",
+                    "variablesReference": 0,
+                }
+            neuron = neurons[rank]
+            if attribute is None:
+                return {
+                    "result": f"neuron[{neuron.index}] activation {neuron.activation:+.8f}",
+                    "type": "MLP neuron",
+                    "variablesReference": self.NEURON_REFERENCE + rank,
+                }
+            if attribute == "index":
+                return {"result": str(neuron.index), "type": "int", "variablesReference": 0}
+            if attribute == "activation":
+                return {
+                    "result": f"{neuron.activation:+.8f}",
+                    "type": "float",
+                    "variablesReference": 0,
+                }
+            if attribute == "direction_norm":
+                return {
+                    "result": f"{neuron.direction_norm:.8f}",
+                    "type": "float",
+                    "variablesReference": 0,
+                }
+            token_reference = self.TOKEN_REFERENCE + rank * 2
+            return {
+                "result": "5 tokens",
+                "type": "direct vocabulary projection",
+                "variablesReference": token_reference + (attribute == "contribution"),
+            }
         result = self._evaluate(expression)
         if result is None:
             return None
@@ -731,18 +939,26 @@ class LLMDebugAdapter:
         if name == "input":
             return self.state.input_vector
         if name in ("output", "residual", "residual_stream"):
-            return self.state.output_vector
+            return (
+                self.previous_state.output_vector
+                if self.previous_state is not None
+                else self.state.input_vector
+            )
         if name == "delta":
+            if self.previous_state is None:
+                return tuple(0.0 for _ in self.state.input_vector)
             return tuple(
                 output - input_
                 for input_, output in zip(
-                    self.state.input_vector, self.state.output_vector, strict=True
+                    self.previous_state.input_vector,
+                    self.previous_state.output_vector,
+                    strict=True,
                 )
             )
         if name == "layernorm":
             name = "normalized_input"
-        if name in self.state.details:
-            return self.state.details[name]
+        if self.previous_state is not None and name in self.previous_state.details:
+            return self.previous_state.details[name]
         raise ValueError(f"unknown vector: {name}")
 
     def _vector_snapshot(self) -> dict[str, Any]:
@@ -754,13 +970,17 @@ class LLMDebugAdapter:
             "residual_stream": list(residual),
             "delta": list(delta),
         }
-        vectors.update(
-            {name: list(vector) for name, vector in self.state.details.items()}
-        )
+        if self.previous_state is not None:
+            vectors.update(
+                {name: list(vector) for name, vector in self.previous_state.details.items()}
+            )
         return {
             "tokenPosition": self.token_index,
             "token": self.tokens[self.token_index],
             "layer": self.state.layer.name,
+            "previousLayer": (
+                self.previous_state.layer.name if self.previous_state is not None else None
+            ),
             "dimensions": len(residual),
             "vectors": vectors,
         }

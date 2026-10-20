@@ -106,6 +106,16 @@ Add `top_neurons` to **Watch** to keep this tree visible while stepping; VS
 Code reevaluates it at every stop and preserves the expandable neuron/token
 structure. At non-MLP stops it reads `available at MLP stops`.
 
+The yellow execution arrow identifies the next submodule to execute. **Step
+Over** executes that submodule, moves to the next statement, and exposes the
+completed operation under **Previous output** and its detail scopes. Watch
+dimensions are writable through VS Code's **Set Value** action. For example,
+set `output[42]`, `mlp_expansion[1843]`, or
+`top_neurons[0].activation`; llmdbg records the intervention, replays the
+selected token from its KV-cache prefix, and refreshes all downstream values.
+Rank-based `top_neurons[0]` may identify a different neuron after mutation;
+use `mlp_expansion[neuron_id]` when targeting a fixed neuron.
+
 ## License
 
 MIT
