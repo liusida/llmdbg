@@ -592,7 +592,25 @@ class LLMDebugAdapter:
                 [f"transformer.h.{index}.attention", f"transformer.h.{index}.mlp"]
             )
         available.append("transformer.ln_f")
-        step_paths = list(arguments.get("stepPaths", []))
+        if arguments.get("pythonProgram"):
+            call_lines = arguments.get("callLines", {})
+            step_paths = []
+            step_lines: dict[str, int] = {}
+            if "token_embedding" in call_lines:
+                step_paths.append("token_embedding")
+                step_lines["token_embedding"] = int(call_lines["token_embedding"])
+            for index in range(len(model.transformer.h)):
+                for kind in ("attention", "mlp"):
+                    if kind in call_lines:
+                        name = f"transformer.h.{index}.{kind}"
+                        step_paths.append(name)
+                        step_lines[name] = int(call_lines[kind])
+            if "final_layernorm" in call_lines:
+                step_paths.append("transformer.ln_f")
+                step_lines["transformer.ln_f"] = int(call_lines["final_layernorm"])
+        else:
+            step_paths = list(arguments.get("stepPaths", []))
+            step_lines = arguments.get("stepLines", {})
         selected = [path for path in available if path in set(step_paths)]
         if selected != step_paths:
             raise ValueError(
@@ -600,7 +618,6 @@ class LLMDebugAdapter:
                 f"available paths are {available!r}"
             )
         path = Path(str(arguments["configPath"]))
-        step_lines = arguments.get("stepLines", {})
         self.source_name = path.name
         self.source_path = str(path)
         self.source_lines = tuple(int(step_lines[name]) for name in step_paths)
@@ -889,6 +906,7 @@ class LLMDebugAdapter:
         if result_state is None:
             raise ValueError("step over an operation before changing its output")
 
+        expression = self._source_expression(expression)
         neuron_match = re.fullmatch(r"top_neurons\[(\d+)\]\.activation", expression)
         if neuron_match:
             rank = int(neuron_match.group(1))
@@ -975,6 +993,7 @@ class LLMDebugAdapter:
         return self.neuron_cache[key]
 
     def _evaluate(self, expression: str) -> str | None:
+        expression = self._source_expression(expression)
         if expression in ("token", "token.text"):
             return self.tokens[self.token_index]
         if expression in ("position", "token.position"):
@@ -1010,7 +1029,49 @@ class LLMDebugAdapter:
                     f"dimension {index} is outside the vector range 0..{len(vector) - 1}"
                 )
             return f"{vector[index]:+.8f}"
+        sliced = re.fullmatch(
+            r"([a-z_][a-z0-9_]*)\[(\d*)?:(\d*)?(?::(\d+))?\]",
+            expression,
+        )
+        if sliced:
+            vector_name, raw_start, raw_stop, raw_step = sliced.groups()
+            vector = self._vector(vector_name)
+            selection = vector[
+                slice(
+                    int(raw_start) if raw_start else None,
+                    int(raw_stop) if raw_stop else None,
+                    int(raw_step) if raw_step else None,
+                )
+            ]
+            return repr(selection)
         return None
+
+    def _source_expression(self, expression: str) -> str:
+        """Translate names from the Python model program into runtime vectors."""
+        if not getattr(self, "inside_internal", False):
+            return expression
+        if getattr(self, "inside_attention", False):
+            aliases = {
+                "normalized": "normalized_input",
+                "qkv": "attention_qkv",
+                "mixed": "attention_mixing",
+                "update": "attention_projection",
+            }
+        else:
+            hidden = (
+                "mlp_expansion_pre_activation"
+                if self.mlp_step_index <= 2
+                else "mlp_expansion"
+            )
+            aliases = {
+                "normalized": "normalized_input",
+                "hidden": hidden,
+                "update": "mlp_projection",
+            }
+        for alias, vector in aliases.items():
+            if expression == alias or expression.startswith(alias + "["):
+                return vector + expression[len(alias):]
+        return expression
 
     def _evaluate_body(self, expression: str) -> dict[str, Any] | None:
         """Build a DAP evaluate result, including expandable synthetic values."""

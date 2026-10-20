@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import ast
 import re
 from pathlib import Path
 from typing import Any
@@ -53,8 +54,10 @@ def _parse_value(source: str, line_number: int) -> Any:
 def load_debug_config(path: str) -> dict[str, Any]:
     """Load an ordered .llmdbg program and return flattened DAP arguments."""
     config_path = Path(path).expanduser().resolve()
+    if config_path.name.endswith(".llmdbg.py"):
+        return _load_python_debug_config(config_path)
     if config_path.suffix != ".llmdbg":
-        raise ValueError(f"debug source must use the .llmdbg extension: {config_path}")
+        raise ValueError(f"debug source must use .llmdbg or .llmdbg.py: {config_path}")
     if not config_path.is_file():
         raise FileNotFoundError(f"llmdbg source does not exist: {config_path}")
 
@@ -170,4 +173,90 @@ def load_debug_config(path: str) -> dict[str, Any]:
         "stepPaths": step_paths,
         "stepLines": step_lines,
         "functions": functions,
+    }
+
+
+def _literal(node: ast.AST, name: str) -> Any:
+    try:
+        return ast.literal_eval(node)
+    except (ValueError, TypeError) as error:
+        raise ValueError(f"{name} must be a Python literal") from error
+
+
+def _load_python_debug_config(path: Path) -> dict[str, Any]:
+    """Read a real-Python llmdbg program without importing or executing user code."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    model_call: ast.Call | None = None
+    prompt: str | None = None
+    token: int | None = None
+    stop_on_entry = True
+    functions: dict[str, dict[str, int]] = {}
+    call_lines: dict[str, int] = {}
+    globals_: dict[str, Any] = {}
+
+    for statement in tree.body:
+        if isinstance(statement, ast.Assign) and len(statement.targets) == 1:
+            target = statement.targets[0]
+            if isinstance(target, ast.Name):
+                if target.id == "model" and isinstance(statement.value, ast.Call):
+                    model_call = statement.value
+                elif target.id in {"prompt", "token", "stop_on_entry"}:
+                    globals_[target.id] = _literal(statement.value, target.id)
+        elif isinstance(statement, ast.FunctionDef) and statement.name in _FUNCTION_OPERATIONS:
+            operations: dict[str, int] = {}
+            for node in ast.walk(statement):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                    operation = node.func.attr
+                    if operation in _FUNCTION_OPERATIONS[statement.name]:
+                        operations.setdefault(operation, node.lineno)
+                elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+                    operations.setdefault("residual_add", node.lineno)
+            functions[statement.name] = operations
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.With):
+            for item in node.items:
+                if isinstance(item.context_expr, ast.Call) and isinstance(item.context_expr.func, ast.Name) and item.context_expr.func.id == "debug":
+                    for keyword in item.context_expr.keywords:
+                        if keyword.arg == "token":
+                            token = int(
+                                globals_["token"]
+                                if "token" in globals_
+                                else _literal(keyword.value, "token")
+                            )
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Attribute):
+                if node.func.attr == "tokenize" and node.args:
+                    value = node.args[0]
+                    prompt = str(
+                        globals_["prompt"]
+                        if "prompt" in globals_
+                        else _literal(value, "prompt")
+                    )
+                elif node.func.attr in {"token_embedding", "final_layernorm"}:
+                    call_lines.setdefault(node.func.attr, node.lineno)
+            elif isinstance(node.func, ast.Name) and node.func.id in {"attention", "mlp"}:
+                call_lines.setdefault(node.func.id, node.lineno)
+
+    if model_call is None or not model_call.args:
+        raise ValueError("Python llmdbg program must assign model = gpt2(\"model-id\", ...)")
+    model = _literal(model_call.args[0], "model id")
+    keywords = {keyword.arg: _literal(keyword.value, keyword.arg or "argument") for keyword in model_call.keywords}
+    if not isinstance(model, str) or not model:
+        raise ValueError("gpt2 model id must be a non-empty string")
+    if prompt is None:
+        prompt = globals_.get("prompt")
+    if not isinstance(prompt, str) or not prompt:
+        raise ValueError("Python llmdbg program must tokenize a non-empty prompt")
+    for name, expected in _FUNCTION_OPERATIONS.items():
+        if name in functions and tuple(functions[name]) != expected:
+            raise ValueError(f"def {name}() operations must be, in order: {', '.join(expected)}")
+
+    return {
+        "configPath": str(path), "model": model,
+        "revision": keywords.get("revision", "main"),
+        "device": keywords.get("device", "cuda"), "dtype": keywords.get("dtype", "bfloat16"),
+        "prompt": prompt, "defaultToken": token if token is not None else globals_.get("token"),
+        "stopOnEntry": globals_.get("stop_on_entry", stop_on_entry),
+        "pythonProgram": True, "callLines": call_lines, "functions": functions,
     }

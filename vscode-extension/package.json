@@ -2,7 +2,7 @@
   "name": "llmdbg",
   "displayName": "llmdbg",
   "description": "Step through LLM layers and inspect human-readable internal representations.",
-  "version": "0.0.30",
+  "version": "0.0.31",
   "publisher": "liusida",
   "license": "MIT",
   "repository": {
@@ -84,7 +84,8 @@
         "type": "llmdbg",
         "label": "llmdbg",
         "languages": [
-          "llmdbg"
+          "llmdbg",
+          "python"
         ],
         "configurationAttributes": {
           "launch": {
@@ -92,7 +93,7 @@
             "properties": {
               "config": {
                 "type": "string",
-                "description": "Path to the .llmdbg model-debugging source file."
+                "description": "Path to a .llmdbg or pure-Python .llmdbg.py model-debugging source file."
               },
               "stopOnEntry": {
                 "type": "boolean",

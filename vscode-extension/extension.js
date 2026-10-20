@@ -36,7 +36,7 @@ function activeLlmdbgFile() {
   if (!editor || editor.document.uri.scheme !== "file") {
     return undefined;
   }
-  return editor.document.fileName.endsWith(".llmdbg")
+  return (editor.document.fileName.endsWith(".llmdbg") || editor.document.fileName.endsWith(".llmdbg.py"))
     ? editor.document.fileName
     : undefined;
 }

@@ -8,6 +8,42 @@ from llmdbg.config import load_debug_config
 
 
 class DebugConfigTest(unittest.TestCase):
+    def test_loads_pure_python_llmdbg_program(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gpt2.llmdbg.py"
+            path.write_text(
+                '''from llmdbg import debug, gpt2
+model = gpt2("openai-community/gpt2", device="cuda", dtype="bfloat16")
+prompt = "hello world"
+token = 1
+tokens = model.tokenize(prompt)
+def attention(x, layer):
+    normalized = layer.layernorm(x)
+    qkv = layer.qkv_projection(normalized)
+    mixed = layer.attention_mixing(qkv)
+    update = layer.output_projection(mixed)
+    return x + update
+def mlp(x, layer):
+    normalized = layer.layernorm(x)
+    hidden = layer.expansion(normalized)
+    hidden = layer.gelu(hidden)
+    update = layer.projection(hidden)
+    return x + update
+with debug(model, tokens, token=token):
+    x = model.token_embedding(tokens)
+    for layer in model.layers:
+        x = attention(x, layer)
+        x = mlp(x, layer)
+    x = model.final_layernorm(x)
+''',
+                encoding="utf-8",
+            )
+            config = load_debug_config(str(path))
+        self.assertTrue(config["pythonProgram"])
+        self.assertEqual(config["defaultToken"], 1)
+        self.assertEqual(config["callLines"]["attention"], 21)
+        self.assertEqual(config["functions"]["mlp"]["gelu"], 15)
+
     def test_loads_ordered_llmdbg_source(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "gpt2.llmdbg"

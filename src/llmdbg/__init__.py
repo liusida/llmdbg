@@ -1,5 +1,9 @@
 """LLM layer debugger."""
 
-__version__ = "0.0.3a19"
+__version__ = "0.0.3a20"
+
+from llmdbg.program import TensorHandle, debug, gpt2
+
+__all__ = ["TensorHandle", "debug", "gpt2", "__version__"]
 
 __all__ = ["__version__"]

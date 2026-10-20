@@ -10,12 +10,16 @@ packages to be shared efficiently across environments.
 
 ## Prototype quick start
 
-1. Create or open a `.llmdbg` file containing the model and input settings.
+1. Create or open a `.llmdbg.py` Python model program (recommended) or legacy `.llmdbg` file.
 2. Press **F5** while that file is active. If prompted, select **llmdbg**.
 3. Wait for the private debugger environment to be created on first use.
 4. Expand **Variables** and use **Step Over** to advance through model layers.
 
-For example:
+The Python format uses `from llmdbg import gpt2, debug`, ordinary functions,
+loops, indexing, and slicing. See the repository `gpt2.llmdbg.py` example.
+Tensor handles keep model tensors in llmdbg's runtime, and assignments such as
+`hidden[1843] = 0` become replayable interventions. The compact format remains
+available; for example:
 
 ```text
 model = "openai-community/gpt2"

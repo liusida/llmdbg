@@ -218,6 +218,27 @@ class DAPIntegrationTest(unittest.TestCase):
         self.assertEqual(adapter.state.layer.operation, "attention_mixing")
         self.assertEqual(adapter.state.input_vector, (1.0, 2.0, 3.0, 4.0, 5.0, 6.0))
         self.assertEqual(adapter.previous_state.layer.operation, "qkv_projection")
+        self.assertEqual(adapter._source_expression("qkv[2]"), "attention_qkv[2]")
+
+    def test_python_source_watch_alias_and_slice(self) -> None:
+        adapter = object.__new__(LLMDebugAdapter)
+        adapter.trace = (
+            LayerState(
+                Layer("transformer.h.0.mlp", "mlp", "mlp", 1.0, 0.0),
+                (1.0, 2.0), (1.5, 2.5), "mlp",
+                {
+                    "normalized_input": (0.1, 0.2),
+                    "mlp_expansion_pre_activation": (1.0, 2.0, 3.0),
+                    "mlp_expansion": (1.5, 2.5, 3.5),
+                },
+            ),
+        )
+        adapter.layer_index = 0
+        adapter.inside_mlp = True
+        adapter.inside_attention = False
+        adapter.mlp_step_index = 3
+        self.assertEqual(adapter._evaluate("hidden[1]"), "+2.50000000")
+        self.assertEqual(adapter._evaluate("hidden[:2]"), repr((1.5, 2.5)))
 
     def test_continue_stops_at_a_source_breakpoint(self) -> None:
         requests = [

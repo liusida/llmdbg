@@ -25,7 +25,43 @@ npm run package
 code --install-extension llmdbg-0.0.1.vsix
 ```
 
-Create a `gpt2.llmdbg` file in the workspace:
+The recommended format is now a real Python program named `gpt2.llmdbg.py`:
+
+```python
+from llmdbg import debug, gpt2
+
+model = gpt2("openai-community/gpt2", device="cuda", dtype="bfloat16")
+prompt = "The capital of France is"
+token = 3
+tokens = model.tokenize(prompt)
+
+def attention(x, layer):
+    normalized = layer.layernorm(x)
+    qkv = layer.qkv_projection(normalized)
+    mixed = layer.attention_mixing(qkv)
+    update = layer.output_projection(mixed)
+    return x + update
+
+def mlp(x, layer):
+    normalized = layer.layernorm(x)
+    hidden = layer.expansion(normalized)
+    hidden = layer.gelu(hidden)
+    update = layer.projection(hidden)
+    return x + update
+
+with debug(model, tokens, token=token):
+    x = model.token_embedding(tokens)
+    for layer in model.layers:
+        x = attention(x, layer)
+        x = mlp(x, layer)
+    x = model.final_layernorm(x)
+    logits = model.vocabulary_projection(x)
+```
+
+This is executable Python. Model and tensor objects are handles over llmdbg's
+runtime; `hidden[1843] = 0` records an activation intervention and recomputes
+the selected token. Python indexing and slicing such as `hidden[:10]` work in
+source and Watch. The original compact `gpt2.llmdbg` format remains supported:
 
 ```text
 model = "openai-community/gpt2"
@@ -61,7 +97,7 @@ attention()
 mlp()
 ```
 
-Open that file and press **F5**. If VS Code asks for a debugger, choose
+Open either file and press **F5**. If VS Code asks for a debugger, choose
 **llmdbg**. No `launch.json` is required. If a workspace launch configuration
 is preferred, the complete minimal version is:
 
