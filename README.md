@@ -34,3 +34,7 @@ python -m venv .venv
 
 Open the repository in VS Code, select **llmdbg: Demo model** in **Run and
 Debug**, and press **F5**. Use **Step Over** to advance one layer at a time.
+
+## License
+
+MIT
