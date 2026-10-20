@@ -127,7 +127,7 @@ function vectorPlotHtml(webview, extensionUri) {
       Plotly.react(plot, [trace], {
         height: 220, margin: { l: 48, r: 12, t: 8, b: 34 },
         paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { color: colors.foreground }, xaxis: axis, yaxis: axis,
+        font: { color: colors.foreground }, xaxis: { ...axis }, yaxis: { ...axis },
         bargap: 0.06, showlegend: false, hovermode: 'closest'
       }, {
         responsive: true, displaylogo: false, scrollZoom: false,
