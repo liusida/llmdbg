@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 from llmdbg.dap import LLMDebugAdapter
 from llmdbg.demo_model import Layer, LayerState
+from llmdbg.model_runtime import NeuronProjection, TokenScore
 
 
 def frame(message: dict[str, object]) -> bytes:
@@ -46,6 +47,39 @@ class DAPIntegrationTest(unittest.TestCase):
         self.assertEqual(adapter._evaluate("layernorm[1]"), "+0.20000000")
         self.assertEqual(adapter._evaluate("mlp_expansion[2]"), "+5.00000000")
         self.assertEqual(adapter._vector("delta"), (0.5, -1.0))
+
+    def test_top_mlp_neurons_are_expandable(self) -> None:
+        adapter = object.__new__(LLMDebugAdapter)
+        adapter.trace = (
+            LayerState(
+                Layer("transformer.h.0.mlp", "mlp", "mlp", 1.0, 0.0),
+                (1.0, 2.0),
+                (1.5, 1.0),
+                "test",
+                {"mlp_expansion": (0.1, 3.0, 0.2)},
+            ),
+        )
+        projection = NeuronProjection(
+            index=1,
+            activation=3.0,
+            direction_norm=2.5,
+            vocabulary=(TokenScore(42, " answer", 1.25),),
+            contribution=(TokenScore(42, " answer", 3.75),),
+        )
+        adapter.execution = SimpleNamespace(
+            top_mlp_neurons=lambda *_args, **_kwargs: (projection,)
+        )
+        adapter.layer_index = 0
+        adapter.token_index = 3
+        adapter.neuron_cache = {}
+
+        top = adapter._variables(adapter.SCOPE_TOP_NEURONS)
+        self.assertEqual(top[0]["name"], "neuron[1]")
+        neuron = adapter._variables(adapter.NEURON_REFERENCE)
+        self.assertEqual(neuron[1]["value"], "+3.00000000")
+        vocabulary = adapter._variables(adapter.TOKEN_REFERENCE)
+        self.assertEqual(vocabulary[0]["name"], "token[42] ' answer'")
+        self.assertEqual(vocabulary[0]["value"], "+1.25000000")
 
     def test_token_condition_parser(self) -> None:
         self.assertEqual(LLMDebugAdapter._parse_token_condition("token=4"), 4)

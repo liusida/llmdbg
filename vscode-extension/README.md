@@ -68,6 +68,11 @@ and support indexed Watches: `layernorm[42]`,
 `mlp_expansion_pre_activation[42]`, `mlp_expansion[42]`, and
 `mlp_projection[42]`.
 
+At an MLP stop, expand **Top activated neurons** to inspect the five largest
+post-GELU activations. Every neuron includes its output-direction norm, five
+direct vocabulary projections through `W_down @ W_unembed`, and five scores
+scaled by the current activation.
+
 The prototype loads GPT-2 through `gb10-load-llm`, captures embedding,
 attention, and MLP outputs, and shows a logit-lens interpretation at every
 stop. The Debug Console supports `layer`, `operation`, `meaning`, `input`, and

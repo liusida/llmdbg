@@ -96,6 +96,13 @@ projection. Use indexed Watches such as `layernorm[42]`,
 `mlp_expansion_pre_activation[42]`, `mlp_expansion[42]`, and
 `mlp_projection[42]`; all available vectors also appear in the plot selector.
 
+Expanding **Top activated neurons** at an MLP stop lazily ranks the five
+largest post-GELU activations. Each neuron shows its output-direction norm,
+the top five tokens from `W_down[neuron] @ W_unembed`, and the top five direct
+token contributions after scaling by the current activation. Token IDs and
+decoded text are both displayed. Results are cached for the current token and
+layer.
+
 ## License
 
 MIT

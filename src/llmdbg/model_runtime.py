@@ -26,6 +26,26 @@ class ModelRuntime:
     tokenizer: Any
 
 
+@dataclass(frozen=True)
+class TokenScore:
+    """One vocabulary token and its score for a neuron output direction."""
+
+    token_id: int
+    text: str
+    score: float
+
+
+@dataclass(frozen=True)
+class NeuronProjection:
+    """An activated MLP neuron and its direct vocabulary projections."""
+
+    index: int
+    activation: float
+    direction_norm: float
+    vocabulary: tuple[TokenScore, ...]
+    contribution: tuple[TokenScore, ...]
+
+
 @dataclass
 class ModelExecution:
     """A prompt execution that advances one token at a time with a KV cache."""
@@ -89,6 +109,68 @@ class ModelExecution:
             )
         self.past_key_values = output.past_key_values
         self.cached_through = position - 1
+
+    def top_mlp_neurons(
+        self,
+        layer_name: str,
+        activation: tuple[float, ...],
+        *,
+        neuron_count: int = 5,
+        token_count: int = 5,
+    ) -> tuple[NeuronProjection, ...]:
+        """Project the most active MLP neurons directly into vocabulary space."""
+        import re
+
+        import torch
+
+        match = re.fullmatch(r"transformer\.h\.(\d+)\.mlp", layer_name)
+        if match is None:
+            return ()
+        block = self.runtime.model.transformer.h[int(match.group(1))]
+        down_projection = block.mlp.c_proj.weight
+        unembedding = self.runtime.model.get_output_embeddings().weight
+        with _runtime_lock, torch.inference_mode():
+            activation_tensor = torch.tensor(
+                activation,
+                dtype=down_projection.dtype,
+                device=down_projection.device,
+            )
+            active_values, active_indices = torch.topk(
+                activation_tensor, min(neuron_count, activation_tensor.numel())
+            )
+            directions = down_projection.index_select(0, active_indices)
+            vocabulary_scores = (directions @ unembedding.T).float()
+            contribution_scores = vocabulary_scores * active_values.float().unsqueeze(1)
+            vocabulary_values, vocabulary_ids = torch.topk(
+                vocabulary_scores, min(token_count, vocabulary_scores.shape[1]), dim=1
+            )
+            contribution_values, contribution_ids = torch.topk(
+                contribution_scores, min(token_count, contribution_scores.shape[1]), dim=1
+            )
+            direction_norms = directions.float().norm(dim=1)
+
+        def token_scores(ids: Any, values: Any) -> tuple[TokenScore, ...]:
+            return tuple(
+                TokenScore(
+                    int(token_id),
+                    self.runtime.tokenizer.decode([int(token_id)]),
+                    float(score),
+                )
+                for token_id, score in zip(ids.tolist(), values.tolist(), strict=True)
+            )
+
+        return tuple(
+            NeuronProjection(
+                index=int(active_indices[rank]),
+                activation=float(active_values[rank]),
+                direction_norm=float(direction_norms[rank]),
+                vocabulary=token_scores(vocabulary_ids[rank], vocabulary_values[rank]),
+                contribution=token_scores(
+                    contribution_ids[rank], contribution_values[rank]
+                ),
+            )
+            for rank in range(active_indices.shape[0])
+        )
 
 
 _runtime_lock = RLock()

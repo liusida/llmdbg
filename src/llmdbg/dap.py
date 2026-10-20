@@ -11,7 +11,7 @@ from typing import Any, BinaryIO
 
 from llmdbg.config import load_debug_config
 from llmdbg.demo_model import FEATURES, LayerState, run_demo
-from llmdbg.model_runtime import ModelExecution, prepare_model_execution
+from llmdbg.model_runtime import ModelExecution, NeuronProjection, prepare_model_execution
 
 
 @dataclass(frozen=True)
@@ -62,6 +62,9 @@ class LLMDebugAdapter:
     SCOPE_INPUT = 200
     SCOPE_RESIDUAL = 300
     SCOPE_DELTA = 400
+    SCOPE_TOP_NEURONS = 1000
+    NEURON_REFERENCE = 1100
+    TOKEN_REFERENCE = 1200
     DETAIL_SCOPES = {
         500: ("normalized_input", "LayerNorm output"),
         600: ("mlp_expansion_pre_activation", "MLP expansion (pre-activation)"),
@@ -88,6 +91,7 @@ class LLMDebugAdapter:
         self.source_name = "model.execution.llmdbg"
         self.source_path: str | None = None
         self.breakpoints: tuple[SourceBreakpoint, ...] = ()
+        self.neuron_cache: dict[tuple[int, str], tuple[NeuronProjection, ...]] = {}
 
     @property
     def state(self) -> LayerState:
@@ -293,6 +297,14 @@ class LLMDebugAdapter:
                 for reference, (detail_name, label) in self.DETAIL_SCOPES.items()
                 if detail_name in self.state.details
             )
+            if "mlp_expansion" in self.state.details and self.execution is not None:
+                scopes.append(
+                    {
+                        "name": "Top activated neurons",
+                        "variablesReference": self.SCOPE_TOP_NEURONS,
+                        "expensive": True,
+                    }
+                )
             self.send_response(request, {"scopes": scopes})
         elif command == "variables":
             reference = int(arguments.get("variablesReference", 0))
@@ -544,6 +556,75 @@ class LLMDebugAdapter:
                 {"name": "operation", "value": self.state.layer.operation, "type": "str", "variablesReference": 0},
                 {"name": "meaning", "value": self.state.interpretation, "type": "str", "variablesReference": 0},
             ]
+        if reference == self.SCOPE_TOP_NEURONS:
+            return [
+                {
+                    "name": f"neuron[{neuron.index}]",
+                    "value": f"activation {neuron.activation:+.6f}",
+                    "type": "MLP neuron",
+                    "variablesReference": self.NEURON_REFERENCE + rank,
+                }
+                for rank, neuron in enumerate(self._top_neurons())
+            ]
+        if self.NEURON_REFERENCE <= reference < self.NEURON_REFERENCE + 5:
+            rank = reference - self.NEURON_REFERENCE
+            neurons = self._top_neurons()
+            if rank >= len(neurons):
+                return []
+            neuron = neurons[rank]
+            token_reference = self.TOKEN_REFERENCE + rank * 2
+            return [
+                {
+                    "name": "index",
+                    "value": str(neuron.index),
+                    "type": "int",
+                    "variablesReference": 0,
+                },
+                {
+                    "name": "activation",
+                    "value": f"{neuron.activation:+.8f}",
+                    "type": "float",
+                    "variablesReference": 0,
+                },
+                {
+                    "name": "output direction norm",
+                    "value": f"{neuron.direction_norm:.8f}",
+                    "type": "float",
+                    "variablesReference": 0,
+                },
+                {
+                    "name": "vocabulary projection (W_down → W_unembed)",
+                    "value": "5 tokens",
+                    "type": "direct vocabulary projection",
+                    "variablesReference": token_reference,
+                },
+                {
+                    "name": "activation-scaled token contribution",
+                    "value": "5 tokens",
+                    "type": "direct logit contribution",
+                    "variablesReference": token_reference + 1,
+                },
+            ]
+        if self.TOKEN_REFERENCE <= reference < self.TOKEN_REFERENCE + 10:
+            offset = reference - self.TOKEN_REFERENCE
+            rank, score_kind = divmod(offset, 2)
+            neurons = self._top_neurons()
+            if rank >= len(neurons):
+                return []
+            scores = (
+                neurons[rank].vocabulary
+                if score_kind == 0
+                else neurons[rank].contribution
+            )
+            return [
+                {
+                    "name": f"token[{item.token_id}] {item.text!r}",
+                    "value": f"{item.score:+.8f}",
+                    "type": "logit",
+                    "variablesReference": 0,
+                }
+                for item in scores
+            ]
         if reference == self.SCOPE_INPUT:
             vector = self.state.input_vector
         elif reference == self.SCOPE_RESIDUAL:
@@ -576,6 +657,18 @@ class LLMDebugAdapter:
             }
             for feature, value in displayed
         ]
+
+    def _top_neurons(self) -> tuple[NeuronProjection, ...]:
+        """Return cached direct vocabulary projections for the current MLP state."""
+        if self.execution is None or "mlp_expansion" not in self.state.details:
+            return ()
+        key = (self.token_index, self.state.layer.name)
+        if key not in self.neuron_cache:
+            self.neuron_cache[key] = self.execution.top_mlp_neurons(
+                self.state.layer.name,
+                self.state.details["mlp_expansion"],
+            )
+        return self.neuron_cache[key]
 
     def _evaluate(self, expression: str) -> str | None:
         if expression in ("token", "token.text"):
