@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from llmdbg.dap import LLMDebugAdapter
+from llmdbg.demo_model import Layer, LayerState
 
 
 def frame(message: dict[str, object]) -> bytes:
@@ -27,6 +28,25 @@ def parse_frames(data: bytes) -> list[dict[str, object]]:
 
 
 class DAPIntegrationTest(unittest.TestCase):
+    def test_detailed_vectors_support_indexed_watches(self) -> None:
+        adapter = object.__new__(LLMDebugAdapter)
+        adapter.trace = (
+            LayerState(
+                Layer("mlp", "mlp", "mlp", 1.0, 0.0),
+                (1.0, 2.0),
+                (1.5, 1.0),
+                "test",
+                {
+                    "normalized_input": (0.1, 0.2),
+                    "mlp_expansion": (3.0, 4.0, 5.0, 6.0),
+                },
+            ),
+        )
+        adapter.layer_index = 0
+        self.assertEqual(adapter._evaluate("layernorm[1]"), "+0.20000000")
+        self.assertEqual(adapter._evaluate("mlp_expansion[2]"), "+5.00000000")
+        self.assertEqual(adapter._vector("delta"), (0.5, -1.0))
+
     def test_token_condition_parser(self) -> None:
         self.assertEqual(LLMDebugAdapter._parse_token_condition("token=4"), 4)
         self.assertEqual(LLMDebugAdapter._parse_token_condition("token = 2"), 2)

@@ -62,6 +62,13 @@ class LLMDebugAdapter:
     SCOPE_INPUT = 200
     SCOPE_RESIDUAL = 300
     SCOPE_DELTA = 400
+    DETAIL_SCOPES = {
+        500: ("normalized_input", "LayerNorm output"),
+        600: ("mlp_expansion_pre_activation", "MLP expansion (pre-activation)"),
+        700: ("mlp_expansion", "MLP expansion (after activation)"),
+        800: ("mlp_projection", "MLP projection"),
+        900: ("normalized_output", "Normalized output"),
+    }
     SOURCE_REFERENCE = 1
 
     def __init__(self, stream: ProtocolStream) -> None:
@@ -255,6 +262,15 @@ class LLMDebugAdapter:
                 },
                 {"name": "Delta", "variablesReference": self.SCOPE_DELTA, "expensive": False},
             ]
+            scopes.extend(
+                {
+                    "name": label,
+                    "variablesReference": reference,
+                    "expensive": len(self.state.details[detail_name]) > 1024,
+                }
+                for reference, (detail_name, label) in self.DETAIL_SCOPES.items()
+                if detail_name in self.state.details
+            )
             self.send_response(request, {"scopes": scopes})
         elif command == "variables":
             reference = int(arguments.get("variablesReference", 0))
@@ -517,6 +533,11 @@ class LLMDebugAdapter:
                     self.state.input_vector, self.state.output_vector, strict=True
                 )
             )
+        elif reference in self.DETAIL_SCOPES:
+            detail_name = self.DETAIL_SCOPES[reference][0]
+            if detail_name not in self.state.details:
+                return []
+            vector = self.state.details[detail_name]
         else:
             return []
         if len(vector) == len(FEATURES):
@@ -551,8 +572,13 @@ class LLMDebugAdapter:
             return repr(self.state.output_vector)
         if expression == "delta":
             return repr(self._vector("delta"))
+        detail_expression = "normalized_input" if expression == "layernorm" else expression
+        if detail_expression in self.state.details:
+            return repr(self.state.details[detail_expression])
         indexed = re.fullmatch(
-            r"(input|output|residual|residual_stream|delta)\[(\d+)\]",
+            r"(input|output|residual|residual_stream|delta|layernorm|normalized_input|"
+            r"normalized_output|mlp_expansion_pre_activation|mlp_expansion|mlp_projection)"
+            r"\[(\d+)\]",
             expression,
         )
         if indexed:
@@ -578,22 +604,30 @@ class LLMDebugAdapter:
                     self.state.input_vector, self.state.output_vector, strict=True
                 )
             )
+        if name == "layernorm":
+            name = "normalized_input"
+        if name in self.state.details:
+            return self.state.details[name]
         raise ValueError(f"unknown vector: {name}")
 
     def _vector_snapshot(self) -> dict[str, Any]:
         input_vector = self._vector("input")
         residual = self._vector("residual_stream")
         delta = self._vector("delta")
+        vectors = {
+            "input": list(input_vector),
+            "residual_stream": list(residual),
+            "delta": list(delta),
+        }
+        vectors.update(
+            {name: list(vector) for name, vector in self.state.details.items()}
+        )
         return {
             "tokenPosition": self.token_index,
             "token": self.tokens[self.token_index],
             "layer": self.state.layer.name,
             "dimensions": len(residual),
-            "vectors": {
-                "input": list(input_vector),
-                "residual_stream": list(residual),
-                "delta": list(delta),
-            },
+            "vectors": vectors,
         }
 
     def run(self) -> None:

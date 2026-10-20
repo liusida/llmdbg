@@ -61,6 +61,13 @@ Command Palette or debug toolbar for an auto-updating dimension plot,
 activation histogram, and top-absolute-activation view. The debugger also
 exposes explicit **Residual stream (output)** and **Delta** scopes.
 
+Attention stops expose their 768D LayerNorm output. MLP stops additionally
+expose the 3072D linear expansion before activation, the 3072D expansion after
+GELU, and the 768D projection. These appear as debugger scopes and plot choices
+and support indexed Watches: `layernorm[42]`,
+`mlp_expansion_pre_activation[42]`, `mlp_expansion[42]`, and
+`mlp_projection[42]`.
+
 The prototype loads GPT-2 through `gb10-load-llm`, captures embedding,
 attention, and MLP outputs, and shows a logit-lens interpretation at every
 stop. The Debug Console supports `layer`, `operation`, `meaning`, `input`, and

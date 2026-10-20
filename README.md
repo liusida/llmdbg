@@ -89,6 +89,13 @@ Current Vector** from the Command Palette or debug toolbar to inspect the full
 vector as a dimension plot, histogram, or top-activation chart. An open plot
 updates automatically after each debugger stop.
 
+Attention stops additionally expose the 768D LayerNorm output used as the
+attention input. MLP stops expose the 768D LayerNorm output, the 3072D linear
+expansion before activation, the 3072D expansion after GELU, and the 768D
+projection. Use indexed Watches such as `layernorm[42]`,
+`mlp_expansion_pre_activation[42]`, `mlp_expansion[42]`, and
+`mlp_projection[42]`; all available vectors also appear in the plot selector.
+
 ## License
 
 MIT

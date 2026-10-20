@@ -268,6 +268,7 @@ def _capture_token_trace(
     model = runtime.model
     tokenizer = runtime.tokenizer
     captured: list[tuple[str, str, str, Any, bool]] = []
+    detailed: dict[str, dict[str, Any]] = {}
     handles = []
 
     def capture(name: str, operation: str, meaning: str, apply_final_norm: bool):
@@ -284,6 +285,13 @@ def _capture_token_trace(
 
         return hook
 
+    def capture_detail(state_name: str, detail_name: str):
+        def hook(_module, _inputs, output) -> None:
+            tensor = _tensor_from_output(output)
+            detailed.setdefault(state_name, {})[detail_name] = tensor.detach()
+
+        return hook
+
     handles.append(
         model.transformer.drop.register_forward_hook(
             capture(
@@ -295,19 +303,47 @@ def _capture_token_trace(
         )
     )
     for index, block in enumerate(model.transformer.h):
+        attention_name = f"transformer.h.{index}.attention"
+        mlp_name = f"transformer.h.{index}.mlp"
+        handles.append(
+            block.ln_1.register_forward_hook(
+                capture_detail(attention_name, "normalized_input")
+            )
+        )
         handles.append(
             block.ln_2.register_forward_pre_hook(
                 capture_input(
-                    f"transformer.h.{index}.attention",
+                    attention_name,
                     "causal self-attention + residual",
                     f"Block {index} has mixed information across prompt positions.",
                 )
             )
         )
         handles.append(
+            block.ln_2.register_forward_hook(
+                capture_detail(mlp_name, "normalized_input")
+            )
+        )
+        handles.append(
+            block.mlp.c_fc.register_forward_hook(
+                capture_detail(mlp_name, "mlp_expansion_pre_activation")
+            )
+        )
+        if hasattr(block.mlp.act, "register_forward_hook"):
+            handles.append(
+                block.mlp.act.register_forward_hook(
+                    capture_detail(mlp_name, "mlp_expansion")
+                )
+            )
+        handles.append(
+            block.mlp.c_proj.register_forward_hook(
+                capture_detail(mlp_name, "mlp_projection")
+            )
+        )
+        handles.append(
             block.register_forward_hook(
                 capture(
-                    f"transformer.h.{index}.mlp",
+                    mlp_name,
                     "feed-forward MLP + residual",
                     f"Block {index} has applied its learned feature transformation.",
                     True,
@@ -322,6 +358,11 @@ def _capture_token_trace(
                 "Normalizes the final residual stream before vocabulary projection.",
                 False,
             )
+        )
+    )
+    handles.append(
+        model.transformer.ln_f.register_forward_hook(
+            capture_detail("transformer.ln_f", "normalized_output")
         )
     )
 
@@ -355,6 +396,10 @@ def _capture_token_trace(
                 previous if previous is not None else output,
                 output,
                 interpretation,
+                {
+                    detail_name: _last_token_vector(detail_tensor)
+                    for detail_name, detail_tensor in detailed.get(name, {}).items()
+                },
             )
         )
         previous = output

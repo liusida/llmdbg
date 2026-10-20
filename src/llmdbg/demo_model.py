@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Mapping
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,7 @@ class LayerState:
     input_vector: tuple[float, ...]
     output_vector: tuple[float, ...]
     interpretation: str
+    details: Mapping[str, tuple[float, ...]] = field(default_factory=dict)
 
 
 LAYERS = (

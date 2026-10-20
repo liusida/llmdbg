@@ -67,7 +67,7 @@ function vectorPlotHtml(webview) {
 </head>
 <body>
   <header>
-    <label>Vector <select id="vector"><option value="residual_stream">Residual stream</option><option value="input">Input</option><option value="delta">Delta</option></select></label>
+    <label>Vector <select id="vector"></select></label>
     <label>View <select id="view"><option value="line">Dimensions</option><option value="histogram">Histogram</option><option value="top">Top |activation|</option></select></label>
     <span id="value">Hover a dimension</span>
   </header>
@@ -82,6 +82,12 @@ function vectorPlotHtml(webview) {
     const value = document.getElementById('value');
     let snapshot;
     let plotted = [];
+    const labels = {
+      residual_stream: 'Residual stream (output)', input: 'Residual stream (input)', delta: 'Residual delta',
+      normalized_input: 'LayerNorm output', normalized_output: 'Normalized output',
+      mlp_expansion_pre_activation: 'MLP expansion (pre-activation)',
+      mlp_expansion: 'MLP expansion (after GELU)', mlp_projection: 'MLP projection'
+    };
 
     function colors() {
       const css = getComputedStyle(document.documentElement);
@@ -153,6 +159,7 @@ function vectorPlotHtml(webview) {
       const surface = prepare();
       if (!snapshot) return;
       const values = snapshot.vectors[vectorSelect.value];
+      meta.textContent = 'token ' + snapshot.tokenPosition + ' ' + JSON.stringify(snapshot.token) + ' · ' + snapshot.layer + ' · ' + values.length + 'D';
       if (viewSelect.value === 'histogram') drawHistogram(values, surface);
       else if (viewSelect.value === 'top') drawTop(values, surface);
       else drawLine(values, surface);
@@ -161,7 +168,11 @@ function vectorPlotHtml(webview) {
     window.addEventListener('message', event => {
       if (event.data.type !== 'update') return;
       snapshot = event.data.data;
-      meta.textContent = 'token ' + snapshot.tokenPosition + ' ' + JSON.stringify(snapshot.token) + ' · ' + snapshot.layer + ' · ' + snapshot.dimensions + 'D';
+      const previous = vectorSelect.value;
+      vectorSelect.replaceChildren(...Object.keys(snapshot.vectors).map(name => {
+        const option = document.createElement('option'); option.value = name; option.textContent = labels[name] || name; return option;
+      }));
+      vectorSelect.value = Object.hasOwn(snapshot.vectors, previous) ? previous : 'residual_stream';
       draw();
     });
     vectorSelect.addEventListener('change', draw); viewSelect.addEventListener('change', draw);
