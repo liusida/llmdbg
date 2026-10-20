@@ -79,6 +79,8 @@ Use **Step Into (F11)** at an `attention()` or `mlp()` call to enter its
 definition above. The active line advances through the five internal operations
 with **F10**, while the outer call remains the parent stack frame. Use
 **Shift+F11** to finish the submodule and return to the next outer operation.
+Breakpoints can be placed directly on those internal operation lines; Continue
+enters the corresponding call and stops on the selected line.
 
 Set `token = 3` in the source to make that zero-based position the default for
 ordinary breakpoints. A conditional breakpoint such as `token=4` overrides the

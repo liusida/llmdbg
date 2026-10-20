@@ -485,15 +485,17 @@ class LLMDebugAdapter:
                 self._advance_outer()
         elif command == "continue":
             self.send_response(request, {"allThreadsContinued": True})
-            self.inside_mlp = False
-            self.inside_attention = False
             self._continue_to_breakpoint(include_current=False)
         elif command == "pause":
             self.send_response(request)
             self.stop("pause")
         elif command == "setBreakpoints":
             requested = [int(item.get("line", 0)) for item in arguments.get("breakpoints", [])]
-            valid_lines = sorted(set(self.source_lines))
+            valid_lines = sorted(
+                set(self.source_lines)
+                | set(self.mlp_source_lines)
+                | set(self.attention_source_lines)
+            )
             resolved = [
                 min(valid_lines, key=lambda candidate: abs(candidate - line))
                 if valid_lines and min(abs(candidate - line) for candidate in valid_lines) <= 2
@@ -511,7 +513,10 @@ class LLMDebugAdapter:
                     breakpoint.update(
                         {
                             "line": requested_line,
-                            "message": "Breakpoints must be set on a model operation call",
+                            "message": (
+                                "Breakpoints must be set on a model operation call "
+                                "or an attention/MLP operation"
+                            ),
                         }
                     )
                 else:
@@ -686,30 +691,47 @@ class LLMDebugAdapter:
         include_current: bool,
         before_start: bool = False,
     ) -> None:
-        """Advance in token-major order to the next matching source breakpoint."""
-        token_count = len(self.tokens)
-        if before_start:
-            start_token, start_layer = 0, 0
-        elif include_current:
-            start_token, start_layer = self.token_index, self.layer_index
-        else:
-            start_token, start_layer = self.token_index, self.layer_index + 1
-        for token_position in range(start_token, token_count):
-            layer_start = start_layer if token_position == start_token else 0
-            for layer_index in range(layer_start, len(self.source_lines)):
-                line = self.source_lines[layer_index]
-                if any(
-                    breakpoint.line == line
-                    and (
-                        breakpoint.token_position is None
-                        or breakpoint.token_position == token_position
+        """Advance in token-major order, including authored function-body operations."""
+        current_location = self.mlp_step_index + 1 if self.inside_internal else 0
+        current = (self.token_index, self.layer_index, current_location)
+        for token_position in range(len(self.tokens)):
+            for layer_index in range(len(self.source_lines)):
+                locations: list[tuple[int, int | None]] = [
+                    (self.source_lines[layer_index], None)
+                ]
+                path = self.step_paths[layer_index] if layer_index < len(self.step_paths) else ""
+                if path.endswith(".attention"):
+                    locations.extend(
+                        (line, index)
+                        for index, line in enumerate(self.attention_source_lines)
                     )
-                    for breakpoint in self.breakpoints
-                ):
-                    self._load_token(token_position)
-                    self.layer_index = layer_index
-                    self.stop("breakpoint")
-                    return
+                elif path.endswith(".mlp"):
+                    locations.extend(
+                        (line, index) for index, line in enumerate(self.mlp_source_lines)
+                    )
+                for location_index, (line, internal_index) in enumerate(locations):
+                    position = (token_position, layer_index, location_index)
+                    if not before_start and (
+                        position < current or (position == current and not include_current)
+                    ):
+                        continue
+                    if any(
+                        breakpoint.line == line
+                        and (
+                            breakpoint.token_position is None
+                            or breakpoint.token_position == token_position
+                        )
+                        for breakpoint in self.breakpoints
+                    ):
+                        self._load_token(token_position)
+                        self.layer_index = layer_index
+                        self.inside_attention = (
+                            path.endswith(".attention") and internal_index is not None
+                        )
+                        self.inside_mlp = path.endswith(".mlp") and internal_index is not None
+                        self.mlp_step_index = internal_index or 0
+                        self.stop("breakpoint")
+                        return
         self.terminate()
 
     def _variables(self, reference: int) -> list[dict[str, Any]]:

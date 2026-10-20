@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from llmdbg.dap import LLMDebugAdapter
+from llmdbg.dap import LLMDebugAdapter, SourceBreakpoint
 from llmdbg.demo_model import Layer, LayerState
 from llmdbg.model_runtime import NeuronProjection, TokenScore
 
@@ -287,6 +287,54 @@ class DAPIntegrationTest(unittest.TestCase):
         stopped = [message for message in messages if message.get("event") == "stopped"]
         self.assertEqual(stopped[0]["body"]["reason"], "breakpoint")
         self.assertEqual(responses[5]["body"]["stackFrames"][0]["line"], 10)
+
+    def test_continue_stops_at_an_internal_mlp_breakpoint(self) -> None:
+        adapter = object.__new__(LLMDebugAdapter)
+        adapter.tokens = ("a", "b")
+        adapter.source_lines = (10, 20)
+        adapter.step_paths = ("token_embedding", "transformer.h.0.mlp")
+        adapter.mlp_source_lines = (24, 25, 26, 27, 28)
+        adapter.attention_source_lines = ()
+        adapter.breakpoints = (SourceBreakpoint(27, 1),)
+        adapter.token_index = 0
+        adapter.layer_index = 0
+        adapter.inside_mlp = False
+        adapter.inside_attention = False
+        adapter.mlp_step_index = 0
+        adapter._load_token = lambda position: setattr(adapter, "token_index", position)
+        stops: list[str] = []
+        adapter.stop = stops.append
+
+        adapter._continue_to_breakpoint(include_current=True, before_start=True)
+
+        self.assertEqual(stops, ["breakpoint"])
+        self.assertEqual((adapter.token_index, adapter.layer_index), (1, 1))
+        self.assertTrue(adapter.inside_mlp)
+        self.assertFalse(adapter.inside_attention)
+        self.assertEqual(adapter.mlp_step_index, 3)
+
+    def test_continue_from_internal_breakpoint_reaches_later_internal_line(self) -> None:
+        adapter = object.__new__(LLMDebugAdapter)
+        adapter.tokens = ("a",)
+        adapter.source_lines = (20,)
+        adapter.step_paths = ("transformer.h.0.mlp",)
+        adapter.mlp_source_lines = (24, 25, 26, 27, 28)
+        adapter.attention_source_lines = ()
+        adapter.breakpoints = (SourceBreakpoint(27), SourceBreakpoint(28))
+        adapter.token_index = 0
+        adapter.layer_index = 0
+        adapter.inside_mlp = True
+        adapter.inside_attention = False
+        adapter.mlp_step_index = 3
+        adapter._load_token = lambda position: setattr(adapter, "token_index", position)
+        stops: list[str] = []
+        adapter.stop = stops.append
+
+        adapter._continue_to_breakpoint(include_current=False)
+
+        self.assertEqual(stops, ["breakpoint"])
+        self.assertTrue(adapter.inside_mlp)
+        self.assertEqual(adapter.mlp_step_index, 4)
 
     def test_layer_step_and_variables(self) -> None:
         requests = [
