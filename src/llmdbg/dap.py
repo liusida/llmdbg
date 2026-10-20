@@ -184,6 +184,7 @@ class LLMDebugAdapter:
                 )
                 self.tokens = self.execution.tokens
                 self._configure_model_source(arguments)
+                self.send_event("llmdbg/modelLoaded", {"model": str(model)})
             else:
                 self.trace = run_demo()
                 self.tokens = ("demo",)

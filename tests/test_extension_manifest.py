@@ -20,6 +20,7 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertEqual(manifest["contributes"]["breakpoints"][0]["language"], "llmdbg")
         command_ids = {command["command"] for command in manifest["contributes"]["commands"]}
         self.assertIn("llmdbg.plotCurrentVector", command_ids)
+        self.assertIn("llmdbg.unloadModel", command_ids)
 
     def test_extension_uses_a_private_runtime(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -37,6 +38,9 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn("activeLlmdbgFile", source)
         self.assertIn('customRequest("llmdbg/vector")', source)
         self.assertIn('registerCommand("llmdbg.plotCurrentVector"', source)
+        self.assertIn('registerCommand("llmdbg.unloadModel"', source)
+        self.assertIn("createStatusBarItem", source)
+        self.assertIn('event.event === "llmdbg/modelLoaded"', source)
         self.assertIn('event.event === "llmdbg/vectorChanged"', source)
         self.assertNotIn('path.join(".venv"', source)
 

@@ -2,7 +2,7 @@
   "name": "llmdbg",
   "displayName": "llmdbg",
   "description": "Step through LLM layers and inspect human-readable internal representations.",
-  "version": "0.0.19",
+  "version": "0.0.20",
   "publisher": "liusida",
   "license": "MIT",
   "repository": {
@@ -34,6 +34,11 @@
         "command": "llmdbg.plotCurrentVector",
         "title": "llmdbg: Plot Current Vector",
         "icon": "$(graph-line)"
+      },
+      {
+        "command": "llmdbg.unloadModel",
+        "title": "llmdbg: Unload Model",
+        "icon": "$(trash)"
       }
     ],
     "menus": {

@@ -193,6 +193,49 @@ function activate(context) {
   let hostPromise;
   let hostSource;
   let vectorPanel;
+  let residentModel;
+  const modelStatus = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Right,
+    100
+  );
+  modelStatus.command = "llmdbg.unloadModel";
+  modelStatus.show();
+
+  function updateModelStatus(model) {
+    residentModel = model;
+    if (model) {
+      const label = model.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || model;
+      modelStatus.text = `$(database) llmdbg: ${label} loaded`;
+      modelStatus.tooltip = `${model} is resident in the llmdbg model host. Click to unload it.`;
+    } else {
+      modelStatus.text = "$(circle-slash) llmdbg: no model loaded";
+      modelStatus.tooltip = "No model is resident in the llmdbg model host.";
+    }
+  }
+
+  function unloadModel() {
+    if (vscode.debug.activeDebugSession?.type === "llmdbg") {
+      vscode.window.showWarningMessage("Stop the llmdbg session before unloading its model.");
+      return;
+    }
+    if (!hostProcess || hostProcess.exitCode !== null) {
+      updateModelStatus(undefined);
+      vscode.window.showInformationMessage("llmdbg: no model is loaded.");
+      return;
+    }
+    const unloaded = residentModel;
+    const child = hostProcess;
+    hostProcess = undefined;
+    hostPromise = undefined;
+    hostSource = undefined;
+    child.kill();
+    updateModelStatus(undefined);
+    vscode.window.showInformationMessage(
+      unloaded ? `llmdbg: unloaded ${unloaded}.` : "llmdbg: model host stopped."
+    );
+  }
+
+  updateModelStatus(undefined);
 
   async function refreshVectorPlot(session = vscode.debug.activeDebugSession) {
     if (!vectorPanel || !session || session.type !== "llmdbg") {
@@ -315,6 +358,8 @@ function activate(context) {
         if (hostProcess === child) {
           hostProcess = undefined;
           hostPromise = undefined;
+          hostSource = undefined;
+          updateModelStatus(undefined);
         }
         reject(new Error(`llmdbg model host exited with code ${code}: ${stderr.trim()}`));
       });
@@ -354,11 +399,18 @@ function activate(context) {
       }
     }),
     vscode.commands.registerCommand("llmdbg.plotCurrentVector", showVectorPlot),
+    vscode.commands.registerCommand("llmdbg.unloadModel", unloadModel),
     vscode.debug.onDidReceiveDebugSessionCustomEvent((event) => {
-      if (event.session.type === "llmdbg" && event.event === "llmdbg/vectorChanged") {
+      if (event.session.type !== "llmdbg") {
+        return;
+      }
+      if (event.event === "llmdbg/modelLoaded") {
+        updateModelStatus(event.body.model);
+      } else if (event.event === "llmdbg/vectorChanged") {
         refreshVectorPlot(event.session);
       }
-    })
+    }),
+    modelStatus
   );
   context.subscriptions.push({
     dispose() {

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "llmdbg"
-version = "0.0.3a10"
+version = "0.0.3a11"
 description = "A debugger for stepping through LLM layers and interpreting internal representations."
 readme = "README.md"
 license = "MIT"
