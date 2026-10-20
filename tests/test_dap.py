@@ -237,10 +237,17 @@ class DAPIntegrationTest(unittest.TestCase):
         adapter.inside_mlp = True
         adapter.inside_attention = False
         adapter.mlp_step_index = 3
-        self.assertEqual(adapter._evaluate("hidden[1]"), "+2.50000000")
-        self.assertEqual(adapter._evaluate("hidden[:2]"), repr((1.5, 2.5)))
+        adapter.function_bindings = {
+            "mlp": [
+                {"name": "norm", "operation": "layernorm", "line": 1},
+                {"name": "features", "operation": "expansion", "line": 2},
+                {"name": "features", "operation": "gelu", "line": 3},
+            ]
+        }
+        self.assertEqual(adapter._evaluate("features[1]"), "+2.50000000")
+        self.assertEqual(adapter._evaluate("features[:2]"), repr((1.5, 2.5)))
         self.assertEqual(adapter._evaluate("x[1]"), "+2.00000000")
-        self.assertEqual(adapter._plot_vector("hidden[:2]"), (1.5, 2.5))
+        self.assertEqual(adapter._plot_vector("features[:2]"), (1.5, 2.5))
         self.assertEqual(adapter._plot_vector("x"), (1.0, 2.0))
         self.assertEqual(adapter._plot_vector("[1, 2.5, -3]"), (1.0, 2.5, -3.0))
 

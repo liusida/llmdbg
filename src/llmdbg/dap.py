@@ -119,6 +119,7 @@ class LLMDebugAdapter:
         self.mlp_source_lines: tuple[int, ...] = ()
         self.inside_attention = False
         self.attention_source_lines: tuple[int, ...] = ()
+        self.function_bindings: dict[str, list[dict[str, Any]]] = {}
 
     @property
     def internal_steps(self) -> tuple[tuple[str, str, str], ...]:
@@ -634,6 +635,7 @@ class LLMDebugAdapter:
         self.source_lines = tuple(int(step_lines[name]) for name in step_paths)
         self.step_paths = tuple(step_paths)
         functions = arguments.get("functions", {})
+        self.function_bindings = dict(arguments.get("functionBindings", {}))
         mlp_lines = functions.get("mlp", {}) if isinstance(functions, dict) else {}
         self.mlp_source_lines = tuple(int(mlp_lines.get(name, 0)) for name, _, _ in self.MLP_STEPS)
         if any(line <= 0 for line in self.mlp_source_lines):
@@ -1060,17 +1062,29 @@ class LLMDebugAdapter:
         return None
 
     def _source_expression(self, expression: str) -> str:
-        """Translate names from the Python model program into runtime vectors."""
+        """Resolve Python frame locals and debugger aliases to runtime vectors."""
+        aliases = {"x": "x", "residual_stream": "x"}
         if not getattr(self, "inside_internal", False):
-            return expression
-        if getattr(self, "inside_attention", False):
-            aliases = {
+            return self._replace_expression_name(expression, aliases)
+        function_name = "attention" if getattr(self, "inside_attention", False) else "mlp"
+        bindings = getattr(self, "function_bindings", {}).get(function_name, [])
+        operation_vectors = {
+            operation: vector for operation, vector, _meaning in self.internal_steps
+        }
+        completed = {
+            operation for operation, _vector, _meaning in self.internal_steps[: self.mlp_step_index]
+        }
+        for binding in bindings:
+            if binding.get("operation") in completed:
+                aliases[str(binding["name"])] = operation_vectors[str(binding["operation"])]
+        if not bindings and function_name == "attention":
+            aliases.update({
                 "normalized": "normalized_input",
                 "qkv": "attention_qkv",
                 "mixed": "attention_mixing",
                 "update": "attention_projection",
-            }
-        else:
+            })
+        elif not bindings:
             hidden = (
                 "mlp_expansion_pre_activation"
                 if self.mlp_step_index <= 2
@@ -1081,6 +1095,10 @@ class LLMDebugAdapter:
                 "hidden": hidden,
                 "update": "mlp_projection",
             }
+        return self._replace_expression_name(expression, aliases)
+
+    @staticmethod
+    def _replace_expression_name(expression: str, aliases: dict[str, str]) -> str:
         for alias, vector in aliases.items():
             if expression == alias or expression.startswith(alias + "["):
                 return vector + expression[len(alias):]
@@ -1176,6 +1194,8 @@ class LLMDebugAdapter:
             )
         if name == "layernorm":
             name = "normalized_input"
+        if getattr(self, "inside_internal", False) and name in self.outer_state.details:
+            return self.outer_state.details[name]
         if self.previous_state is not None and name in self.previous_state.details:
             return self.previous_state.details[name]
         raise ValueError(f"unknown vector: {name}")

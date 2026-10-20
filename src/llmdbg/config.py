@@ -67,6 +67,7 @@ def load_debug_config(path: str) -> dict[str, Any]:
     current_layer: int | None = None
     function_name: str | None = None
     functions: dict[str, dict[str, int]] = {}
+    function_bindings: dict[str, list[dict[str, Any]]] = {}
 
     for line_number, raw_line in enumerate(
         config_path.read_text(encoding="utf-8").splitlines(), start=1
@@ -191,6 +192,7 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
     token: int | None = None
     stop_on_entry = True
     functions: dict[str, dict[str, int]] = {}
+    function_bindings: dict[str, list[dict[str, Any]]] = {}
     call_lines: dict[str, int] = {}
     globals_: dict[str, Any] = {}
 
@@ -204,14 +206,31 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
                     globals_[target.id] = _literal(statement.value, target.id)
         elif isinstance(statement, ast.FunctionDef) and statement.name in _FUNCTION_OPERATIONS:
             operations: dict[str, int] = {}
+            bindings: list[dict[str, Any]] = []
             for node in ast.walk(statement):
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                     operation = node.func.attr
                     if operation in _FUNCTION_OPERATIONS[statement.name]:
                         operations.setdefault(operation, node.lineno)
+                if (
+                    isinstance(node, ast.Assign)
+                    and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and isinstance(node.value, ast.Call)
+                    and isinstance(node.value.func, ast.Attribute)
+                    and node.value.func.attr in _FUNCTION_OPERATIONS[statement.name]
+                ):
+                    bindings.append(
+                        {
+                            "name": node.targets[0].id,
+                            "operation": node.value.func.attr,
+                            "line": node.lineno,
+                        }
+                    )
                 elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
                     operations.setdefault("residual_add", node.lineno)
             functions[statement.name] = operations
+            function_bindings[statement.name] = sorted(bindings, key=lambda item: item["line"])
 
     for node in ast.walk(tree):
         if isinstance(node, ast.With):
@@ -259,4 +278,5 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
         "prompt": prompt, "defaultToken": token if token is not None else globals_.get("token"),
         "stopOnEntry": globals_.get("stop_on_entry", stop_on_entry),
         "pythonProgram": True, "callLines": call_lines, "functions": functions,
+        "functionBindings": function_bindings,
     }

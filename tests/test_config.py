@@ -43,6 +43,15 @@ with debug(model, tokens, token=token):
         self.assertEqual(config["defaultToken"], 1)
         self.assertEqual(config["callLines"]["attention"], 21)
         self.assertEqual(config["functions"]["mlp"]["gelu"], 15)
+        self.assertEqual(
+            config["functionBindings"]["mlp"],
+            [
+                {"name": "normalized", "operation": "layernorm", "line": 13},
+                {"name": "hidden", "operation": "expansion", "line": 14},
+                {"name": "hidden", "operation": "gelu", "line": 15},
+                {"name": "update", "operation": "projection", "line": 16},
+            ],
+        )
 
     def test_loads_ordered_llmdbg_source(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
