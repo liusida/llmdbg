@@ -130,7 +130,7 @@ function vectorPlotHtml(webview, extensionUri) {
         font: { color: colors.foreground }, xaxis: axis, yaxis: axis,
         bargap: 0.06, showlegend: false, hovermode: 'closest'
       }, {
-        responsive: true, displaylogo: false, scrollZoom: true,
+        responsive: true, displaylogo: false, scrollZoom: false,
         toImageButtonOptions: { format: 'png', filename: 'llmdbg-' + vectorSelect.value }
       });
     }
