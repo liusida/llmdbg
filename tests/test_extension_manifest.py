@@ -39,7 +39,9 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn("session.configuration.adapterSource", source)
         self.assertIn("registerDebugConfigurationProvider", source)
         self.assertIn("activeLlmdbgFile", source)
-        self.assertIn('customRequest("llmdbg/vector")', source)
+        self.assertIn('customRequest("llmdbg/plot"', source)
+        self.assertIn("context.globalState.get(PLOT_SNIPPETS_KEY", source)
+        self.assertIn('"matplotlib>=3.10,<4"', source)
         self.assertIn('registerCommand("llmdbg.plotCurrentVector"', source)
         self.assertIn('registerCommand("llmdbg.unloadModel"', source)
         self.assertIn('registerCommand("llmdbg.showModelStatus"', source)
@@ -48,7 +50,6 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn('event.event === "llmdbg/modelLoaded"', source)
         self.assertIn("modelBytes", source)
         self.assertIn("cudaAllocatedBytes", source)
-        self.assertIn('event.event === "llmdbg/vectorChanged"', source)
         self.assertNotIn('path.join(".venv"', source)
 
 

@@ -147,9 +147,11 @@ the next token using the updated cache.
 Watch one zero-based dimension with `residual_stream[42]`, `input[42]`,
 `output[42]`, or `delta[42]`. The **Residual stream (output)** debugger scope
 exposes the current hidden representation explicitly. Run **llmdbg: Plot
-Current Vector** from the Command Palette or debug toolbar to inspect the full
-vector as a dimension plot, histogram, or top-activation chart. An open plot
-updates automatically after each debugger stop.
+Current Vector** to open the Matplotlib workbench. Enter a vector expression
+such as `hidden`, `qkv`, `residual_stream`, or `hidden[:256]`, then choose or
+edit a named plotting snippet. Snippets are saved in VS Code extension storage;
+the included **Line plot** receives `vector`, `vector_name`, `plt`, and `np`.
+Pasted Python lists and tuples are also accepted as vectors.
 
 Attention stops expose the 768D LayerNorm output, combined 2304D QKV
 projection, 768D concatenated attention-head result, and 768D output
@@ -157,7 +159,7 @@ projection. MLP stops expose the 768D LayerNorm output, the 3072D linear
 expansion before activation, the 3072D expansion after GELU, and the 768D
 projection. Use indexed Watches such as `layernorm[42]`,
 `mlp_expansion_pre_activation[42]`, `mlp_expansion[42]`, and
-`mlp_projection[42]`; all available vectors also appear in the plot selector.
+`mlp_projection[42]`; any full vector or slice can be entered in the plot workbench.
 
 Expanding **Top activated neurons** at an MLP stop lazily ranks the five
 largest post-GELU activations. Each neuron shows its output-direction norm,

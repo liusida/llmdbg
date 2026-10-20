@@ -8,7 +8,15 @@ const util = require("util");
 const vscode = require("vscode");
 
 const execFile = util.promisify(childProcess.execFile);
-const RUNTIME_VERSION = "2";
+const RUNTIME_VERSION = "3";
+const PLOT_SNIPPETS_KEY = "llmdbg.plotSnippets";
+const DEFAULT_PLOT_CODE = `fig, ax = plt.subplots(figsize=(9, 2.6))
+ax.plot(vector, linewidth=1)
+ax.axhline(0, color="gray", linewidth=0.5)
+ax.set_xlabel("dimension")
+ax.set_ylabel("activation")
+ax.set_title(vector_name)
+fig.tight_layout()`;
 
 function runtimePython(runtimeRoot) {
   return process.platform === "win32"
@@ -48,107 +56,48 @@ function expandWorkspaceFolder(value, session) {
   return value.replaceAll("${workspaceFolder}", session.workspaceFolder.uri.fsPath);
 }
 
-function vectorPlotHtml(webview, extensionUri) {
+function vectorPlotHtml(webview) {
   const nonce = `${Date.now()}${Math.random().toString(36).slice(2)}`;
-  const plotlyUri = webview.asWebviewUri(
-    vscode.Uri.joinPath(extensionUri, "bundled", "vendor", "plotly.min.js")
-  );
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} 'nonce-${nonce}'; img-src data: blob:;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; img-src data:;">
   <style>
-    body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); padding: 8px; }
-    header { display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; }
-    select { color: var(--vscode-dropdown-foreground); background: var(--vscode-dropdown-background); border: 1px solid var(--vscode-dropdown-border); padding: 4px 8px; }
-    #meta { margin: 6px 0; color: var(--vscode-descriptionForeground); }
-    #plot { width: 100%; height: 220px; border: 1px solid var(--vscode-panel-border); }
+    body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); padding: 10px; }
+    .row { display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap; }
+    input, select, textarea, button { color:var(--vscode-input-foreground); background:var(--vscode-input-background); border:1px solid var(--vscode-input-border); padding:5px 7px; }
+    #expression { flex:1; min-width:220px; } #name { width:150px; }
+    textarea { width:100%; min-height:145px; box-sizing:border-box; font-family:var(--vscode-editor-font-family); resize:vertical; }
+    button { background:var(--vscode-button-background); color:var(--vscode-button-foreground); cursor:pointer; }
+    button.secondary { background:var(--vscode-button-secondaryBackground); color:var(--vscode-button-secondaryForeground); }
+    #status { min-height:20px; color:var(--vscode-descriptionForeground); }
+    #image { display:block; max-width:100%; background:white; border:1px solid var(--vscode-panel-border); }
   </style>
 </head>
 <body>
-  <header>
-    <label>Vector <select id="vector"></select></label>
-    <label>View <select id="view"><option value="line">Dimensions</option><option value="histogram">Histogram</option><option value="top">Top |activation|</option></select></label>
-  </header>
-  <div id="meta">Waiting for a stopped llmdbg session…</div>
-  <div id="plot"></div>
-  <script src="${plotlyUri}"></script>
+  <div class="row"><label for="expression">Vector</label><input id="expression" value="residual_stream" placeholder="hidden, qkv, residual_stream, hidden[:256]"><button id="plot">Plot</button></div>
+  <div class="row"><label for="snippets">Plot code</label><select id="snippets"></select><input id="name" placeholder="snippet name"><button id="save" class="secondary">Save as New</button><button id="delete" class="secondary">Delete</button></div>
+  <textarea id="code" spellcheck="false"></textarea>
+  <div id="status">Enter a vector expression and run a Matplotlib snippet.</div>
+  <img id="image" alt="Matplotlib plot preview">
   <script nonce="${nonce}">
-    const plot = document.getElementById('plot');
-    const vectorSelect = document.getElementById('vector');
-    const viewSelect = document.getElementById('view');
-    const meta = document.getElementById('meta');
-    let snapshot;
-    const labels = {
-      residual_stream: 'Residual stream (output)', input: 'Residual stream (input)', delta: 'Residual delta',
-      normalized_input: 'LayerNorm output', normalized_output: 'Normalized output',
-      mlp_expansion_pre_activation: 'MLP expansion (pre-activation)',
-      mlp_expansion: 'MLP expansion (after GELU)', mlp_projection: 'MLP projection'
-    };
-
-    function theme() {
-      const css = getComputedStyle(document.documentElement);
-      return {
-        foreground: css.getPropertyValue('--vscode-foreground').trim() || '#cccccc',
-        grid: css.getPropertyValue('--vscode-panel-border').trim() || '#555555',
-        positive: css.getPropertyValue('--vscode-charts-blue').trim() || '#3794ff',
-        negative: css.getPropertyValue('--vscode-charts-red').trim() || '#f14c4c'
-      };
-    }
-
-    function draw() {
-      if (!snapshot) return;
-      const values = snapshot.vectors[vectorSelect.value];
-      const colors = theme();
-      const indices = values.map((_item, index) => index);
-      const location = snapshot.previousLayer
-        ? 'after ' + snapshot.previousLayer + ' → before ' + snapshot.layer
-        : 'before ' + snapshot.layer;
-      meta.textContent = 'token ' + snapshot.tokenPosition + ' ' + JSON.stringify(snapshot.token) + ' · ' + location + ' · ' + values.length + 'D';
-      let trace;
-      if (viewSelect.value === 'histogram') {
-        trace = { type: 'histogram', x: values, nbinsx: 40, marker: { color: colors.positive }, hovertemplate: 'value %{x}<br>count %{y}<extra></extra>' };
-      } else if (viewSelect.value === 'top') {
-        const top = values.map((item, index) => ({ index, value: item }))
-          .sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, 20).reverse();
-        trace = {
-          type: 'bar', orientation: 'h', x: top.map(item => Math.abs(item.value)),
-          y: top.map(item => String(item.index)), customdata: top.map(item => item.value),
-          marker: { color: top.map(item => item.value >= 0 ? colors.positive : colors.negative) },
-          hovertemplate: 'dimension %{y}<br>value %{customdata:.8f}<extra></extra>'
-        };
-      } else {
-        trace = {
-          type: 'scatter', mode: 'lines', x: indices, y: values,
-          line: { color: colors.positive, width: 1.5 },
-          hovertemplate: 'dimension %{x}<br>value %{y:.8f}<extra></extra>'
-        };
-      }
-      const axis = { color: colors.foreground, gridcolor: colors.grid, zerolinecolor: colors.grid, automargin: true };
-      Plotly.react(plot, [trace], {
-        height: 220, margin: { l: 48, r: 12, t: 8, b: 34 },
-        paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { color: colors.foreground }, xaxis: { ...axis }, yaxis: { ...axis },
-        bargap: 0.06, showlegend: false, hovermode: 'closest'
-      }, {
-        responsive: true, displaylogo: false, scrollZoom: false,
-        toImageButtonOptions: { format: 'png', filename: 'llmdbg-' + vectorSelect.value }
-      });
-    }
-
+    const vscode = acquireVsCodeApi();
+    const expression = document.getElementById('expression'), snippets = document.getElementById('snippets');
+    const code = document.getElementById('code'), name = document.getElementById('name');
+    const status = document.getElementById('status'), image = document.getElementById('image');
+    let items = [];
+    function selectSnippet() { const item = items.find(x => x.name === snippets.value); if (item) code.value = item.code; }
     window.addEventListener('message', event => {
-      if (event.data.type !== 'update') return;
-      snapshot = event.data.data;
-      const previous = vectorSelect.value;
-      vectorSelect.replaceChildren(...Object.keys(snapshot.vectors).map(name => {
-        const option = document.createElement('option'); option.value = name; option.textContent = labels[name] || name; return option;
-      }));
-      vectorSelect.value = Object.hasOwn(snapshot.vectors, previous) ? previous : 'residual_stream';
-      draw();
+      if (event.data.type === 'snippets') { items = event.data.items; snippets.replaceChildren(...items.map(item => { const o=document.createElement('option'); o.value=item.name; o.textContent=item.name; return o; })); selectSnippet(); }
+      if (event.data.type === 'result') { image.src='data:image/png;base64,'+event.data.image; status.textContent=event.data.meta; }
+      if (event.data.type === 'error') status.textContent='Error: '+event.data.message;
     });
-    vectorSelect.addEventListener('change', draw); viewSelect.addEventListener('change', draw);
+    snippets.addEventListener('change', selectSnippet);
+    document.getElementById('plot').onclick=()=>{ status.textContent='Rendering…'; vscode.postMessage({type:'plot', expression:expression.value, code:code.value}); };
+    document.getElementById('save').onclick=()=>vscode.postMessage({type:'save', name:name.value, code:code.value});
+    document.getElementById('delete').onclick=()=>vscode.postMessage({type:'delete', name:snippets.value});
   </script>
 </body>
 </html>`;
@@ -177,7 +126,8 @@ async function createRuntime(context, runtimeRoot) {
           "pip", "install",
           "--python", python,
           "--upgrade",
-          "gb10-load-llm==0.1.2"
+          "gb10-load-llm==0.1.2",
+          "matplotlib>=3.10,<4"
         ],
         { maxBuffer: 10 * 1024 * 1024 }
       );
@@ -268,15 +218,15 @@ function activate(context) {
 
   updateModelStatus(undefined);
 
-  async function refreshVectorPlot(session = vscode.debug.activeDebugSession) {
-    if (!vectorPanel || !session || session.type !== "llmdbg") {
-      return;
-    }
-    try {
-      const data = await session.customRequest("llmdbg/vector");
-      await vectorPanel.webview.postMessage({ type: "update", data });
-    } catch (error) {
-      // A session can terminate while an asynchronous plot refresh is pending.
+  function plotSnippets() {
+    return context.globalState.get(PLOT_SNIPPETS_KEY, [
+      { name: "Line plot", code: DEFAULT_PLOT_CODE }
+    ]);
+  }
+
+  async function sendPlotSnippets() {
+    if (vectorPanel) {
+      await vectorPanel.webview.postMessage({ type: "snippets", items: plotSnippets() });
     }
   }
 
@@ -293,14 +243,49 @@ function activate(context) {
         vscode.ViewColumn.Beside,
         { enableScripts: true, retainContextWhenHidden: true }
       );
-      vectorPanel.webview.html = vectorPlotHtml(vectorPanel.webview, context.extensionUri);
+      vectorPanel.webview.html = vectorPlotHtml(vectorPanel.webview);
+      vectorPanel.webview.onDidReceiveMessage(async (message) => {
+        if (message.type === "plot") {
+          const active = vscode.debug.activeDebugSession;
+          if (!active || active.type !== "llmdbg") {
+            await vectorPanel.webview.postMessage({ type: "error", message: "Start and pause an llmdbg session first." });
+            return;
+          }
+          try {
+            const result = await active.customRequest("llmdbg/plot", {
+              expression: String(message.expression || "residual_stream"),
+              code: String(message.code || DEFAULT_PLOT_CODE)
+            });
+            await vectorPanel.webview.postMessage({ type: "result", ...result });
+          } catch (error) {
+            await vectorPanel.webview.postMessage({ type: "error", message: error.message });
+          }
+        } else if (message.type === "save") {
+          const snippetName = String(message.name || "").trim();
+          if (!snippetName) {
+            await vectorPanel.webview.postMessage({ type: "error", message: "Enter a snippet name." });
+            return;
+          }
+          const snippets = plotSnippets().filter(item => item.name !== snippetName);
+          snippets.push({ name: snippetName, code: String(message.code || "") });
+          await context.globalState.update(PLOT_SNIPPETS_KEY, snippets);
+          await sendPlotSnippets();
+        } else if (message.type === "delete") {
+          const snippets = plotSnippets().filter(item => item.name !== message.name);
+          await context.globalState.update(
+            PLOT_SNIPPETS_KEY,
+            snippets.length ? snippets : [{ name: "Line plot", code: DEFAULT_PLOT_CODE }]
+          );
+          await sendPlotSnippets();
+        }
+      }, null, context.subscriptions);
       vectorPanel.onDidDispose(() => {
         vectorPanel = undefined;
       }, null, context.subscriptions);
     } else {
       vectorPanel.reveal(vscode.ViewColumn.Beside, true);
     }
-    refreshVectorPlot(session);
+    sendPlotSnippets();
   }
 
   async function ensureRuntime() {
@@ -438,8 +423,6 @@ function activate(context) {
       }
       if (event.event === "llmdbg/modelLoaded") {
         updateModelStatus(event.body);
-      } else if (event.event === "llmdbg/vectorChanged") {
-        refreshVectorPlot(event.session);
       }
     }),
     modelStatus

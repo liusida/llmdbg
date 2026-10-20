@@ -2,7 +2,7 @@
   "name": "llmdbg",
   "displayName": "llmdbg",
   "description": "Step through LLM layers and inspect human-readable internal representations.",
-  "version": "0.0.32",
+  "version": "0.0.33",
   "publisher": "liusida",
   "license": "MIT",
   "repository": {
@@ -204,7 +204,5 @@
   "devDependencies": {
     "@vscode/vsce": "^4.0.0"
   },
-  "dependencies": {
-    "plotly.js-dist-min": "^3.1.1"
-  }
+  "dependencies": {}
 }

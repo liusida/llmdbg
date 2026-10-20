@@ -84,10 +84,11 @@ executes the selected token as a one-token cached forward pass. The **Token**
 scope shows its position, token ID, decoded text, and prompt prefix.
 
 Watch one zero-based dimension with `residual_stream[42]`, `output[42]`,
-`input[42]`, or `delta[42]`. Run **llmdbg: Plot Current Vector** from the
-Command Palette or debug toolbar for an auto-updating dimension plot,
-activation histogram, and top-absolute-activation view. The debugger also
-exposes explicit **Residual stream (output)** and **Delta** scopes.
+`input[42]`, or `delta[42]`. Run **llmdbg: Plot Current Vector** to open a
+Matplotlib workbench. Supply a vector expression or pasted list, select an
+editable named plotting snippet, and render a PNG. Snippets are persisted in
+VS Code extension storage and receive `vector`, `vector_name`, `plt`, and `np`.
+The debugger also exposes explicit **Residual stream (output)** and **Delta** scopes.
 
 Attention stops expose their 768D LayerNorm output, combined 2304D QKV
 projection, 768D attention-mixing result, and 768D output projection. Watch

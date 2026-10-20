@@ -239,6 +239,8 @@ class DAPIntegrationTest(unittest.TestCase):
         adapter.mlp_step_index = 3
         self.assertEqual(adapter._evaluate("hidden[1]"), "+2.50000000")
         self.assertEqual(adapter._evaluate("hidden[:2]"), repr((1.5, 2.5)))
+        self.assertEqual(adapter._plot_vector("hidden[:2]"), (1.5, 2.5))
+        self.assertEqual(adapter._plot_vector("[1, 2.5, -3]"), (1.0, 2.5, -3.0))
 
     def test_continue_stops_at_a_source_breakpoint(self) -> None:
         requests = [

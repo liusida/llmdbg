@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import ast
+import base64
+import io
 import re
 import sys
 from dataclasses import dataclass
@@ -454,6 +457,14 @@ class LLMDebugAdapter:
             self.send_event("invalidated", {"areas": ["variables", "watch"]})
         elif command == "llmdbg/vector":
             self.send_response(request, self._vector_snapshot())
+        elif command == "llmdbg/plot":
+            self.send_response(
+                request,
+                self._render_plot(
+                    str(arguments.get("expression", "residual_stream")),
+                    str(arguments.get("code", "")),
+                ),
+            )
         elif command in ("next", "stepIn", "stepOut"):
             self.send_response(request)
             can_enter_mlp = self.outer_state.layer.name.endswith(".mlp") and self.mlp_source_lines
@@ -1187,6 +1198,61 @@ class LLMDebugAdapter:
             ),
             "dimensions": len(residual),
             "vectors": vectors,
+        }
+
+    def _plot_vector(self, expression: str) -> tuple[float, ...]:
+        expression = self._source_expression(expression.strip().lower())
+        if expression.startswith("[") or expression.startswith("("):
+            value = ast.literal_eval(expression)
+            if not isinstance(value, (list, tuple)):
+                raise ValueError("pasted vector must be a list or tuple")
+            return tuple(float(item) for item in value)
+        match = re.fullmatch(
+            r"([a-z_][a-z0-9_]*)(?:\[(\d*)?:(\d*)?(?::(\d+))?\])?",
+            expression,
+        )
+        if match is None:
+            raise ValueError("vector must be a vector name, slice, list, or tuple")
+        name, raw_start, raw_stop, raw_step = match.groups()
+        vector = self._vector(name)
+        if "[" not in expression:
+            return vector
+        return vector[
+            slice(
+                int(raw_start) if raw_start else None,
+                int(raw_stop) if raw_stop else None,
+                int(raw_step) if raw_step else None,
+            )
+        ]
+
+    def _render_plot(self, expression: str, code: str) -> dict[str, Any]:
+        """Run an explicitly user-selected Matplotlib snippet and return a PNG."""
+        if not code.strip():
+            raise ValueError("plot code is empty")
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        vector = self._plot_vector(expression)
+        plt.close("all")
+        namespace: dict[str, Any] = {
+            "plt": plt,
+            "np": np,
+            "vector": np.asarray(vector, dtype=float),
+            "vector_name": expression,
+        }
+        exec(compile(code, "<llmdbg plot snippet>", "exec"), namespace, namespace)
+        figure = namespace.get("fig") or plt.gcf()
+        output = io.BytesIO()
+        figure.savefig(output, format="png", dpi=120, bbox_inches="tight")
+        plt.close("all")
+        return {
+            "image": base64.b64encode(output.getvalue()).decode("ascii"),
+            "meta": (
+                f"{expression} · {len(vector)}D · token {self.token_index} "
+                f"{self.tokens[self.token_index]!r} · {self.state.layer.name}"
+            ),
         }
 
     def run(self) -> None:
