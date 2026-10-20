@@ -1,0 +1,8 @@
+.env
+.venv/
+build/
+dist/
+dist-pypi/
+*.egg-info/
+__pycache__/
+*.py[cod]
