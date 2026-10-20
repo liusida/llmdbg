@@ -102,6 +102,9 @@ the top five tokens from `W_down[neuron] @ W_unembed`, and the top five direct
 token contributions after scaling by the current activation. Token IDs and
 decoded text are both displayed. Results are cached for the current token and
 layer.
+Add `top_neurons` to **Watch** to keep this tree visible while stepping; VS
+Code reevaluates it at every stop and preserves the expandable neuron/token
+structure. At non-MLP stops it reads `available at MLP stops`.
 
 ## License
 

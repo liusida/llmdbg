@@ -72,6 +72,8 @@ At an MLP stop, expand **Top activated neurons** to inspect the five largest
 post-GELU activations. Every neuron includes its output-direction norm, five
 direct vocabulary projections through `W_down @ W_unembed`, and five scores
 scaled by the current activation.
+Add `top_neurons` to **Watch** to keep the expandable neuron and token results
+updated while stepping between MLP stops.
 
 The prototype loads GPT-2 through `gb10-load-llm`, captures embedding,
 attention, and MLP outputs, and shows a logit-lens interpretation at every

@@ -311,11 +311,11 @@ class LLMDebugAdapter:
             self.send_response(request, {"variables": self._variables(reference)})
         elif command == "evaluate":
             expression = str(arguments.get("expression", "")).strip().lower()
-            result = self._evaluate(expression)
-            if result is None:
+            body = self._evaluate_body(expression)
+            if body is None:
                 self.send_response(request, success=False, message=f"Unknown expression: {expression}")
             else:
-                self.send_response(request, {"result": result, "variablesReference": 0})
+                self.send_response(request, body)
         elif command == "llmdbg/vector":
             self.send_response(request, self._vector_snapshot())
         elif command in ("next", "stepIn", "stepOut"):
@@ -706,6 +706,26 @@ class LLMDebugAdapter:
                 )
             return f"{vector[index]:+.8f}"
         return None
+
+    def _evaluate_body(self, expression: str) -> dict[str, Any] | None:
+        """Build a DAP evaluate result, including expandable synthetic values."""
+        if expression in ("top_neurons", "top_activated_neurons"):
+            if self.execution is None or "mlp_expansion" not in self.state.details:
+                return {
+                    "result": "available at MLP stops",
+                    "type": "MLP neurons",
+                    "variablesReference": 0,
+                }
+            return {
+                "result": "top 5 post-GELU activations",
+                "type": "MLP neurons",
+                "variablesReference": self.SCOPE_TOP_NEURONS,
+                "namedVariables": 5,
+            }
+        result = self._evaluate(expression)
+        if result is None:
+            return None
+        return {"result": result, "variablesReference": 0}
 
     def _vector(self, name: str) -> tuple[float, ...]:
         if name == "input":

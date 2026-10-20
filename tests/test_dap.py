@@ -80,6 +80,9 @@ class DAPIntegrationTest(unittest.TestCase):
         vocabulary = adapter._variables(adapter.TOKEN_REFERENCE)
         self.assertEqual(vocabulary[0]["name"], "token[42] ' answer'")
         self.assertEqual(vocabulary[0]["value"], "+1.25000000")
+        watch = adapter._evaluate_body("top_neurons")
+        self.assertEqual(watch["variablesReference"], adapter.SCOPE_TOP_NEURONS)
+        self.assertEqual(watch["namedVariables"], 5)
 
     def test_token_condition_parser(self) -> None:
         self.assertEqual(LLMDebugAdapter._parse_token_condition("token=4"), 4)
