@@ -66,6 +66,15 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn("cudaAllocatedBytes", source)
         self.assertNotIn('path.join(".venv"', source)
 
+    def test_neuron_lens_keeps_selected_mode_across_debug_stops(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "vscode-extension" / "extension.js").read_text()
+
+        self.assertIn('let neuronLensMode = "logit"', source)
+        self.assertIn('async function refreshNeuronLens(mode = neuronLensMode)', source)
+        self.assertIn("neuronLensMode = message.mode", source)
+        self.assertIn('event.event === "llmdbg/vectorChanged"', source)
+
 
 if __name__ == "__main__":
     unittest.main()

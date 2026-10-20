@@ -254,6 +254,7 @@ function activate(context) {
   let hostSource;
   let vectorPanel;
   let neuronLensPanel;
+  let neuronLensMode = "logit";
   let residentModel;
   const modelStatus = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Right,
@@ -441,7 +442,7 @@ function activate(context) {
     await sendPlotSnippets();
   }
 
-  async function refreshNeuronLens(mode = "logit") {
+  async function refreshNeuronLens(mode = neuronLensMode) {
     if (!neuronLensPanel) return;
     const active = vscode.debug.activeDebugSession;
     if (!active || active.type !== "llmdbg") {
@@ -462,13 +463,20 @@ function activate(context) {
       return;
     }
     if (!neuronLensPanel) {
+      neuronLensMode = "logit";
       neuronLensPanel = vscode.window.createWebviewPanel(
         "llmdbg.neuronLens", "llmdbg Neuron Lens", vscode.ViewColumn.Beside,
         { enableScripts: true, retainContextWhenHidden: true }
       );
       neuronLensPanel.webview.html = neuronLensHtml(neuronLensPanel.webview);
       neuronLensPanel.webview.onDidReceiveMessage(
-        message => message.type === "refresh" && refreshNeuronLens(message.mode), null, context.subscriptions
+        message => {
+          if (message.type !== "refresh") return;
+          if (["logit", "r-lens", "both"].includes(message.mode)) {
+            neuronLensMode = message.mode;
+          }
+          refreshNeuronLens();
+        }, null, context.subscriptions
       );
       neuronLensPanel.onDidDispose(() => { neuronLensPanel = undefined; }, null, context.subscriptions);
     } else {
