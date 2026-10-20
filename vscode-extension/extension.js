@@ -35,6 +35,38 @@ function bootstrapPython() {
   return process.platform === "win32" ? "python" : "python3";
 }
 
+function compareVersions(left, right) {
+  return new Intl.Collator("en", { numeric: true, sensitivity: "base" }).compare(left, right);
+}
+
+async function newestInstalledVersion(context) {
+  if (context.extensionUri.scheme !== "file") {
+    return context.extension.packageJSON.version;
+  }
+  const extensionParent = path.dirname(context.extensionPath);
+  const publisher = context.extension.packageJSON.publisher;
+  const name = context.extension.packageJSON.name;
+  const directoryPrefix = `${publisher}.${name}-`;
+  const versions = [];
+  for (const entry of await fs.promises.readdir(extensionParent, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith(directoryPrefix)) {
+      continue;
+    }
+    try {
+      const manifest = JSON.parse(
+        await fs.promises.readFile(path.join(extensionParent, entry.name, "package.json"), "utf8")
+      );
+      if (manifest.publisher === publisher && manifest.name === name && typeof manifest.version === "string") {
+        versions.push(manifest.version);
+      }
+    } catch {
+      // Other extensions and incomplete installs are expected in this directory.
+    }
+  }
+  versions.sort(compareVersions);
+  return versions.at(-1) || context.extension.packageJSON.version;
+}
+
 function uvExecutable() {
   return vscode.workspace.getConfiguration("llmdbg").get("uvPath", "uv").trim() || "uv";
 }
@@ -164,11 +196,14 @@ function activate(context) {
     if (updateReloadStarted || !vscode.workspace.getConfiguration("llmdbg").get("autoReloadAfterUpdate", true)) {
       return;
     }
-    const installed = vscode.extensions.getExtension(context.extension.id);
-    const installedVersion = installed?.packageJSON?.version;
-    if (installedVersion && installedVersion !== runningVersion) {
-      updateReloadStarted = true;
-      await vscode.commands.executeCommand("workbench.action.reloadWindow");
+    try {
+      const installedVersion = await newestInstalledVersion(context);
+      if (compareVersions(installedVersion, runningVersion) > 0) {
+        updateReloadStarted = true;
+        await vscode.commands.executeCommand("workbench.action.reloadWindow");
+      }
+    } catch {
+      // A transient filesystem error should not interfere with extension activation.
     }
   }
   const updatePoll = setInterval(reloadIfExtensionUpdated, 2000);
