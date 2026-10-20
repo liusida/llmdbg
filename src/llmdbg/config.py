@@ -11,6 +11,7 @@ from typing import Any
 _ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+?)\s*$")
 _BLOCK_SUBMODULE = re.compile(r"^transformer\.h\.(\d+)\.(attention|mlp)$")
 _FUNCTION = re.compile(r"^def\s+([A-Za-z_][A-Za-z0-9_]*)\(\):\s*$")
+_LAYER_CALL = re.compile(r"^(attention|mlp)\(\)\s*$")
 _MLP_OPERATIONS = ("layernorm", "expansion", "gelu", "projection", "residual_add")
 _GLOBAL_KEYS = {
     "model",
@@ -81,6 +82,18 @@ def load_debug_config(path: str) -> dict[str, Any]:
             functions[function_name][line] = line_number
             continue
         function_name = None
+        call_match = _LAYER_CALL.fullmatch(line)
+        if call_match:
+            if current_layer is None:
+                raise ValueError(
+                    f"line {line_number}: {call_match.group(1)}() requires layer = N first"
+                )
+            path = f"transformer.h.{current_layer}.{call_match.group(1)}"
+            if path in step_lines:
+                raise ValueError(f"line {line_number}: duplicate submodule {path!r}")
+            step_paths.append(path)
+            step_lines[path] = line_number
+            continue
         match = _ASSIGNMENT.fullmatch(line)
         if not match:
             raise ValueError(f"line {line_number}: expected name = value")

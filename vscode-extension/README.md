@@ -36,12 +36,12 @@ def mlp():
 submodule = "token_embedding"
 
 layer = 0
-submodule = "transformer.h.0.attention"
-submodule = "transformer.h.0.mlp"
+attention()
+mlp()
 
 layer = 1
-submodule = "transformer.h.1.attention"
-submodule = "transformer.h.1.mlp"
+attention()
+mlp()
 ```
 
 The extension can start directly from the active `.llmdbg` file, so a
@@ -51,14 +51,15 @@ The extension can start directly from the active `.llmdbg` file, so a
 The debugger keeps that same `.llmdbg` document active while stepping. Runtime
 state appears in the debugger panels; it does not create or switch to a second
 `*.execution.llmdbg` editor and never rewrites the configuration file.
-Each `submodule` statement selects a model execution stop and can receive a
-breakpoint. Repeated assignments are intentionally valid in the llmdbg source
-language; this file is not TOML. Unlisted model operations are omitted from
-the debug trace.
+After `layer = N`, each `attention()` or `mlp()` call selects the corresponding
+transformer-block operation and can receive a breakpoint. The older explicit
+`submodule = "transformer.h.N.mlp"` spelling remains supported. Repeated
+assignments are intentionally valid in the llmdbg source language; this file
+is not TOML. Unlisted model operations are omitted from the debug trace.
 
 Use **Step Into (F11)** at an MLP call to enter the `mlp()` definition above.
 The active line then advances through its five operations with **F10**, while
-the original `transformer.h.N.mlp` line remains the parent stack frame. Use
+the original `mlp()` call remains the parent stack frame. Use
 **Shift+F11** to finish the MLP and return to the next outer submodule.
 
 Set `token = 3` in the source to make that zero-based position the default for

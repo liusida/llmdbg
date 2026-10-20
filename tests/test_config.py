@@ -30,8 +30,8 @@ def mlp():
 
 submodule = "token_embedding"
 layer = 0
-submodule = "transformer.h.0.attention"
-submodule = "transformer.h.0.mlp"
+attention()
+mlp()
 """.strip()
             )
             config = load_debug_config(str(path))
@@ -48,6 +48,18 @@ submodule = "transformer.h.0.mlp"
             config["stepPaths"],
             ["token_embedding", "transformer.h.0.attention", "transformer.h.0.mlp"],
         )
+        self.assertEqual(config["stepLines"]["transformer.h.0.attention"], 18)
+        self.assertEqual(config["stepLines"]["transformer.h.0.mlp"], 19)
+
+    def test_rejects_layer_call_without_layer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "invalid.llmdbg"
+            path.write_text(
+                'model = "gpt2"\nprompt = "hello"\nattention()\n',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, r"attention\(\) requires layer = N"):
+                load_debug_config(str(path))
 
     def test_rejects_missing_model(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

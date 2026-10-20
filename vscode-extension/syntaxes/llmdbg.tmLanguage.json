@@ -18,7 +18,8 @@
     "functions": {
       "patterns": [
         { "name": "meta.function.llmdbg", "match": "^(def)\\s+([A-Za-z_][A-Za-z0-9_]*)(\\(\\))(:)", "captures": { "1": { "name": "storage.type.function.llmdbg" }, "2": { "name": "entity.name.function.llmdbg" }, "3": { "name": "punctuation.definition.parameters.llmdbg" }, "4": { "name": "punctuation.section.block.begin.llmdbg" } } },
-        { "name": "support.function.model-operation.llmdbg", "match": "^\\s+(?:layernorm|expansion|gelu|projection|residual_add)\\s*$" }
+        { "name": "support.function.model-operation.llmdbg", "match": "^\\s+(?:layernorm|expansion|gelu|projection|residual_add)\\s*$" },
+        { "name": "support.function.model-call.llmdbg", "match": "^(?:attention|mlp)(?=\\(\\))" }
       ]
     },
     "keys": {

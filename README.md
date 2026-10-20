@@ -46,12 +46,12 @@ def mlp():
 submodule = "token_embedding"
 
 layer = 0
-submodule = "transformer.h.0.attention"
-submodule = "transformer.h.0.mlp"
+attention()
+mlp()
 
 layer = 1
-submodule = "transformer.h.1.attention"
-submodule = "transformer.h.1.mlp"
+attention()
+mlp()
 ```
 
 Open that file and press **F5**. If VS Code asks for a debugger, choose
@@ -77,12 +77,13 @@ extension storage. It does not install anything into the workspace. The first
 GPT-2 run downloads and loads the model, then keeps its tensors resident in a
 persistent model-host process. Stopping and restarting the debugger reuses the
 resident model and runs only a new forward pass. Closing/reloading VS Code
-stops the host and releases the model. Each `submodule` statement is an
-authored model execution stop. Set breakpoints on these statements or use
+stops the host and releases the model. After `layer = N`, `attention()` and
+`mlp()` resolve to that transformer block and become authored execution stops.
+Set breakpoints on these calls or use
 **Step Over** to advance through them. Runtime vectors appear in debugger
 scopes; the source file is never rewritten.
 
-Press **Step Into (F11)** on any `transformer.h.N.mlp` statement to enter the
+Press **Step Into (F11)** on any `mlp()` call to enter the
 authored `mlp()` definition in the same file. **Step Over (F10)** then walks
 through LayerNorm, expansion, GELU, projection, and the residual add. The call
 site remains visible as the parent stack frame; **Step Out (Shift+F11)** returns

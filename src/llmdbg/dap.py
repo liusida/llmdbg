@@ -474,7 +474,7 @@ class LLMDebugAdapter:
                     breakpoint.update(
                         {
                             "line": requested_line,
-                            "message": "Breakpoints must be set on a submodule statement",
+                            "message": "Breakpoints must be set on a model operation call",
                         }
                     )
                 else:
