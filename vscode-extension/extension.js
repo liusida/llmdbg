@@ -48,40 +48,39 @@ function expandWorkspaceFolder(value, session) {
   return value.replaceAll("${workspaceFolder}", session.workspaceFolder.uri.fsPath);
 }
 
-function vectorPlotHtml(webview) {
+function vectorPlotHtml(webview, extensionUri) {
   const nonce = `${Date.now()}${Math.random().toString(36).slice(2)}`;
+  const plotlyUri = webview.asWebviewUri(
+    vscode.Uri.joinPath(extensionUri, "bundled", "vendor", "plotly.min.js")
+  );
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} 'nonce-${nonce}'; img-src data: blob:;">
   <style>
     body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); padding: 8px; }
     header { display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; }
     select { color: var(--vscode-dropdown-foreground); background: var(--vscode-dropdown-background); border: 1px solid var(--vscode-dropdown-border); padding: 4px 8px; }
-    #meta { margin: 8px 0; color: var(--vscode-descriptionForeground); }
-    canvas { width: 100%; height: 260px; border: 1px solid var(--vscode-panel-border); }
-    #value { min-width: 210px; font-family: var(--vscode-editor-font-family); }
+    #meta { margin: 6px 0; color: var(--vscode-descriptionForeground); }
+    #plot { width: 100%; height: 220px; border: 1px solid var(--vscode-panel-border); }
   </style>
 </head>
 <body>
   <header>
     <label>Vector <select id="vector"></select></label>
     <label>View <select id="view"><option value="line">Dimensions</option><option value="histogram">Histogram</option><option value="top">Top |activation|</option></select></label>
-    <span id="value">Hover a dimension</span>
   </header>
   <div id="meta">Waiting for a stopped llmdbg session…</div>
-  <canvas id="plot"></canvas>
+  <div id="plot"></div>
+  <script src="${plotlyUri}"></script>
   <script nonce="${nonce}">
-    const canvas = document.getElementById('plot');
-    const context = canvas.getContext('2d');
+    const plot = document.getElementById('plot');
     const vectorSelect = document.getElementById('vector');
     const viewSelect = document.getElementById('view');
     const meta = document.getElementById('meta');
-    const value = document.getElementById('value');
     let snapshot;
-    let plotted = [];
     const labels = {
       residual_stream: 'Residual stream (output)', input: 'Residual stream (input)', delta: 'Residual delta',
       normalized_input: 'LayerNorm output', normalized_output: 'Normalized output',
@@ -89,7 +88,7 @@ function vectorPlotHtml(webview) {
       mlp_expansion: 'MLP expansion (after GELU)', mlp_projection: 'MLP projection'
     };
 
-    function colors() {
+    function theme() {
       const css = getComputedStyle(document.documentElement);
       return {
         foreground: css.getPropertyValue('--vscode-foreground').trim() || '#cccccc',
@@ -99,70 +98,41 @@ function vectorPlotHtml(webview) {
       };
     }
 
-    function prepare() {
-      const ratio = window.devicePixelRatio || 1;
-      const rect = canvas.getBoundingClientRect();
-      canvas.width = Math.max(1, Math.floor(rect.width * ratio));
-      canvas.height = Math.max(1, Math.floor(rect.height * ratio));
-      context.setTransform(ratio, 0, 0, ratio, 0, 0);
-      context.clearRect(0, 0, rect.width, rect.height);
-      return { width: rect.width, height: rect.height, color: colors() };
-    }
-
-    function drawLine(values, surface) {
-      const pad = 36;
-      const width = surface.width - pad * 2;
-      const height = surface.height - pad * 2;
-      const maximum = Math.max(...values.map(item => Math.abs(item)), 1e-9);
-      const zero = pad + height / 2;
-      context.strokeStyle = surface.color.grid;
-      context.beginPath(); context.moveTo(pad, zero); context.lineTo(pad + width, zero); context.stroke();
-      context.strokeStyle = surface.color.positive;
-      context.beginPath();
-      values.forEach((item, index) => {
-        const x = pad + index * width / Math.max(1, values.length - 1);
-        const y = zero - item / maximum * height / 2;
-        if (index === 0) context.moveTo(x, y); else context.lineTo(x, y);
-      });
-      context.stroke();
-      plotted = values.map((item, index) => ({ index, value: item, x: pad + index * width / Math.max(1, values.length - 1) }));
-    }
-
-    function drawHistogram(values, surface) {
-      const bins = 40; const pad = 36;
-      const minimum = Math.min(...values); const maximum = Math.max(...values);
-      const span = Math.max(maximum - minimum, 1e-9); const counts = Array(bins).fill(0);
-      values.forEach(item => counts[Math.min(bins - 1, Math.floor((item - minimum) / span * bins))]++);
-      const peak = Math.max(...counts, 1); const width = surface.width - pad * 2; const height = surface.height - pad * 2;
-      counts.forEach((count, index) => {
-        const x = pad + index * width / bins; const barWidth = Math.max(1, width / bins - 1);
-        const barHeight = count / peak * height;
-        context.fillStyle = surface.color.positive; context.fillRect(x, pad + height - barHeight, barWidth, barHeight);
-      });
-      plotted = [];
-    }
-
-    function drawTop(values, surface) {
-      const top = values.map((item, index) => ({ index, value: item })).sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, 20);
-      const pad = 56; const width = surface.width - pad - 12; const row = (surface.height - 20) / top.length;
-      const maximum = Math.max(...top.map(item => Math.abs(item.value)), 1e-9);
-      context.font = '12px ' + getComputedStyle(document.documentElement).getPropertyValue('--vscode-editor-font-family');
-      top.forEach((item, rank) => {
-        const y = 8 + rank * row; context.fillStyle = surface.color.foreground; context.fillText(String(item.index), 4, y + row * 0.7);
-        context.fillStyle = item.value >= 0 ? surface.color.positive : surface.color.negative;
-        context.fillRect(pad, y, Math.abs(item.value) / maximum * width, Math.max(2, row - 3));
-      });
-      plotted = [];
-    }
-
     function draw() {
-      const surface = prepare();
       if (!snapshot) return;
       const values = snapshot.vectors[vectorSelect.value];
+      const colors = theme();
+      const indices = values.map((_item, index) => index);
       meta.textContent = 'token ' + snapshot.tokenPosition + ' ' + JSON.stringify(snapshot.token) + ' · ' + snapshot.layer + ' · ' + values.length + 'D';
-      if (viewSelect.value === 'histogram') drawHistogram(values, surface);
-      else if (viewSelect.value === 'top') drawTop(values, surface);
-      else drawLine(values, surface);
+      let trace;
+      if (viewSelect.value === 'histogram') {
+        trace = { type: 'histogram', x: values, nbinsx: 40, marker: { color: colors.positive }, hovertemplate: 'value %{x}<br>count %{y}<extra></extra>' };
+      } else if (viewSelect.value === 'top') {
+        const top = values.map((item, index) => ({ index, value: item }))
+          .sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, 20).reverse();
+        trace = {
+          type: 'bar', orientation: 'h', x: top.map(item => Math.abs(item.value)),
+          y: top.map(item => String(item.index)), customdata: top.map(item => item.value),
+          marker: { color: top.map(item => item.value >= 0 ? colors.positive : colors.negative) },
+          hovertemplate: 'dimension %{y}<br>value %{customdata:.8f}<extra></extra>'
+        };
+      } else {
+        trace = {
+          type: 'scattergl', mode: 'lines', x: indices, y: values,
+          line: { color: colors.positive, width: 1.5 },
+          hovertemplate: 'dimension %{x}<br>value %{y:.8f}<extra></extra>'
+        };
+      }
+      const axis = { color: colors.foreground, gridcolor: colors.grid, zerolinecolor: colors.grid, automargin: true };
+      Plotly.react(plot, [trace], {
+        height: 220, margin: { l: 48, r: 12, t: 8, b: 34 },
+        paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { color: colors.foreground }, xaxis: axis, yaxis: axis,
+        bargap: 0.06, showlegend: false, hovermode: 'closest'
+      }, {
+        responsive: true, displaylogo: false, scrollZoom: true,
+        toImageButtonOptions: { format: 'png', filename: 'llmdbg-' + vectorSelect.value }
+      });
     }
 
     window.addEventListener('message', event => {
@@ -176,13 +146,6 @@ function vectorPlotHtml(webview) {
       draw();
     });
     vectorSelect.addEventListener('change', draw); viewSelect.addEventListener('change', draw);
-    window.addEventListener('resize', draw);
-    canvas.addEventListener('mousemove', event => {
-      if (!plotted.length) return;
-      const x = event.clientX - canvas.getBoundingClientRect().left;
-      const nearest = plotted.reduce((best, item) => Math.abs(item.x - x) < Math.abs(best.x - x) ? item : best);
-      value.textContent = vectorSelect.value + '[' + nearest.index + '] = ' + nearest.value.toFixed(8);
-    });
   </script>
 </body>
 </html>`;
@@ -256,7 +219,7 @@ function activate(context) {
         vscode.ViewColumn.Beside,
         { enableScripts: true, retainContextWhenHidden: true }
       );
-      vectorPanel.webview.html = vectorPlotHtml(vectorPanel.webview);
+      vectorPanel.webview.html = vectorPlotHtml(vectorPanel.webview, context.extensionUri);
       vectorPanel.onDidDispose(() => {
         vectorPanel = undefined;
       }, null, context.subscriptions);
