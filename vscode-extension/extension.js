@@ -157,6 +157,25 @@ async function createRuntime(context, runtimeRoot) {
 }
 
 function activate(context) {
+  const runningVersion = context.extension.packageJSON.version;
+  let updateReloadStarted = false;
+  async function reloadIfExtensionUpdated() {
+    if (updateReloadStarted || !vscode.workspace.getConfiguration("llmdbg").get("autoReloadAfterUpdate", true)) {
+      return;
+    }
+    const installed = vscode.extensions.getExtension(context.extension.id);
+    const installedVersion = installed?.packageJSON?.version;
+    if (installedVersion && installedVersion !== runningVersion) {
+      updateReloadStarted = true;
+      await vscode.commands.executeCommand("workbench.action.reloadWindow");
+    }
+  }
+  const updatePoll = setInterval(reloadIfExtensionUpdated, 2000);
+  context.subscriptions.push(
+    vscode.extensions.onDidChange(reloadIfExtensionUpdated),
+    { dispose: () => clearInterval(updatePoll) }
+  );
+
   const runtimeRoot = path.join(context.globalStorageUri.fsPath, "runtime");
   let runtimePromise;
   let hostProcess;

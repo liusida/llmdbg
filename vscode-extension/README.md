@@ -7,6 +7,9 @@ opened workspace's virtual environment. The private environment owns the model
 runtime dependencies, including `gb10-load-llm`, Transformers, and PyTorch.
 Environment creation and dependency installation use `uv`, allowing cached
 packages to be shared efficiently across environments.
+After this release is active, installing a newer llmdbg VSIX automatically
+reloads the VS Code window by default. Set `llmdbg.autoReloadAfterUpdate` to
+`false` to opt out.
 
 ## Prototype quick start
 

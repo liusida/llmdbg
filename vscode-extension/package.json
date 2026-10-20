@@ -2,7 +2,7 @@
   "name": "llmdbg",
   "displayName": "llmdbg",
   "description": "Step through LLM layers and inspect human-readable internal representations.",
-  "version": "0.0.34",
+  "version": "0.0.35",
   "publisher": "liusida",
   "license": "MIT",
   "repository": {
@@ -193,6 +193,11 @@
           "type": "string",
           "default": "",
           "description": "Development-only source directory containing the llmdbg Python package. Published use defaults to the bundled adapter."
+        },
+        "llmdbg.autoReloadAfterUpdate": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically reload the VS Code window when a newly installed llmdbg extension version is detected."
         }
       }
     }
