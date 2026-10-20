@@ -16,6 +16,7 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertEqual(manifest["main"], "./extension.js")
         self.assertIn("bundled/**", manifest["files"])
         self.assertIn("stage-adapter", manifest["scripts"])
+        self.assertEqual(manifest["contributes"]["languages"][0]["extensions"], [".llmdbg"])
 
     def test_extension_uses_a_private_runtime(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -28,6 +29,8 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn('"pip", "install"', source)
         self.assertIn('get("uvPath", "uv")', source)
         self.assertIn("session.configuration.adapterSource", source)
+        self.assertIn("registerDebugConfigurationProvider", source)
+        self.assertIn("activeLlmdbgFile", source)
         self.assertNotIn('path.join(".venv"', source)
 
 

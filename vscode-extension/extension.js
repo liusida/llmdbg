@@ -31,6 +31,23 @@ function uvExecutable() {
   return vscode.workspace.getConfiguration("llmdbg").get("uvPath", "uv").trim() || "uv";
 }
 
+function activeLlmdbgFile() {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || editor.document.uri.scheme !== "file") {
+    return undefined;
+  }
+  return editor.document.fileName.endsWith(".llmdbg")
+    ? editor.document.fileName
+    : undefined;
+}
+
+function expandWorkspaceFolder(value, session) {
+  if (!value || !session.workspaceFolder) {
+    return value;
+  }
+  return value.replaceAll("${workspaceFolder}", session.workspaceFolder.uri.fsPath);
+}
+
 async function createRuntime(context, runtimeRoot) {
   await fs.promises.mkdir(context.globalStorageUri.fsPath, { recursive: true });
   await vscode.window.withProgress(
@@ -95,9 +112,10 @@ function activate(context) {
   const factory = {
     async createDebugAdapterDescriptor(session) {
       const python = await ensureRuntime();
-      const configuredSource = session.configuration.adapterSource;
+      const configuredSource = session.configuration.adapterSource
+        || vscode.workspace.getConfiguration("llmdbg").get("developmentSourcePath", "");
       const bundledRoot = configuredSource
-        ? path.resolve(configuredSource)
+        ? path.resolve(expandWorkspaceFolder(configuredSource, session))
         : path.join(context.extensionPath, "bundled");
       if (!fs.existsSync(path.join(bundledRoot, "llmdbg", "dap.py"))) {
         throw new Error(`llmdbg adapter source not found under ${bundledRoot}`);
@@ -121,7 +139,30 @@ function activate(context) {
     }
   };
   context.subscriptions.push(
-    vscode.debug.registerDebugAdapterDescriptorFactory("llmdbg", factory)
+    vscode.debug.registerDebugAdapterDescriptorFactory("llmdbg", factory),
+    vscode.debug.registerDebugConfigurationProvider("llmdbg", {
+      provideDebugConfigurations() {
+        const config = activeLlmdbgFile();
+        return config
+          ? [{ type: "llmdbg", request: "launch", name: "llmdbg: Active file", config }]
+          : [];
+      },
+      resolveDebugConfiguration(_folder, config) {
+        const activeConfig = activeLlmdbgFile();
+        if (!config.type && activeConfig) {
+          return {
+            type: "llmdbg",
+            request: "launch",
+            name: "llmdbg: Active file",
+            config: activeConfig
+          };
+        }
+        if (config.type === "llmdbg" && !config.config && activeConfig) {
+          config.config = activeConfig;
+        }
+        return config;
+      }
+    })
   );
 }
 

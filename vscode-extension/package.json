@@ -2,7 +2,7 @@
   "name": "llmdbg",
   "displayName": "llmdbg",
   "description": "Step through LLM layers and inspect human-readable internal representations.",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "publisher": "liusida",
   "license": "MIT",
   "repository": {
@@ -25,20 +25,39 @@
     "bundled/**",
     "LICENSE",
     "README.md",
-    "package.json"
+    "package.json",
+    "syntaxes/**"
   ],
   "contributes": {
+    "languages": [
+      {
+        "id": "llmdbg",
+        "aliases": ["llmdbg", "LLM Debug Configuration"],
+        "extensions": [".llmdbg"]
+      }
+    ],
+    "grammars": [
+      {
+        "language": "llmdbg",
+        "scopeName": "source.llmdbg",
+        "path": "./syntaxes/llmdbg.tmLanguage.json"
+      }
+    ],
     "debuggers": [
       {
         "type": "llmdbg",
         "label": "llmdbg",
         "languages": [
-          "python"
+          "llmdbg"
         ],
         "configurationAttributes": {
           "launch": {
             "required": [],
             "properties": {
+              "config": {
+                "type": "string",
+                "description": "Path to the .llmdbg TOML configuration."
+              },
               "stopOnEntry": {
                 "type": "boolean",
                 "description": "Stop after the first model layer.",
@@ -77,19 +96,19 @@
           {
             "type": "llmdbg",
             "request": "launch",
-            "name": "llmdbg: Demo model",
-            "stopOnEntry": true
+            "name": "llmdbg: Active file",
+            "config": "${file}"
           }
         ],
         "configurationSnippets": [
           {
-            "label": "llmdbg: Demo model",
-            "description": "Step through the built-in model layer by layer.",
+            "label": "llmdbg: Active file",
+            "description": "Debug the active .llmdbg configuration.",
             "body": {
               "type": "llmdbg",
               "request": "launch",
-              "name": "llmdbg: Demo model",
-              "stopOnEntry": true
+              "name": "llmdbg: Active file",
+              "config": "${file}"
             }
           }
         ]
@@ -107,6 +126,11 @@
           "type": "string",
           "default": "uv",
           "description": "uv executable used to create and update llmdbg's private environment."
+        },
+        "llmdbg.developmentSourcePath": {
+          "type": "string",
+          "default": "",
+          "description": "Development-only source directory containing the llmdbg Python package. Published use defaults to the bundled adapter."
         }
       }
     }

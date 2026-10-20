@@ -51,7 +51,7 @@ class DAPIntegrationTest(unittest.TestCase):
         self.assertIn("token_embedding", responses[5]["body"]["stackFrames"][0]["name"])
         source = responses[5]["body"]["stackFrames"][0]["source"]
         self.assertEqual(source["sourceReference"], 1)
-        self.assertTrue(source["name"].endswith(".llmdbg.toml"))
+        self.assertTrue(source["name"].endswith(".execution.llmdbg"))
         layer_variables = responses[7]["body"]["variables"]
         self.assertTrue(any(variable["name"] == "meaning" for variable in layer_variables))
         self.assertEqual(responses[9]["body"]["result"], "attention_0")

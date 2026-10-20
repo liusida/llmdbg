@@ -10,17 +10,36 @@ packages to be shared efficiently across environments.
 
 ## Prototype quick start
 
-1. Install this extension's VSIX.
-2. Open **Run and Debug**, select **llmdbg: Demo model**, and press **F5**.
+1. Create or open a `.llmdbg` file containing the model and input settings.
+2. Press **F5** while that file is active. If prompted, select **llmdbg**.
 3. Wait for the private debugger environment to be created on first use.
 4. Expand **Variables** and use **Step Over** to advance through model layers.
 
-With a `model` launch setting, the prototype loads GPT-2 through
-`gb10-load-llm`, captures embeddings and transformer-block outputs, and shows a
-logit-lens interpretation at every stop. Without `model`, it runs a
-deterministic built-in trace. The Debug Console supports `layer`, `operation`,
-`meaning`, `input`, and `output`.
+For example:
 
-During extension development, set `adapterSource` in `launch.json` to the
-directory containing the `llmdbg` Python package. Python changes are then used
-on the next debug session without rebuilding the VSIX.
+```toml
+[model]
+id = "openai-community/gpt2"
+revision = "main"
+device = "cuda"
+dtype = "bfloat16"
+
+[input]
+prompt = "The capital of France is"
+
+[debug]
+stop_on_entry = true
+```
+
+The extension can start directly from the active `.llmdbg` file, so a
+`launch.json` is optional. If one is used, it only needs a `llmdbg` launch with
+`"config": "${file}"`.
+
+The prototype loads GPT-2 through `gb10-load-llm`, captures embedding,
+attention, and MLP outputs, and shows a logit-lens interpretation at every
+stop. The Debug Console supports `layer`, `operation`, `meaning`, `input`, and
+`output`.
+
+During extension development, set `llmdbg.developmentSourcePath` in workspace
+settings to the directory containing the `llmdbg` Python package. Python
+changes are then used on the next debug session without rebuilding the VSIX.
