@@ -23,7 +23,8 @@ class ExtensionManifestTest(unittest.TestCase):
         source = (root / "vscode-extension" / "extension.js").read_text()
 
         self.assertIn("context.globalStorageUri.fsPath", source)
-        self.assertIn('["-m", "llmdbg.dap"]', source)
+        self.assertIn('["-m", "llmdbg.host"', source)
+        self.assertIn('new vscode.DebugAdapterServer(port, "127.0.0.1")', source)
         self.assertIn('"gb10-load-llm==0.1.2"', source)
         self.assertIn('["venv", "--python", bootstrapPython(), runtimeRoot]', source)
         self.assertIn('"pip", "install"', source)

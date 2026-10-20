@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from threading import RLock
 from typing import Any
 
 from llmdbg.demo_model import Layer, LayerState
@@ -15,6 +16,68 @@ class ModelTrace:
 
     states: tuple[LayerState, ...]
     tokens: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ModelRuntime:
+    """A tokenizer and GPU-resident model reusable across debug sessions."""
+
+    model: Any
+    tokenizer: Any
+
+
+_runtime_lock = RLock()
+_runtime_key: tuple[str, str, str, str] | None = None
+_runtime: ModelRuntime | None = None
+
+
+def _get_model_runtime(
+    model_name_or_path: str,
+    *,
+    revision: str,
+    device: str,
+    dtype: str,
+    progress: Callable[[str], None],
+) -> ModelRuntime:
+    """Return the matching resident model, loading it only on a cache miss."""
+    global _runtime, _runtime_key
+    key = (model_name_or_path, revision, device, dtype)
+    if _runtime is not None and _runtime_key == key:
+        progress(f"Reusing resident {model_name_or_path} model tensors.\n")
+        return _runtime
+
+    import torch
+    from gb10_load_llm import from_pretrained_to_cuda
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    if _runtime is not None:
+        progress("Model configuration changed; releasing the previous resident model.\n")
+        _runtime = None
+        _runtime_key = None
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    torch_dtype = {
+        "bfloat16": torch.bfloat16,
+        "float16": torch.float16,
+        "float32": torch.float32,
+    }[dtype]
+    progress(f"Downloading tokenizer for {model_name_or_path}...\n")
+    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, revision=revision)
+    progress(f"Loading {model_name_or_path} tensors through gb10-load-llm...\n")
+    model = from_pretrained_to_cuda(
+        AutoModelForCausalLM,
+        model_name_or_path,
+        revision=revision,
+        dtype=torch_dtype,
+        device=device,
+        touch="auto",
+    )
+    model.eval()
+    runtime = ModelRuntime(model=model, tokenizer=tokenizer)
+    _runtime = runtime
+    _runtime_key = key
+    return runtime
 
 
 def _tensor_from_output(output: Any):
@@ -65,8 +128,8 @@ def load_model_trace(
     """
     try:
         import torch
-        from gb10_load_llm import from_pretrained_to_cuda
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+        import gb10_load_llm  # noqa: F401 - validates the private runtime
+        import transformers  # noqa: F401 - validates the private runtime
     except ImportError as error:
         raise RuntimeError(
             "The private llmdbg environment is missing model dependencies. "
@@ -80,26 +143,33 @@ def load_model_trace(
     if device == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested, but torch.cuda.is_available() is false")
 
-    torch_dtype = {
-        "bfloat16": torch.bfloat16,
-        "float16": torch.float16,
-        "float32": torch.float32,
-    }[dtype]
     report = progress or (lambda _message: None)
 
-    report(f"Downloading tokenizer for {model_name_or_path}...\n")
-    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, revision=revision)
-    report(f"Loading {model_name_or_path} tensors through gb10-load-llm...\n")
-    model = from_pretrained_to_cuda(
-        AutoModelForCausalLM,
-        model_name_or_path,
-        revision=revision,
-        dtype=torch_dtype,
-        device=device,
-        touch="auto",
-    )
-    model.eval()
+    # Forward hooks mutate model state temporarily, so loading and tracing share
+    # one lock even if multiple editor windows connect to the host concurrently.
+    with _runtime_lock:
+        runtime = _get_model_runtime(
+            model_name_or_path,
+            revision=revision,
+            device=device,
+            dtype=dtype,
+            progress=report,
+        )
+        return _capture_trace(runtime, prompt=prompt, device=device, progress=report)
 
+
+def _capture_trace(
+    runtime: ModelRuntime,
+    *,
+    prompt: str,
+    device: str,
+    progress: Callable[[str], None],
+) -> ModelTrace:
+    """Run one prompt through an already resident GPT-2 model."""
+    import torch
+
+    model = runtime.model
+    tokenizer = runtime.tokenizer
     if getattr(model.config, "model_type", None) != "gpt2":
         raise ValueError(
             f"the prototype currently supports GPT-2 models, got {model.config.model_type!r}"
@@ -169,7 +239,7 @@ def load_model_trace(
             tokenizer.decode([token_id]) for token_id in inputs["input_ids"][0].tolist()
         )
         inputs = {name: tensor.to(device) for name, tensor in inputs.items()}
-        report(f"Running forward pass for {len(inputs['input_ids'][0])} prompt tokens...\n")
+        progress(f"Running forward pass for {len(inputs['input_ids'][0])} prompt tokens...\n")
         with torch.inference_mode():
             model(**inputs)
     finally:
@@ -194,5 +264,5 @@ def load_model_trace(
         )
         previous = output
 
-    report(f"Captured {len(states)} GPT-2 layer states.\n")
+    progress(f"Captured {len(states)} GPT-2 layer states.\n")
     return ModelTrace(tuple(states), tokens)

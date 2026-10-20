@@ -61,8 +61,11 @@ is preferred, the complete minimal version is:
 
 On first use, the extension creates a private Python environment in VS Code's
 extension storage. It does not install anything into the workspace. The first
-GPT-2 run downloads the model into the normal Hugging Face cache. Use **Step
-Over** to advance through embedding, attention, and MLP steps.
+GPT-2 run downloads and loads the model, then keeps its tensors resident in a
+persistent model-host process. Stopping and restarting the debugger reuses the
+resident model and runs only a new forward pass. Closing/reloading VS Code
+stops the host and releases the model. Use **Step Over** to advance through
+embedding, attention, and MLP steps.
 
 ## License
 

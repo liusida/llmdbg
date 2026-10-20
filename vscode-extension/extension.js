@@ -86,6 +86,9 @@ async function createRuntime(context, runtimeRoot) {
 function activate(context) {
   const runtimeRoot = path.join(context.globalStorageUri.fsPath, "runtime");
   let runtimePromise;
+  let hostProcess;
+  let hostPromise;
+  let hostSource;
 
   async function ensureRuntime() {
     const python = runtimePython(runtimeRoot);
@@ -109,33 +112,81 @@ function activate(context) {
     return runtimePromise;
   }
 
+  function adapterSource(session) {
+    const configuredSource = session.configuration.adapterSource
+      || vscode.workspace.getConfiguration("llmdbg").get("developmentSourcePath", "");
+    return configuredSource
+      ? path.resolve(expandWorkspaceFolder(configuredSource, session))
+      : path.join(context.extensionPath, "bundled");
+  }
+
+  async function ensureHost(session) {
+    const python = await ensureRuntime();
+    const bundledRoot = adapterSource(session);
+    if (!fs.existsSync(path.join(bundledRoot, "llmdbg", "host.py"))) {
+      throw new Error(`llmdbg adapter source not found under ${bundledRoot}`);
+    }
+    if (hostProcess && hostProcess.exitCode === null && hostSource === bundledRoot) {
+      return hostPromise;
+    }
+    if (hostProcess && hostProcess.exitCode === null) {
+      hostProcess.kill();
+    }
+
+    const inheritedPythonPath = process.env.PYTHONPATH;
+    const pythonPath = inheritedPythonPath
+      ? `${bundledRoot}${path.delimiter}${inheritedPythonPath}`
+      : bundledRoot;
+    hostSource = bundledRoot;
+    const child = childProcess.spawn(
+      python,
+      ["-m", "llmdbg.host", "--host", "127.0.0.1", "--port", "0"],
+      {
+        cwd: session.workspaceFolder ? session.workspaceFolder.uri.fsPath : os.homedir(),
+        env: {
+          ...process.env,
+          PYTHONNOUSERSITE: "1",
+          PYTHONPATH: pythonPath
+        },
+        stdio: ["ignore", "pipe", "pipe"]
+      }
+    );
+    hostProcess = child;
+    hostPromise = new Promise((resolve, reject) => {
+      let stdout = "";
+      let stderr = "";
+      const timeout = setTimeout(() => reject(new Error("llmdbg model host did not start in time")), 30000);
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk.toString();
+        const match = stdout.match(/LLMDBG_HOST_READY (\d+)/);
+        if (match) {
+          clearTimeout(timeout);
+          resolve(Number(match[1]));
+        }
+      });
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk.toString();
+      });
+      child.once("error", (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+      child.once("exit", (code) => {
+        clearTimeout(timeout);
+        if (hostProcess === child) {
+          hostProcess = undefined;
+          hostPromise = undefined;
+        }
+        reject(new Error(`llmdbg model host exited with code ${code}: ${stderr.trim()}`));
+      });
+    });
+    return hostPromise;
+  }
+
   const factory = {
     async createDebugAdapterDescriptor(session) {
-      const python = await ensureRuntime();
-      const configuredSource = session.configuration.adapterSource
-        || vscode.workspace.getConfiguration("llmdbg").get("developmentSourcePath", "");
-      const bundledRoot = configuredSource
-        ? path.resolve(expandWorkspaceFolder(configuredSource, session))
-        : path.join(context.extensionPath, "bundled");
-      if (!fs.existsSync(path.join(bundledRoot, "llmdbg", "dap.py"))) {
-        throw new Error(`llmdbg adapter source not found under ${bundledRoot}`);
-      }
-      const inheritedPythonPath = process.env.PYTHONPATH;
-      const pythonPath = inheritedPythonPath
-        ? `${bundledRoot}${path.delimiter}${inheritedPythonPath}`
-        : bundledRoot;
-      return new vscode.DebugAdapterExecutable(
-        python,
-        ["-m", "llmdbg.dap"],
-        {
-          cwd: session.workspaceFolder ? session.workspaceFolder.uri.fsPath : os.homedir(),
-          env: {
-            ...process.env,
-            PYTHONNOUSERSITE: "1",
-            PYTHONPATH: pythonPath
-          }
-        }
-      );
+      const port = await ensureHost(session);
+      return new vscode.DebugAdapterServer(port, "127.0.0.1");
     }
   };
   context.subscriptions.push(
@@ -164,6 +215,13 @@ function activate(context) {
       }
     })
   );
+  context.subscriptions.push({
+    dispose() {
+      if (hostProcess && hostProcess.exitCode === null) {
+        hostProcess.kill();
+      }
+    }
+  });
 }
 
 function deactivate() {}

@@ -40,6 +40,12 @@ attention, and MLP outputs, and shows a logit-lens interpretation at every
 stop. The Debug Console supports `layer`, `operation`, `meaning`, `input`, and
 `output`.
 
+The model is lazy-loaded on the first F5 and kept in a persistent host owned by
+the extension. Ending a debug session does not unload its GPU tensors. Later F5
+runs with the same model, revision, device, and dtype reuse the resident model
+and perform only the prompt forward pass. Changing any of those model settings
+replaces the resident model; closing or reloading VS Code releases it.
+
 During extension development, set `llmdbg.developmentSourcePath` in workspace
 settings to the directory containing the `llmdbg` Python package. Python
 changes are then used on the next debug session without rebuilding the VSIX.
