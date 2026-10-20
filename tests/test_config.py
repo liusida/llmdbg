@@ -8,26 +8,22 @@ from llmdbg.config import load_debug_config
 
 
 class DebugConfigTest(unittest.TestCase):
-    def test_loads_llmdbg_toml(self) -> None:
+    def test_loads_ordered_llmdbg_source(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "gpt2.llmdbg"
             path.write_text(
                 """
-[model]
-id = "openai-community/gpt2"
+model = "openai-community/gpt2"
 revision = "main"
 device = "cuda"
 dtype = "bfloat16"
-
-[input]
 prompt = "The capital of France is"
-
-[debug]
 stop_on_entry = true
 
-[[step]]
-kind = "embedding"
-path = "token_embedding"
+submodule = "token_embedding"
+layer = 0
+submodule = "transformer.h.0.attention"
+submodule = "transformer.h.0.mlp"
 """.strip()
             )
             config = load_debug_config(str(path))
@@ -35,11 +31,24 @@ path = "token_embedding"
         self.assertEqual(config["model"], "openai-community/gpt2")
         self.assertEqual(config["prompt"], "The capital of France is")
         self.assertTrue(config["stopOnEntry"])
-        self.assertEqual(config["stepPaths"], ["token_embedding"])
+        self.assertEqual(
+            config["stepPaths"],
+            ["token_embedding", "transformer.h.0.attention", "transformer.h.0.mlp"],
+        )
 
     def test_rejects_missing_model(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "invalid.llmdbg"
-            path.write_text('[input]\nprompt = "hello"\n[[step]]\npath = "token_embedding"\n')
-            with self.assertRaisesRegex(ValueError, r"\[model\]\.id"):
+            path.write_text('prompt = "hello"\nsubmodule = "token_embedding"\n')
+            with self.assertRaisesRegex(ValueError, r"model must be assigned"):
+                load_debug_config(str(path))
+
+    def test_rejects_submodule_under_the_wrong_layer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "invalid.llmdbg"
+            path.write_text(
+                'model = "gpt2"\nprompt = "hello"\nlayer = 1\n'
+                'submodule = "transformer.h.0.attention"\n'
+            )
+            with self.assertRaisesRegex(ValueError, r"does not belong to layer 1"):
                 load_debug_config(str(path))

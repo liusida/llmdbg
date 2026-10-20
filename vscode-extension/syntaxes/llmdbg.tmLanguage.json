@@ -4,7 +4,6 @@
   "scopeName": "source.llmdbg",
   "patterns": [
     { "include": "#comments" },
-    { "include": "#tables" },
     { "include": "#keys" },
     { "include": "#strings" },
     { "include": "#constants" }
@@ -13,11 +12,6 @@
     "comments": {
       "patterns": [
         { "name": "comment.line.number-sign.llmdbg", "match": "#.*$" }
-      ]
-    },
-    "tables": {
-      "patterns": [
-        { "name": "entity.name.section.llmdbg", "match": "^\\s*\\[+[^]\\r\\n]+\\]+" }
       ]
     },
     "keys": {

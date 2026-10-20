@@ -27,30 +27,23 @@ code --install-extension llmdbg-0.0.1.vsix
 
 Create a `gpt2.llmdbg` file in the workspace:
 
-```toml
-[model]
-id = "openai-community/gpt2"
+```text
+model = "openai-community/gpt2"
 revision = "main"
 device = "cuda"
 dtype = "bfloat16"
-
-[input]
 prompt = "The capital of France is"
+stop_on_entry = false
 
-[debug]
-stop_on_entry = true
+submodule = "token_embedding"
 
-[[step]]
-kind = "embedding"
-path = "token_embedding"
+layer = 0
+submodule = "transformer.h.0.attention"
+submodule = "transformer.h.0.mlp"
 
-[[step]]
-kind = "attention"
-path = "transformer.h.0.attention"
-
-[[step]]
-kind = "mlp"
-path = "transformer.h.0.mlp"
+layer = 1
+submodule = "transformer.h.1.attention"
+submodule = "transformer.h.1.mlp"
 ```
 
 Open that file and press **F5**. If VS Code asks for a debugger, choose
@@ -76,13 +69,13 @@ extension storage. It does not install anything into the workspace. The first
 GPT-2 run downloads and loads the model, then keeps its tensors resident in a
 persistent model-host process. Stopping and restarting the debugger reuses the
 resident model and runs only a new forward pass. Closing/reloading VS Code
-stops the host and releases the model. Each `[[step]]` is an authored model
-execution stop. Set breakpoints inside these tables or use **Step Over** to
-advance through them. Runtime vectors appear in debugger scopes; the source
-file is never rewritten.
+stops the host and releases the model. Each `submodule` statement is an
+authored model execution stop. Set breakpoints on these statements or use
+**Step Over** to advance through them. Runtime vectors appear in debugger
+scopes; the source file is never rewritten.
 
 To stop at a specific prompt token and layer, add a conditional breakpoint to
-the desired `[[step]]` and use a zero-based condition such as
+the desired `submodule` statement and use a zero-based condition such as
 `token.position == 3`. The debugger prefills tokens before that position into
 the KV cache, then captures the selected token with a one-token forward pass.
 Stepping beyond the last selected layer advances to the next token using the

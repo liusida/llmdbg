@@ -17,30 +17,23 @@ packages to be shared efficiently across environments.
 
 For example:
 
-```toml
-[model]
-id = "openai-community/gpt2"
+```text
+model = "openai-community/gpt2"
 revision = "main"
 device = "cuda"
 dtype = "bfloat16"
-
-[input]
 prompt = "The capital of France is"
+stop_on_entry = false
 
-[debug]
-stop_on_entry = true
+submodule = "token_embedding"
 
-[[step]]
-kind = "embedding"
-path = "token_embedding"
+layer = 0
+submodule = "transformer.h.0.attention"
+submodule = "transformer.h.0.mlp"
 
-[[step]]
-kind = "attention"
-path = "transformer.h.0.attention"
-
-[[step]]
-kind = "mlp"
-path = "transformer.h.0.mlp"
+layer = 1
+submodule = "transformer.h.1.attention"
+submodule = "transformer.h.1.mlp"
 ```
 
 The extension can start directly from the active `.llmdbg` file, so a
@@ -50,9 +43,10 @@ The extension can start directly from the active `.llmdbg` file, so a
 The debugger keeps that same `.llmdbg` document active while stepping. Runtime
 state appears in the debugger panels; it does not create or switch to a second
 `*.execution.llmdbg` editor and never rewrites the configuration file.
-Each `[[step]]` selects a model execution stop, and breakpoints can be placed
-inside those tables. Unlisted model operations are omitted from the debug
-trace.
+Each `submodule` statement selects a model execution stop and can receive a
+breakpoint. Repeated assignments are intentionally valid in the llmdbg source
+language; this file is not TOML. Unlisted model operations are omitted from
+the debug trace.
 
 Use a conditional breakpoint such as `token.position == 3` to combine the
 source line's model layer with a zero-based prompt-token position. llmdbg

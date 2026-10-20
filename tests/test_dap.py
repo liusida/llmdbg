@@ -104,16 +104,15 @@ class DAPIntegrationTest(unittest.TestCase):
         self.assertTrue(any(variable["name"] == "meaning" for variable in layer_variables))
         self.assertEqual(responses[9]["body"]["result"], "attention_0")
         virtual_source = responses[10]["body"]["content"]
-        self.assertIn("[session]", virtual_source)
-        self.assertIn("[[step]]", virtual_source)
-        self.assertIn('kind = "embedding"', virtual_source)
+        self.assertIn('model = "built-in-demo"', virtual_source)
+        self.assertIn('submodule = "token_embedding"', virtual_source)
         stopped = [message for message in messages if message.get("event") == "stopped"]
         self.assertEqual([event["body"]["reason"] for event in stopped], ["entry", "step"])
 
     def test_config_file_is_used_as_the_debug_source(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "gpt.llmdbg"
-            config.write_text('[model]\nid = "openai-community/gpt2"\n', encoding="utf-8")
+            config.write_text('model = "openai-community/gpt2"\n', encoding="utf-8")
             adapter = object.__new__(LLMDebugAdapter)
             adapter.source_name = "model.execution.llmdbg"
             adapter.source_path = None

@@ -4,14 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "llmdbg"
-version = "0.0.3a6"
+version = "0.0.3a7"
 description = "A debugger for stepping through LLM layers and interpreting internal representations."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 dependencies = [
   "gb10-load-llm==0.1.2",
-  "tomli>=2.0; python_version < '3.11'",
 ]
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",
