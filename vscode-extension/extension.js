@@ -235,6 +235,15 @@ function activate(context) {
     );
   }
 
+  function formatBytes(bytes) {
+    if (!Number.isFinite(bytes) || bytes <= 0) {
+      return "not applicable";
+    }
+    const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+    const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    return `${(bytes / (1024 ** exponent)).toFixed(exponent >= 3 ? 2 : 1)} ${units[exponent]}`;
+  }
+
   async function showModelStatus() {
     if (!residentModel) {
       await vscode.window.showInformationMessage(
@@ -252,6 +261,9 @@ function activate(context) {
       `Revision: ${residentModel.revision}`,
       `Device: ${residentModel.device}`,
       `Dtype: ${residentModel.dtype}`,
+      `Model tensors: ${formatBytes(residentModel.modelBytes)}`,
+      `CUDA allocated by host: ${formatBytes(residentModel.cudaAllocatedBytes)}`,
+      `CUDA reserved by host: ${formatBytes(residentModel.cudaReservedBytes)}`,
       `Host process: ${hostProcess?.pid ?? "not running"}`,
       `Debugger: ${active ? "active" : "stopped"}`,
       "",

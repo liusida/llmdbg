@@ -184,6 +184,16 @@ class LLMDebugAdapter:
                 )
                 self.tokens = self.execution.tokens
                 self._configure_model_source(arguments)
+                loaded_model = self.execution.runtime.model
+                model_bytes = int(loaded_model.get_memory_footprint(return_buffers=True))
+                cuda_allocated_bytes = 0
+                cuda_reserved_bytes = 0
+                if str(arguments.get("device", "cuda")).startswith("cuda"):
+                    import torch
+
+                    if torch.cuda.is_available():
+                        cuda_allocated_bytes = int(torch.cuda.memory_allocated())
+                        cuda_reserved_bytes = int(torch.cuda.memory_reserved())
                 self.send_event(
                     "llmdbg/modelLoaded",
                     {
@@ -191,6 +201,9 @@ class LLMDebugAdapter:
                         "revision": str(arguments.get("revision", "main")),
                         "device": str(arguments.get("device", "cuda")),
                         "dtype": str(arguments.get("dtype", "bfloat16")),
+                        "modelBytes": model_bytes,
+                        "cudaAllocatedBytes": cuda_allocated_bytes,
+                        "cudaReservedBytes": cuda_reserved_bytes,
                     },
                 )
             else:

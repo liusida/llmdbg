@@ -43,6 +43,8 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn('registerCommand("llmdbg.showModelStatus"', source)
         self.assertIn("createStatusBarItem", source)
         self.assertIn('event.event === "llmdbg/modelLoaded"', source)
+        self.assertIn("modelBytes", source)
+        self.assertIn("cudaAllocatedBytes", source)
         self.assertIn('event.event === "llmdbg/vectorChanged"', source)
         self.assertNotIn('path.join(".venv"', source)
 
