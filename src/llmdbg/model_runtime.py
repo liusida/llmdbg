@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from llmdbg.demo_model import Layer, LayerState
+
+
+@dataclass(frozen=True)
+class ModelTrace:
+    """Captured model states plus the resolved prompt tokens."""
+
+    states: tuple[LayerState, ...]
+    tokens: tuple[str, ...]
 
 
 def _tensor_from_output(output: Any):
@@ -48,7 +57,7 @@ def load_model_trace(
     device: str = "cuda",
     dtype: str = "bfloat16",
     progress: Callable[[str], None] | None = None,
-) -> tuple[LayerState, ...]:
+) -> ModelTrace:
     """Load GPT-2 and return a layer-by-layer trace for one prompt.
 
     Model tensors are loaded through :mod:`gb10_load_llm`, as required for
@@ -106,6 +115,13 @@ def load_model_trace(
 
         return hook
 
+    def capture_input(name: str, operation: str, meaning: str):
+        def hook(_module, inputs) -> None:
+            hidden = inputs[0]
+            captured.append((name, operation, meaning, hidden.detach(), True))
+
+        return hook
+
     handles.append(
         model.transformer.drop.register_forward_hook(
             capture(
@@ -118,11 +134,20 @@ def load_model_trace(
     )
     for index, block in enumerate(model.transformer.h):
         handles.append(
+            block.ln_2.register_forward_pre_hook(
+                capture_input(
+                    f"transformer.h.{index}.attention",
+                    "causal self-attention + residual",
+                    f"Block {index} has mixed information across prompt positions.",
+                )
+            )
+        )
+        handles.append(
             block.register_forward_hook(
                 capture(
-                    f"transformer.h.{index}",
-                    "causal attention + MLP residual block",
-                    f"GPT-2 transformer block {index} updates the last-token representation.",
+                    f"transformer.h.{index}.mlp",
+                    "feed-forward MLP + residual",
+                    f"Block {index} has applied its learned feature transformation.",
                     True,
                 )
             )
@@ -140,6 +165,9 @@ def load_model_trace(
 
     try:
         inputs = tokenizer(prompt, return_tensors="pt")
+        tokens = tuple(
+            tokenizer.decode([token_id]) for token_id in inputs["input_ids"][0].tolist()
+        )
         inputs = {name: tensor.to(device) for name, tensor in inputs.items()}
         report(f"Running forward pass for {len(inputs['input_ids'][0])} prompt tokens...\n")
         with torch.inference_mode():
@@ -167,4 +195,4 @@ def load_model_trace(
         previous = output
 
     report(f"Captured {len(states)} GPT-2 layer states.\n")
-    return tuple(states)
+    return ModelTrace(tuple(states), tokens)

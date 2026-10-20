@@ -33,7 +33,8 @@ class DAPIntegrationTest(unittest.TestCase):
             {"seq": 7, "type": "request", "command": "variables", "arguments": {"variablesReference": 100}},
             {"seq": 8, "type": "request", "command": "next", "arguments": {"threadId": 1}},
             {"seq": 9, "type": "request", "command": "evaluate", "arguments": {"expression": "layer"}},
-            {"seq": 10, "type": "request", "command": "disconnect", "arguments": {}},
+            {"seq": 10, "type": "request", "command": "source", "arguments": {"sourceReference": 1}},
+            {"seq": 11, "type": "request", "command": "disconnect", "arguments": {}},
         ]
         process = subprocess.run(
             [sys.executable, "-m", "llmdbg.dap"],
@@ -48,9 +49,16 @@ class DAPIntegrationTest(unittest.TestCase):
         self.assertTrue(all(response["success"] for response in responses.values()))
         self.assertEqual(responses[4]["body"]["threads"][0]["name"], "LLM forward pass")
         self.assertIn("token_embedding", responses[5]["body"]["stackFrames"][0]["name"])
+        source = responses[5]["body"]["stackFrames"][0]["source"]
+        self.assertEqual(source["sourceReference"], 1)
+        self.assertTrue(source["name"].endswith(".llmdbg.toml"))
         layer_variables = responses[7]["body"]["variables"]
         self.assertTrue(any(variable["name"] == "meaning" for variable in layer_variables))
         self.assertEqual(responses[9]["body"]["result"], "attention_0")
+        virtual_source = responses[10]["body"]["content"]
+        self.assertIn("[session]", virtual_source)
+        self.assertIn("[[step]]", virtual_source)
+        self.assertIn('kind = "embedding"', virtual_source)
         stopped = [message for message in messages if message.get("event") == "stopped"]
         self.assertEqual([event["body"]["reason"] for event in stopped], ["entry", "step"])
 
