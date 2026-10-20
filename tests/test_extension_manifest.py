@@ -41,6 +41,7 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn('registerCommand("llmdbg.plotCurrentVector"', source)
         self.assertIn('registerCommand("llmdbg.unloadModel"', source)
         self.assertIn('registerCommand("llmdbg.showModelStatus"', source)
+        self.assertIn("createQuickPick", source)
         self.assertIn("createStatusBarItem", source)
         self.assertIn('event.event === "llmdbg/modelLoaded"', source)
         self.assertIn("modelBytes", source)

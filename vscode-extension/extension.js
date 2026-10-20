@@ -244,41 +244,52 @@ function activate(context) {
     return `${(bytes / (1024 ** exponent)).toFixed(exponent >= 3 ? 2 : 1)} ${units[exponent]}`;
   }
 
-  async function showModelStatus() {
+  function showModelStatus() {
+    const picker = vscode.window.createQuickPick();
+    picker.title = "llmdbg model host";
+    picker.placeholder = "Press Escape or click outside to close";
+    picker.matchOnDescription = true;
+    picker.matchOnDetail = true;
     if (!residentModel) {
-      await vscode.window.showInformationMessage(
-        "llmdbg: No model is currently loaded.",
-        {
-          modal: true,
-          detail: "Start an llmdbg session with F5 to load the configured model."
-        }
-      );
+      picker.items = [{
+        label: "$(circle-slash) No model loaded",
+        detail: "Start an llmdbg session with F5 to load the configured model."
+      }];
+      picker.onDidHide(() => picker.dispose());
+      picker.show();
       return;
     }
     const active = vscode.debug.activeDebugSession?.type === "llmdbg";
-    const detail = [
-      `Model: ${residentModel.model}`,
-      `Revision: ${residentModel.revision}`,
-      `Device: ${residentModel.device}`,
-      `Dtype: ${residentModel.dtype}`,
-      `Model tensors: ${formatBytes(residentModel.modelBytes)}`,
-      `CUDA allocated by host: ${formatBytes(residentModel.cudaAllocatedBytes)}`,
-      `CUDA reserved by host: ${formatBytes(residentModel.cudaReservedBytes)}`,
-      `Host process: ${hostProcess?.pid ?? "not running"}`,
-      `Debugger: ${active ? "active" : "stopped"}`,
-      "",
-      active
-        ? "Stop the debugger before unloading the model."
-        : "The model remains resident for fast F5 restarts."
-    ].join("\n");
-    const choice = await vscode.window.showInformationMessage(
-      "llmdbg resident model",
-      { modal: true, detail },
-      "Unload Model"
-    );
-    if (choice === "Unload Model") {
-      unloadModel();
-    }
+    const information = [
+      { label: "$(hubot) Model", description: residentModel.model },
+      { label: "$(git-branch) Revision", description: residentModel.revision },
+      { label: "$(server) Device", description: residentModel.device },
+      { label: "$(symbol-number) Data type", description: residentModel.dtype },
+      { label: "$(database) Model tensors", description: formatBytes(residentModel.modelBytes) },
+      { label: "$(pulse) CUDA allocated", description: formatBytes(residentModel.cudaAllocatedBytes) },
+      { label: "$(archive) CUDA reserved", description: formatBytes(residentModel.cudaReservedBytes) },
+      { label: "$(terminal) Host process", description: String(hostProcess?.pid ?? "not running") },
+      { label: "$(debug-alt) Debugger", description: active ? "active" : "stopped" }
+    ];
+    const unload = {
+      label: active ? "$(lock) Stop debugging before unloading" : "$(trash) Unload Model",
+      detail: active
+        ? "The resident model is in use by the active debug session."
+        : "Stop the private model host and release its CPU and GPU memory."
+    };
+    picker.items = [
+      ...information,
+      { label: "", kind: vscode.QuickPickItemKind.Separator },
+      unload
+    ];
+    picker.onDidAccept(() => {
+      if (picker.selectedItems[0] === unload && !active) {
+        picker.hide();
+        unloadModel();
+      }
+    });
+    picker.onDidHide(() => picker.dispose());
+    picker.show();
   }
 
   updateModelStatus(undefined);
