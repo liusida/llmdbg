@@ -9,7 +9,7 @@ const vscode = require("vscode");
 
 const execFile = util.promisify(childProcess.execFile);
 const RUNTIME_VERSION = "3";
-const PLOT_SNIPPETS_KEY = "llmdbg.plotSnippets";
+const LEGACY_PLOT_SNIPPETS_KEY = "llmdbg.plotSnippets";
 const DEFAULT_PLOT_CODE = `fig, ax = plt.subplots(figsize=(9, 2.6))
 ax.plot(vector, linewidth=1)
 ax.axhline(0, color="gray", linewidth=0.5)
@@ -70,17 +70,21 @@ function vectorPlotHtml(webview) {
     .workbench { display:grid; gap:10px; max-width:1100px; }
     .field { display:grid; grid-template-columns:76px minmax(140px, 1fr) auto; gap:8px; align-items:center; }
     .field > label { color:var(--vscode-foreground); white-space:nowrap; }
-    .snippet-tools { display:grid; grid-template-columns:minmax(120px, 180px) minmax(110px, 1fr) auto auto; gap:6px; }
-    input, select, textarea { width:100%; color:var(--vscode-input-foreground); background:var(--vscode-input-background); border:1px solid var(--vscode-input-border, transparent); border-radius:2px; outline:none; }
+    .icon-tools { display:flex; gap:4px; }
+    input, select { width:100%; color:var(--vscode-input-foreground); background:var(--vscode-input-background); border:1px solid var(--vscode-input-border, transparent); border-radius:2px; outline:none; }
     input, select { height:28px; padding:3px 7px; }
-    input:focus, select:focus, textarea:focus { border-color:var(--vscode-focusBorder); }
+    input:focus, select:focus { border-color:var(--vscode-focusBorder); }
     input::placeholder { color:var(--vscode-input-placeholderForeground); }
-    textarea { min-height:168px; padding:8px 10px; resize:vertical; color:var(--vscode-editor-foreground); background:var(--vscode-editor-background); border-color:var(--vscode-panel-border); font:var(--vscode-editor-font-size) var(--vscode-editor-font-family); line-height:1.45; tab-size:4; }
     button { min-height:28px; padding:4px 12px; border:1px solid transparent; border-radius:2px; background:var(--vscode-button-background); color:var(--vscode-button-foreground); font:inherit; cursor:pointer; white-space:nowrap; }
     button:hover { background:var(--vscode-button-hoverBackground); }
     button:focus { outline:1px solid var(--vscode-focusBorder); outline-offset:1px; }
     button.secondary { background:var(--vscode-button-secondaryBackground); color:var(--vscode-button-secondaryForeground); }
     button.secondary:hover { background:var(--vscode-button-secondaryHoverBackground); }
+    button.icon { width:28px; min-width:28px; padding:3px; display:grid; place-items:center; background:transparent; color:var(--vscode-foreground); }
+    button.icon:hover { background:var(--vscode-toolbar-hoverBackground); }
+    button.icon.primary { background:var(--vscode-button-background); color:var(--vscode-button-foreground); }
+    button.icon.primary:hover { background:var(--vscode-button-hoverBackground); }
+    button.icon svg { width:16px; height:16px; fill:currentColor; }
     #status { min-height:19px; color:var(--vscode-descriptionForeground); }
     #status.error { color:var(--vscode-errorForeground); }
     #preview { padding-top:2px; border-top:1px solid var(--vscode-panel-border); }
@@ -88,33 +92,30 @@ function vectorPlotHtml(webview) {
     #image:not([src]) { display:none; }
     @media (max-width:700px) {
       .field { grid-template-columns:68px minmax(0,1fr) auto; }
-      .snippet-tools { grid-template-columns:1fr 1fr; }
+      .field { grid-template-columns:68px minmax(0,1fr) auto; }
     }
   </style>
 </head>
 <body>
   <main class="workbench">
-    <div class="field"><label for="expression">Vector</label><input id="expression" value="residual_stream" placeholder="hidden, qkv, residual_stream, hidden[:256]"><button id="plot">Plot</button></div>
-    <div class="field"><label for="snippets">Plot code</label><div class="snippet-tools"><select id="snippets"></select><input id="name" placeholder="New snippet name"><button id="save" class="secondary">Save as New</button><button id="delete" class="secondary">Delete</button></div><span></span></div>
-    <textarea id="code" aria-label="Matplotlib plotting code" spellcheck="false"></textarea>
+    <div class="field"><label for="expression">Vector</label><input id="expression" value="residual_stream" placeholder="hidden, qkv, residual_stream, hidden[:256]"><button id="plot" class="icon primary" title="Plot vector" aria-label="Plot vector"><svg viewBox="0 0 16 16"><path d="M4 2.5v11l9-5.5-9-5.5z"/></svg></button></div>
+    <div class="field"><label for="snippets">Plot code</label><select id="snippets"></select><div class="icon-tools"><button id="open" class="icon" title="Open plot file" aria-label="Open plot file"><svg viewBox="0 0 16 16"><path d="M12.1 1.9l2 2-8.7 8.7-3 .7.7-3 9-9.4zM2 14h12v1H2v-1z"/></svg></button><button id="new" class="icon" title="New plot file" aria-label="New plot file"><svg viewBox="0 0 16 16"><path d="M7.5 1h1v6.5H15v1H8.5V15h-1V8.5H1v-1h6.5V1z"/></svg></button><button id="delete" class="icon" title="Delete plot file" aria-label="Delete plot file"><svg viewBox="0 0 16 16"><path d="M5 1h6l1 2h3v1h-1l-1 11H3L2 4H1V3h3l1-2zm1 .9L5.5 3h5L10 1.9H6zM3 4l1 10h8l1-10H3z"/></svg></button></div></div>
     <section id="preview"><div id="status">Enter a vector expression and run a Matplotlib snippet.</div><img id="image" alt="Matplotlib plot preview"></section>
   </main>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const expression = document.getElementById('expression'), snippets = document.getElementById('snippets');
-    const code = document.getElementById('code'), name = document.getElementById('name');
     const status = document.getElementById('status'), image = document.getElementById('image');
     let items = [];
-    function selectSnippet() { const item = items.find(x => x.name === snippets.value); if (item) code.value = item.code; }
     window.addEventListener('message', event => {
-      if (event.data.type === 'snippets') { items = event.data.items; snippets.replaceChildren(...items.map(item => { const o=document.createElement('option'); o.value=item.name; o.textContent=item.name; return o; })); selectSnippet(); }
+      if (event.data.type === 'snippets') { const previous=snippets.value; items=event.data.items; snippets.replaceChildren(...items.map(item => { const o=document.createElement('option'); o.value=item.file; o.textContent=item.name; return o; })); snippets.value=items.some(item=>item.file===previous)?previous:(event.data.selected||items[0]?.file||''); }
       if (event.data.type === 'result') { image.src='data:image/png;base64,'+event.data.image; status.className=''; status.textContent=event.data.meta; }
       if (event.data.type === 'error') { status.className='error'; status.textContent='Error: '+event.data.message; }
     });
-    snippets.addEventListener('change', selectSnippet);
-    document.getElementById('plot').onclick=()=>{ status.className=''; status.textContent='Rendering…'; vscode.postMessage({type:'plot', expression:expression.value, code:code.value}); };
-    document.getElementById('save').onclick=()=>vscode.postMessage({type:'save', name:name.value, code:code.value});
-    document.getElementById('delete').onclick=()=>vscode.postMessage({type:'delete', name:snippets.value});
+    document.getElementById('plot').onclick=()=>{ status.className=''; status.textContent='Rendering…'; vscode.postMessage({type:'plot', expression:expression.value, file:snippets.value}); };
+    document.getElementById('open').onclick=()=>vscode.postMessage({type:'open', file:snippets.value});
+    document.getElementById('new').onclick=()=>vscode.postMessage({type:'new'});
+    document.getElementById('delete').onclick=()=>vscode.postMessage({type:'delete', file:snippets.value});
   </script>
 </body>
 </html>`;
@@ -177,6 +178,7 @@ function activate(context) {
   );
 
   const runtimeRoot = path.join(context.globalStorageUri.fsPath, "runtime");
+  const plotRoot = path.join(context.globalStorageUri.fsPath, "plots");
   let runtimePromise;
   let hostProcess;
   let hostPromise;
@@ -254,19 +256,52 @@ function activate(context) {
 
   updateModelStatus(undefined);
 
-  function plotSnippets() {
-    return context.globalState.get(PLOT_SNIPPETS_KEY, [
-      { name: "Line plot", code: DEFAULT_PLOT_CODE }
-    ]);
+  function plotFileName(name) {
+    const stem = name.trim().replace(/\.plot\.py$/i, "").replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+    return `${stem || "plot"}.plot.py`;
   }
 
-  async function sendPlotSnippets() {
+  async function ensurePlotFiles() {
+    await fs.promises.mkdir(plotRoot, { recursive: true });
+    let files = (await fs.promises.readdir(plotRoot)).filter(file => file.endsWith(".plot.py"));
+    if (!files.length) {
+      const legacy = context.globalState.get(LEGACY_PLOT_SNIPPETS_KEY, []);
+      const snippets = legacy.length ? legacy : [{ name: "Line plot", code: DEFAULT_PLOT_CODE }];
+      for (const snippet of snippets) {
+        const file = plotFileName(String(snippet.name || "plot"));
+        await fs.promises.writeFile(path.join(plotRoot, file), String(snippet.code || DEFAULT_PLOT_CODE), { flag: "wx" }).catch(error => {
+          if (error.code !== "EEXIST") throw error;
+        });
+      }
+      await context.globalState.update(LEGACY_PLOT_SNIPPETS_KEY, undefined);
+      files = (await fs.promises.readdir(plotRoot)).filter(file => file.endsWith(".plot.py"));
+    }
+    return files.sort().map(file => ({
+      file,
+      name: file.slice(0, -".plot.py".length).replace(/[-_]+/g, " ").replace(/\b\w/g, character => character.toUpperCase())
+    }));
+  }
+
+  async function plotPath(file) {
+    const files = await ensurePlotFiles();
+    if (!files.some(item => item.file === file)) {
+      throw new Error("Unknown plot file");
+    }
+    return path.join(plotRoot, file);
+  }
+
+  async function openPlotFile(file) {
+    const document = await vscode.workspace.openTextDocument(await plotPath(file));
+    await vscode.window.showTextDocument(document, { viewColumn: vscode.ViewColumn.One, preview: false });
+  }
+
+  async function sendPlotSnippets(selected) {
     if (vectorPanel) {
-      await vectorPanel.webview.postMessage({ type: "snippets", items: plotSnippets() });
+      await vectorPanel.webview.postMessage({ type: "snippets", items: await ensurePlotFiles(), selected });
     }
   }
 
-  function showVectorPlot() {
+  async function showVectorPlot() {
     const session = vscode.debug.activeDebugSession;
     if (!session || session.type !== "llmdbg") {
       vscode.window.showErrorMessage("Start and pause an llmdbg session before plotting a vector.");
@@ -288,30 +323,33 @@ function activate(context) {
             return;
           }
           try {
+            const code = await fs.promises.readFile(await plotPath(String(message.file || "")), "utf8");
             const result = await active.customRequest("llmdbg/plot", {
               expression: String(message.expression || "residual_stream"),
-              code: String(message.code || DEFAULT_PLOT_CODE)
+              code
             });
             await vectorPanel.webview.postMessage({ type: "result", ...result });
           } catch (error) {
             await vectorPanel.webview.postMessage({ type: "error", message: error.message });
           }
-        } else if (message.type === "save") {
-          const snippetName = String(message.name || "").trim();
-          if (!snippetName) {
-            await vectorPanel.webview.postMessage({ type: "error", message: "Enter a snippet name." });
-            return;
-          }
-          const snippets = plotSnippets().filter(item => item.name !== snippetName);
-          snippets.push({ name: snippetName, code: String(message.code || "") });
-          await context.globalState.update(PLOT_SNIPPETS_KEY, snippets);
-          await sendPlotSnippets();
+        } else if (message.type === "open") {
+          await openPlotFile(String(message.file || ""));
+        } else if (message.type === "new") {
+          const name = await vscode.window.showInputBox({ prompt: "Name the new Matplotlib plot", placeHolder: "activation histogram" });
+          if (!name) return;
+          const file = plotFileName(name);
+          const target = path.join(plotRoot, file);
+          await fs.promises.mkdir(plotRoot, { recursive: true });
+          await fs.promises.writeFile(target, DEFAULT_PLOT_CODE, { flag: "wx" }).catch(error => {
+            if (error.code !== "EEXIST") throw error;
+          });
+          await sendPlotSnippets(file);
+          await openPlotFile(file);
         } else if (message.type === "delete") {
-          const snippets = plotSnippets().filter(item => item.name !== message.name);
-          await context.globalState.update(
-            PLOT_SNIPPETS_KEY,
-            snippets.length ? snippets : [{ name: "Line plot", code: DEFAULT_PLOT_CODE }]
-          );
+          const file = String(message.file || "");
+          const choice = await vscode.window.showWarningMessage(`Delete ${file}?`, { modal: true }, "Move to Trash");
+          if (choice !== "Move to Trash") return;
+          await vscode.workspace.fs.delete(vscode.Uri.file(await plotPath(file)), { useTrash: true });
           await sendPlotSnippets();
         }
       }, null, context.subscriptions);
@@ -321,7 +359,7 @@ function activate(context) {
     } else {
       vectorPanel.reveal(vscode.ViewColumn.Beside, true);
     }
-    sendPlotSnippets();
+    await sendPlotSnippets();
   }
 
   async function ensureRuntime() {

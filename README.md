@@ -152,6 +152,10 @@ such as `hidden`, `qkv`, `residual_stream`, or `hidden[:256]`, then choose or
 edit a named plotting snippet. Snippets are saved in VS Code extension storage;
 the included **Line plot** receives `vector`, `vector_name`, `plt`, and `np`.
 Pasted Python lists and tuples are also accepted as vectors.
+Plot snippets are ordinary `*.plot.py` files under the extension's global
+storage. Use the edit icon to open the selected file in VS Code, the plus icon
+to create one, and the trash icon to move one to the system trash. The panel
+contains no embedded code editor.
 Source variables are discovered from the Python assignments and shared by
 Watch and Plot. Renaming `hidden` to `features`, for example, makes `features`
 and `features[:256]` available automatically after that assignment executes.

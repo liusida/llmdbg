@@ -90,7 +90,10 @@ Watch one zero-based dimension with `residual_stream[42]`, `output[42]`,
 `input[42]`, or `delta[42]`. Run **llmdbg: Plot Current Vector** to open a
 Matplotlib workbench. Supply a vector expression or pasted list, select an
 editable named plotting snippet, and render a PNG. Snippets are persisted in
-VS Code extension storage and receive `vector`, `vector_name`, `plt`, and `np`.
+VS Code extension storage as `*.plot.py` files and receive `vector`,
+`vector_name`, `plt`, and `np`. Compact edit/new/trash icons open the files in
+VS Code, create them, or move them to the system trash; the plot panel itself
+does not embed a code editor.
 The debugger also exposes explicit **Residual stream (output)** and **Delta** scopes.
 
 Attention stops expose their 768D LayerNorm output, combined 2304D QKV
