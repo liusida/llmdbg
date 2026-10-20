@@ -189,7 +189,7 @@ def load_debug_config(path: str) -> dict[str, Any]:
         "dtype": globals_.get("dtype", "bfloat16"),
         "prompt": prompt,
         "defaultToken": default_token,
-        "stopOnEntry": globals_.get("stop_on_entry", True),
+        "stopOnEntry": globals_.get("stop_on_entry", False),
         "stepPaths": step_paths,
         "stepLines": step_lines,
         "functions": functions,
@@ -209,7 +209,7 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
     model_call: ast.Call | None = None
     prompt: str | None = None
     token: int | None = None
-    stop_on_entry = True
+    stop_on_entry = False
     functions: dict[str, dict[str, int]] = {}
     function_bindings: dict[str, list[dict[str, Any]]] = {}
     call_lines: dict[str, int] = {}

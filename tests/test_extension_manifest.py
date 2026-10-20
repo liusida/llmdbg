@@ -73,6 +73,18 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn('let neuronLensMode = "logit"', source)
         self.assertIn('async function refreshNeuronLens(mode = neuronLensMode)', source)
         self.assertIn("neuronLensMode = message.mode", source)
+        self.assertIn('<option value="j-lens">J-Lens</option>', source)
+        self.assertIn('<option value="all">All lenses</option>', source)
+        self.assertIn("chip.title='rank '+item.rank+' · token ID '+item.id+' · logit '", source)
+        self.assertIn("title.className='neuron-badge'", source)
+        self.assertIn("title.textContent=String(neuron.index)", source)
+        self.assertIn("norm.textContent='|d| '+neuron.directionNorm.toFixed(2)", source)
+        self.assertIn("heading.textContent=title+':'", source)
+        self.assertIn(".readout{display:flex;align-items:center;flex-wrap:wrap", source)
+        self.assertNotIn("className='token-list'", source)
+        self.assertIn("white-space:pre-wrap;overflow-wrap:anywhere", source)
+        self.assertNotIn("text-overflow:ellipsis", source)
+        self.assertNotIn("table.innerHTML='<thead><tr><th", source)
         self.assertIn('event.event === "llmdbg/vectorChanged"', source)
 
 

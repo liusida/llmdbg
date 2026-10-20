@@ -1,0 +1,214 @@
+{
+  "schema_version": 1,
+  "model_id": "openai-community/gpt2",
+  "model_revision": "main",
+  "architecture": "gpt2",
+  "activation": "input to mlp.c_proj (gelu(c_fc(x)))",
+  "statistic": "median across analyzed tokens of token p99(abs(activation))",
+  "quantile": 0.99,
+  "side_definition": "sign of the actual neuron activation nearest the p99 magnitude at the token supplying the layer median",
+  "prompt_file": "diverse_32_sentences.txt",
+  "prompt_sha256": "cb64a81e8f0ccd27000b912b3a0c22d49661cf598e8b0fd67348ce235b6ac7a8",
+  "prefix": "Context:\n",
+  "excluded_prefix_tokens": 3,
+  "analyzed_tokens": 1021,
+  "captured_tokens": 1024,
+  "untruncated_tokens": 1417,
+  "truncated_to_model_context": true,
+  "intermediate_size": 3072,
+  "touched_model_bytes": 248879616,
+  "layers": [
+    {
+      "layer": 0,
+      "scale": 0.7935941815376282,
+      "side": "positive",
+      "signed_reference": 0.7890625,
+      "captured_token_position": 210,
+      "analysis_token_position": 207,
+      "nearest_neuron": 1342,
+      "token_scale_percentiles": {
+        "p01": 0.39779314398765564,
+        "p10": 0.59375,
+        "p50": 0.7935941815376282,
+        "p90": 1.0100783109664917,
+        "p99": 1.1428908109664917
+      }
+    },
+    {
+      "layer": 1,
+      "scale": 0.49722668528556824,
+      "side": "positive",
+      "signed_reference": 0.49609375,
+      "captured_token_position": 91,
+      "analysis_token_position": 88,
+      "nearest_neuron": 2860,
+      "token_scale_percentiles": {
+        "p01": 0.24392583966255188,
+        "p10": 0.39849650859832764,
+        "p50": 0.49722668528556824,
+        "p90": 0.5938680171966553,
+        "p99": 0.6819534301757812
+      }
+    },
+    {
+      "layer": 2,
+      "scale": 0.416015625,
+      "side": "positive",
+      "signed_reference": 0.416015625,
+      "captured_token_position": 44,
+      "analysis_token_position": 41,
+      "nearest_neuron": 1050,
+      "token_scale_percentiles": {
+        "p01": 0.28025394678115845,
+        "p10": 0.337890625,
+        "p50": 0.416015625,
+        "p90": 0.5401954054832458,
+        "p99": 0.6922110915184021
+      }
+    },
+    {
+      "layer": 3,
+      "scale": 0.4712695777416229,
+      "side": "positive",
+      "signed_reference": 0.470703125,
+      "captured_token_position": 206,
+      "analysis_token_position": 203,
+      "nearest_neuron": 1563,
+      "token_scale_percentiles": {
+        "p01": 0.32183605432510376,
+        "p10": 0.39453125,
+        "p50": 0.4712695777416229,
+        "p90": 0.60546875,
+        "p99": 0.7919538021087646
+      }
+    },
+    {
+      "layer": 4,
+      "scale": 0.5587117671966553,
+      "side": "positive",
+      "signed_reference": 0.55078125,
+      "captured_token_position": 149,
+      "analysis_token_position": 146,
+      "nearest_neuron": 2366,
+      "token_scale_percentiles": {
+        "p01": 0.3866172432899475,
+        "p10": 0.4749220907688141,
+        "p50": 0.5587117671966553,
+        "p90": 0.6987112760543823,
+        "p99": 0.8661019206047058
+      }
+    },
+    {
+      "layer": 5,
+      "scale": 0.58203125,
+      "side": "positive",
+      "signed_reference": 0.58203125,
+      "captured_token_position": 262,
+      "analysis_token_position": 259,
+      "nearest_neuron": 565,
+      "token_scale_percentiles": {
+        "p01": 0.41510218381881714,
+        "p10": 0.48216813802719116,
+        "p50": 0.58203125,
+        "p90": 0.8158987760543823,
+        "p99": 1.051406741142273
+      }
+    },
+    {
+      "layer": 6,
+      "scale": 0.6311721205711365,
+      "side": "positive",
+      "signed_reference": 0.62890625,
+      "captured_token_position": 624,
+      "analysis_token_position": 621,
+      "nearest_neuron": 454,
+      "token_scale_percentiles": {
+        "p01": 0.4595508277416229,
+        "p10": 0.5123441815376282,
+        "p50": 0.6311721205711365,
+        "p90": 0.8214454054832458,
+        "p99": 1.0426878929138184
+      }
+    },
+    {
+      "layer": 7,
+      "scale": 0.6869925260543823,
+      "side": "positive",
+      "signed_reference": 0.68359375,
+      "captured_token_position": 173,
+      "analysis_token_position": 170,
+      "nearest_neuron": 2256,
+      "token_scale_percentiles": {
+        "p01": 0.43972334265708923,
+        "p10": 0.5100783705711365,
+        "p50": 0.6869925260543823,
+        "p90": 0.9237513542175293,
+        "p99": 1.10715651512146
+      }
+    },
+    {
+      "layer": 8,
+      "scale": 0.6401175260543823,
+      "side": "positive",
+      "signed_reference": 0.63671875,
+      "captured_token_position": 121,
+      "analysis_token_position": 118,
+      "nearest_neuron": 1327,
+      "token_scale_percentiles": {
+        "p01": 0.3395274877548218,
+        "p10": 0.4110354483127594,
+        "p50": 0.6401175260543823,
+        "p90": 0.9498441815376282,
+        "p99": 1.1393128633499146
+      }
+    },
+    {
+      "layer": 9,
+      "scale": 0.6651954054832458,
+      "side": "positive",
+      "signed_reference": 0.6640625,
+      "captured_token_position": 76,
+      "analysis_token_position": 73,
+      "nearest_neuron": 1131,
+      "token_scale_percentiles": {
+        "p01": 0.3540820777416229,
+        "p10": 0.4319533407688141,
+        "p50": 0.6651954054832458,
+        "p90": 1.0546873807907104,
+        "p99": 1.3275632858276367
+      }
+    },
+    {
+      "layer": 10,
+      "scale": 0.72265625,
+      "side": "positive",
+      "signed_reference": 0.72265625,
+      "captured_token_position": 147,
+      "analysis_token_position": 144,
+      "nearest_neuron": 445,
+      "token_scale_percentiles": {
+        "p01": 0.43637531995773315,
+        "p10": 0.5050391554832458,
+        "p50": 0.72265625,
+        "p90": 1.2678908109664917,
+        "p99": 1.6075009107589722
+      }
+    },
+    {
+      "layer": 11,
+      "scale": 0.920352578163147,
+      "side": "positive",
+      "signed_reference": 0.91015625,
+      "captured_token_position": 354,
+      "analysis_token_position": 351,
+      "nearest_neuron": 2943,
+      "token_scale_percentiles": {
+        "p01": 0.5688986778259277,
+        "p10": 0.7048833966255188,
+        "p50": 0.920352578163147,
+        "p90": 1.254531741142273,
+        "p99": 1.7606732845306396
+      }
+    }
+  ]
+}

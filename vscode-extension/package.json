@@ -2,7 +2,7 @@
   "name": "llmdbg",
   "displayName": "llmdbg",
   "description": "Step through LLM layers and inspect human-readable internal representations.",
-  "version": "0.0.55",
+  "version": "0.0.71",
   "publisher": "liusida",
   "license": "MIT",
   "repository": {
@@ -125,8 +125,8 @@
               },
               "stopOnEntry": {
                 "type": "boolean",
-                "description": "Stop after the first model layer.",
-                "default": true
+                "description": "Stop at token embedding before running to a breakpoint.",
+                "default": false
               },
               "model": {
                 "type": "string",

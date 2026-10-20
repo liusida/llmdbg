@@ -103,6 +103,22 @@ Use the **Lens** button beside the plot icon in the debug toolbar after an MLP
 GELU activation. Its dedicated Neuron Lens panel shows the five most active
 neurons and, for each neuron, the top tokens from its
 `W_down → W_unembed` output direction with token IDs and direction logits.
+Qwen3.5 0.8B, 2B, 9B, and 27B additionally show each raw activation relative
+to a packaged per-layer calibration scale, including its measured sign side.
+GPT-2 has the same calibrated relative-activation display for its post-GELU
+MLP hidden activations.
+Choose **J-Lens** to transport each direction through an ordinary averaged
+Jacobian, **R-Lens** to use the RelP transport map, or **All lenses** to compare
+both with the direct Logit Lens. Lens artifacts are downloaded lazily from
+`sida/llmdbg` on Hugging Face and cached locally. The catalog covers Qwen3.5
+2B, 9B, and 27B with both J-Lens and R-Lens maps (and also retains the earlier
+0.8B maps). Large 9B/27B files resolve to the R-Lens authors' pinned,
+checksum-verified release rather than being duplicated.
+
+The methods are from [Verbalizable Representations Form a Global Workspace in
+Language Models](https://transformer-circuits.pub/2026/workspace/index.html)
+(J-Lens) and [R-Lens: Making J-Lens More Faithful on Early
+Layers](https://www.lesswrong.com/posts/nv8oedrnLXKRzNEL9/r-lens-making-j-lens-more-faithful-on-early-layers).
 The debugger also exposes explicit **Residual stream (output)** and **Delta** scopes.
 
 Attention stops expose their 768D LayerNorm output, combined 2304D QKV

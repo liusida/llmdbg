@@ -105,6 +105,10 @@ Open either file and press **F5**. If VS Code asks for a debugger, choose
 **llmdbg**. No `launch.json` is required. If a workspace launch configuration
 is preferred, the complete minimal version is:
 
+F5 runs directly to the first matching breakpoint. Assign
+`stop_on_entry = True` in a `.llmdbg.py` program only when you explicitly want
+to stop at token embedding first.
+
 ```json
 {
   "version": "0.2.0",
@@ -176,28 +180,80 @@ the top five tokens from `W_down[neuron] @ W_unembed`, and the top five direct
 token contributions after scaling by the current activation. Token IDs and
 decoded text are both displayed. Results are cached for the current token and
 layer.
-The toolbar's **Lens** view has a selector for **Logit Lens**, **R-Lens**, or
-**Both**. Logit Lens projects the neuron's down-projection direction directly
-through the unembedding. R-Lens first transports that direction through a
-learned, layer-specific residual Jacobian, then applies the final norm and
-unembedding. If no compatible artifact is installed, the R-Lens side reports
-that it is unavailable rather than substituting a direct projection.
+For Qwen3.5 0.8B, 2B, 9B, and 27B, the activation is also shown relative to a
+packaged, model- and layer-specific scale. Each scale is the median across a
+fixed 672-token calibration prompt of the per-token p99 absolute post-SwiGLU
+activation. The displayed positive/negative side records the sign of the
+calibration activation nearest that p99 magnitude; unsupported checkpoints
+show only the raw value instead of silently borrowing another model's scale.
+GPT-2 is calibrated the same way on its post-GELU MLP hidden activation. Its
+1,024-token context limit leaves 1,021 analyzed tokens after the calibration
+prefix; that explicit truncation is recorded in the JSON provenance.
+The corresponding calibration plots live beside the JSON data in
+`src/llmdbg/data/` as `*_mlp_activation_scales.png`. They show every
+token p99 measurement as a scatter point, continuous p10–p90 and p1–p99
+percentile ribbons, and the packaged median scale as a marked guide line. Run
+`scripts/measure_mlp_activation_scales.py` with `--plot-output` to reproduce
+them from the calibration prompt.
+The toolbar's **Lens** view has a selector for **Logit Lens**, **J-Lens**,
+**R-Lens**, or **All lenses**. Logit Lens projects the neuron's down-projection
+direction directly through the unembedding. J-Lens first transports it through
+an averaged ordinary Jacobian. R-Lens uses the same transport construction
+with value-preserving RelP backward rules. Both transported views then apply
+the final norm and unembedding. A missing artifact is reported explicitly;
+the debugger never silently substitutes the direct projection.
 
-Qwen 3.5 R-Lens data can be reproduced independently of the debugger:
+These implementations follow the methods introduced in:
+
+- [Verbalizable Representations Form a Global Workspace in Language Models
+  (J-Lens)](https://transformer-circuits.pub/2026/workspace/index.html): for
+  each residual layer, average the Jacobian to the final residual layer over
+  prompts and token positions, then read an activation with
+  `W_unembed · final_norm(J_layer · activation)`.
+- [R-Lens: Making J-Lens More Faithful on Early
+  Layers](https://www.lesswrong.com/posts/nv8oedrnLXKRzNEL9/r-lens-making-j-lens-more-faithful-on-early-layers):
+  retain the J-Lens construction while replacing ordinary backward behavior
+  with the LN, identity, and half RelP rules for dense gated models.
+
+The current Neuron Lens UI applies these maps to individual MLP output
+directions. (The maps themselves also support residual-stream activations, but
+that readout is not yet exposed in this UI.) It displays the resulting
+pre-softmax logits; their vocabulary ranking is the same as after softmax. The
+catalog currently covers Qwen3.5 0.8B, 2B, 9B, and 27B. The 9B and 27B entries
+use checkpoint-matched J-Lens and R-Lens maps from the R-Lens authors' pinned
+[`workspace-lenses`](https://huggingface.co/camilablank/workspace-lenses)
+release. The 0.8B and 2B Base maps are fitted locally with the same reference
+implementations. These maps average 25 pretraining-like sequences of up to 128
+tokens, excluding the first four and final token positions, rather than the
+J-Lens paper's default 1,000 sequences. They therefore implement the same
+estimator and readout, but use a smaller fitting recipe and are not full-data
+reproductions of the paper's maps.
+
+Qwen 3.5 J-Lens and R-Lens data can be reproduced independently:
 
 ```console
 uv pip install datasets "git+https://github.com/anthropics/jacobian-lens.git"
+uv run python scripts/fit_qwen35_j_lens.py \
+  --model Qwen/Qwen3.5-0.8B-Base --prompts 25
 uv run python scripts/fit_qwen35_r_lens.py \
   --model Qwen/Qwen3.5-0.8B-Base --prompts 25
 ```
 
-The script uses `gb10-load-llm`, verifies that its RelP substitutions preserve
-the ordinary forward pass exactly and checkpoints after every prompt. Fitted
-artifacts are written under `build/r_lens/artifacts/` for validation and Hub
-publication; they are not bundled into the wheel or extension. Neuron Lens
-lazily downloads a compatible map from `sida/llmdbg` into the standard
-Hugging Face cache when R-Lens is first selected. A Base artifact may be used
-by the matching Instruct model only when its hidden width agrees.
+Replace the model ID with `Qwen/Qwen3.5-2B-Base` to reproduce the published
+2B maps. The 9B and 27B catalog entries point to immutable, checksum-verified
+files in the authors' release rather than duplicating those multi-gigabyte
+artifacts.
+
+Both scripts use `gb10-load-llm` and checkpoint after every prompt. The R-Lens
+fitter additionally verifies that its RelP substitutions preserve the ordinary
+forward pass exactly. Fitted artifacts are written below `build/j_lens/` and
+`build/r_lens/` for validation and Hub publication; they are not bundled into
+the wheel or extension. Neuron Lens lazily downloads only the selected maps
+from `sida/llmdbg` into the standard Hugging Face cache. A Base artifact may be
+used by the matching Instruct model only when its hidden width agrees and the
+artifact manifest opts into that transfer. This Base-to-Instruct reuse is a
+convenience approximation, not a guarantee made by either lens method; fitting
+a map on the exact checkpoint is preferable for rigorous analysis.
 
 Add `top_neurons` to **Watch** to keep this tree visible while stepping; VS
 Code reevaluates it at every stop and preserves the expandable neuron/token

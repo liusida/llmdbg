@@ -72,6 +72,7 @@ class NeuronProjection:
     direction_norm: float
     vocabulary: tuple[TokenScore, ...]
     contribution: tuple[TokenScore, ...]
+    j_lens: tuple[TokenScore, ...] = ()
     r_lens: tuple[TokenScore, ...] = ()
 
 
@@ -159,9 +160,10 @@ class ModelExecution:
         *,
         neuron_count: int = 5,
         token_count: int = 5,
+        include_j_lens: bool = False,
         include_r_lens: bool = False,
     ) -> tuple[NeuronProjection, ...]:
-        """Project the most active MLP neurons through Logit Lens and R-Lens."""
+        """Project active MLP neurons through direct, J-Lens, and R-Lens readouts."""
         import re
 
         import torch
@@ -177,14 +179,17 @@ class ModelExecution:
             else block.mlp.down_proj.weight.T
         )
         unembedding = self.runtime.model.get_output_embeddings().weight
-        from llmdbg.r_lens import source_map
+        from llmdbg.j_lens import source_map as j_lens_map
+        from llmdbg.r_lens import source_map as r_lens_map
+
+        model_id = str(getattr(self.runtime.model.config, "_name_or_path", ""))
+        hidden_size = int(down_projection.shape[1])
+        j_lens_source = (
+            j_lens_map(model_id, layer_index, hidden_size) if include_j_lens else None
+        )
 
         r_lens_source = (
-            source_map(
-                str(getattr(self.runtime.model.config, "_name_or_path", "")),
-                layer_index,
-                int(down_projection.shape[1]),
-            )
+            r_lens_map(model_id, layer_index, hidden_size)
             if include_r_lens
             else None
         )
@@ -207,18 +212,23 @@ class ModelExecution:
                 contribution_scores, min(token_count, contribution_scores.shape[1]), dim=1
             )
             direction_norms = directions.float().norm(dim=1)
-            r_lens_values = r_lens_ids = None
-            if r_lens_source is not None:
-                mapping, _ = r_lens_source
+            def transported_scores(source: Any) -> tuple[Any, Any]:
+                if source is None:
+                    return None, None
+                mapping, _ = source
                 mapping = mapping.to(device=directions.device, dtype=torch.float32)
                 mapped = torch.einsum("oi,bi->bo", mapping, directions.float())
                 normalized = self.runtime.final_norm(
                     mapped.to(dtype=down_projection.dtype)[:, None, :]
                 )[:, 0]
-                r_lens_scores = (normalized @ unembedding.T).float()
-                r_lens_values, r_lens_ids = torch.topk(
-                    r_lens_scores, min(token_count, r_lens_scores.shape[1]), dim=1
+                scores = (normalized @ unembedding.T).float()
+                values, ids = torch.topk(
+                    scores, min(token_count, scores.shape[1]), dim=1
                 )
+                return values, ids
+
+            j_lens_values, j_lens_ids = transported_scores(j_lens_source)
+            r_lens_values, r_lens_ids = transported_scores(r_lens_source)
 
         def token_scores(ids: Any, values: Any) -> tuple[TokenScore, ...]:
             return tuple(
@@ -238,6 +248,11 @@ class ModelExecution:
                 vocabulary=token_scores(vocabulary_ids[rank], vocabulary_values[rank]),
                 contribution=token_scores(
                     contribution_ids[rank], contribution_values[rank]
+                ),
+                j_lens=(
+                    token_scores(j_lens_ids[rank], j_lens_values[rank])
+                    if j_lens_ids is not None and j_lens_values is not None
+                    else ()
                 ),
                 r_lens=(
                     token_scores(r_lens_ids[rank], r_lens_values[rank])

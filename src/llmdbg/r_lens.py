@@ -5,12 +5,19 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 HUB_REPO_ID = "sida/llmdbg"
 HUB_REPO_TYPE = "dataset"
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _slug(model_id: str) -> str:
@@ -78,6 +85,46 @@ def _download_from_hub(model_id: str) -> dict[str, Any] | None:
     entry = _hub_entry(json.loads(index_path.read_text()), model_id)
     if entry is None:
         return None
+    if entry.get("source_repo_id"):
+        import torch
+
+        lens_path = Path(
+            hf_hub_download(
+                repo_id=str(entry["source_repo_id"]),
+                repo_type=str(entry.get("source_repo_type", "model")),
+                revision=str(entry["source_revision"]),
+                filename=str(entry["source_filename"]),
+                library_name="llmdbg",
+            )
+        )
+        expected_size = entry.get("source_size")
+        if expected_size is not None and lens_path.stat().st_size != int(expected_size):
+            raise ValueError(
+                f"R-Lens size mismatch for {lens_path}: "
+                f"{lens_path.stat().st_size} != {expected_size}"
+            )
+        expected_sha256 = entry.get("source_sha256")
+        if expected_sha256 is not None:
+            actual_sha256 = _sha256(lens_path)
+            if actual_sha256 != expected_sha256:
+                raise ValueError(
+                    f"R-Lens checksum mismatch for {lens_path}: "
+                    f"{actual_sha256} != {expected_sha256}"
+                )
+        artifact = torch.load(
+            lens_path, map_location="cpu", weights_only=True, mmap=True
+        )
+        if not isinstance(artifact, dict) or not isinstance(artifact.get("J"), dict):
+            raise ValueError(f"invalid R-Lens artifact at {lens_path}: missing J maps")
+        source_model = str(artifact.get("provenance", {}).get("model_id", ""))
+        compatible, transfer = _compatible(source_model, model_id)
+        if not compatible:
+            raise ValueError(
+                f"R-Lens artifact model {source_model!r} is incompatible with {model_id!r}"
+            )
+        artifact["_path"] = str(lens_path)
+        artifact["_transfer"] = transfer
+        return artifact
     directory = str(entry["path"]).strip("/")
     manifest_path = Path(
         hf_hub_download(filename=f"{directory}/manifest.json", **download)
@@ -94,7 +141,7 @@ def _download_from_hub(model_id: str) -> dict[str, Any] | None:
     lens_path = Path(
         hf_hub_download(filename=f"{directory}/{manifest['artifact']}", **download)
     )
-    digest = hashlib.sha256(lens_path.read_bytes()).hexdigest()
+    digest = _sha256(lens_path)
     if digest != manifest.get("sha256"):
         raise ValueError(
             f"R-Lens checksum mismatch for {lens_path}: {digest} != {manifest.get('sha256')}"
@@ -115,17 +162,33 @@ def _download_from_hub(model_id: str) -> dict[str, Any] | None:
     }
 
 
-@lru_cache(maxsize=4)
+_artifact_cache: dict[str, dict[str, Any]] = {}
+
+
 def load_r_lens(model_id: str) -> dict[str, Any] | None:
-    """Load a local override or lazily download a compatible Hub artifact."""
+    """Load a compatible artifact, caching successes but retrying prior misses."""
+    if model_id in _artifact_cache:
+        return _artifact_cache[model_id]
     for path in _local_candidates(model_id):
         if path.is_file():
-            return _load_local(path, model_id)
+            artifact = _load_local(path, model_id)
+            _artifact_cache[model_id] = artifact
+            return artifact
     try:
-        return _download_from_hub(model_id)
+        artifact = _download_from_hub(model_id)
     except OSError as error:
         # This exception is not cached, so Refresh can retry a transient failure.
         raise RuntimeError(f"Could not download R-Lens data from the Hub: {error}") from error
+    if artifact is not None:
+        _artifact_cache[model_id] = artifact
+    return artifact
+
+
+def _clear_cache() -> None:
+    _artifact_cache.clear()
+
+
+load_r_lens.cache_clear = _clear_cache  # type: ignore[attr-defined]
 
 
 def source_map(model_id: str, layer: int, hidden_size: int) -> tuple[Any, dict[str, Any]] | None:

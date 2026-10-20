@@ -136,14 +136,17 @@ class LLMDebugAdapter:
         self.default_token: int | None = None
         self.layer_index = 0
         self.launched = False
-        self.stop_on_entry = True
+        self.stop_on_entry = False
         self.source_content = ""
         self.source_lines: tuple[int, ...] = ()
         self.step_paths: tuple[str, ...] = ()
         self.source_name = "model.execution.llmdbg"
         self.source_path: str | None = None
         self.breakpoints: tuple[SourceBreakpoint, ...] = ()
-        self.neuron_cache: dict[tuple[int, str, bool], tuple[NeuronProjection, ...]] = {}
+        self.breakpoints_by_source: dict[str, tuple[SourceBreakpoint, ...]] = {}
+        self.neuron_cache: dict[
+            tuple[int, str, bool, bool], tuple[NeuronProjection, ...]
+        ] = {}
         self.inside_mlp = False
         self.mlp_step_index = 0
         self.mlp_source_content = ""
@@ -372,7 +375,7 @@ class LLMDebugAdapter:
             self.default_token = arguments.get("defaultToken")
             self.layer_index = 0
             self.launched = True
-            self.stop_on_entry = bool(arguments.get("stopOnEntry", True))
+            self.stop_on_entry = bool(arguments.get("stopOnEntry", False))
             self.send_response(request)
             self.send_event("initialized")
             trace_name = str(model) if model else "built-in demo"
@@ -524,11 +527,12 @@ class LLMDebugAdapter:
                 ),
             )
         elif command == "llmdbg/neuronLens":
+            mode = str(arguments.get("mode", "logit"))
             self.send_response(
                 request,
                 self._neuron_lens_snapshot(
-                    include_r_lens=str(arguments.get("mode", "logit"))
-                    in {"r-lens", "both"}
+                    include_j_lens=mode in {"j-lens", "all"},
+                    include_r_lens=mode in {"r-lens", "all"},
                 ),
             )
         elif command in ("next", "stepIn", "stepOut"):
@@ -561,6 +565,11 @@ class LLMDebugAdapter:
             self.send_response(request)
             self.stop("pause")
         elif command == "setBreakpoints":
+            source = arguments.get("source") or {}
+            requested_path = source.get("path")
+            source_key = self._breakpoint_source_key(requested_path)
+            current_key = self._breakpoint_source_key(self.source_path)
+            is_current_source = source_key == current_key
             requested = [int(item.get("line", 0)) for item in arguments.get("breakpoints", [])]
             valid_lines = sorted(
                 set(self.source_lines)
@@ -628,7 +637,9 @@ class LLMDebugAdapter:
                     breakpoint["line"] = resolved_line
                     configured.append(SourceBreakpoint(resolved_line, token_position))
                 breakpoints.append(breakpoint)
-            self.breakpoints = tuple(configured)
+            self.breakpoints_by_source[source_key] = tuple(configured)
+            if is_current_source:
+                self.breakpoints = tuple(configured)
             self.send_response(request, {"breakpoints": breakpoints})
         elif command == "setExceptionBreakpoints":
             self.send_response(request)
@@ -787,6 +798,12 @@ class LLMDebugAdapter:
             flags=re.IGNORECASE,
         )
         return int(match.group(1)) if match else None
+
+    def _breakpoint_source_key(self, path: str | None) -> str:
+        """Return a stable DAP source key without letting other files clear this source."""
+        if not path:
+            return self.source_path or f"reference:{self.SOURCE_REFERENCE}"
+        return str(Path(path).expanduser().resolve())
 
     def _continue_to_breakpoint(
         self,
@@ -1206,7 +1223,9 @@ class LLMDebugAdapter:
         self.neuron_cache.clear()
         return value
 
-    def _top_neurons(self, include_r_lens: bool = False) -> tuple[NeuronProjection, ...]:
+    def _top_neurons(
+        self, include_j_lens: bool = False, include_r_lens: bool = False
+    ) -> tuple[NeuronProjection, ...]:
         """Return cached direct vocabulary projections for the current MLP state."""
         result_state = self.previous_state
         if (
@@ -1220,11 +1239,12 @@ class LLMDebugAdapter:
             if getattr(self, "inside_internal", False)
             else result_state.layer.name
         )
-        key = (self.token_index, layer_name, include_r_lens)
+        key = (self.token_index, layer_name, include_j_lens, include_r_lens)
         if key not in self.neuron_cache:
             self.neuron_cache[key] = self.execution.top_mlp_neurons(
                 layer_name,
                 result_state.details["mlp_expansion"],
+                include_j_lens=include_j_lens,
                 include_r_lens=include_r_lens,
             )
         return self.neuron_cache[key]
@@ -1512,9 +1532,13 @@ class LLMDebugAdapter:
             ),
         }
 
-    def _neuron_lens_snapshot(self, include_r_lens: bool = False) -> dict[str, Any]:
+    def _neuron_lens_snapshot(
+        self, include_j_lens: bool = False, include_r_lens: bool = False
+    ) -> dict[str, Any]:
         """Describe top MLP neurons through direct and residual-transport lenses."""
-        neurons = self._top_neurons(include_r_lens=include_r_lens)
+        neurons = self._top_neurons(
+            include_j_lens=include_j_lens, include_r_lens=include_r_lens
+        )
         if not neurons:
             raise ValueError(
                 "Neuron Lens is available after an MLP GELU activation has completed"
@@ -1530,6 +1554,7 @@ class LLMDebugAdapter:
             "tokenPosition": self.token_index,
             "token": self.tokens[self.token_index],
             "layer": layer,
+            "jLensResolved": include_j_lens,
             "rLensResolved": include_r_lens,
             "neurons": [
                 {
@@ -1571,6 +1596,15 @@ class LLMDebugAdapter:
                             "logit": token.score,
                         }
                         for token_rank, token in enumerate(neuron.r_lens, start=1)
+                    ],
+                    "jLensTokens": [
+                        {
+                            "rank": token_rank,
+                            "id": token.token_id,
+                            "text": token.text,
+                            "logit": token.score,
+                        }
+                        for token_rank, token in enumerate(neuron.j_lens, start=1)
                     ],
                 }
                 for rank, neuron in enumerate(neurons, start=1)

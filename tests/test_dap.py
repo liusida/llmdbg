@@ -335,6 +335,7 @@ class DAPIntegrationTest(unittest.TestCase):
             direction_norm=2.5,
             vocabulary=(TokenScore(42, " answer", 8.5),),
             contribution=(),
+            j_lens=(TokenScore(21, " jacobian", 7.0),),
             r_lens=(TokenScore(84, " transported", 6.25),),
         )
         adapter.execution = SimpleNamespace(
@@ -348,6 +349,7 @@ class DAPIntegrationTest(unittest.TestCase):
         self.assertEqual(result["neurons"][0]["tokens"][0]["text"], " answer")
         self.assertEqual(result["neurons"][0]["tokens"][0]["logit"], 8.5)
         self.assertEqual(result["neurons"][0]["logitTokens"][0]["text"], " answer")
+        self.assertEqual(result["neurons"][0]["jLensTokens"][0]["text"], " jacobian")
         self.assertEqual(result["neurons"][0]["rLensTokens"][0]["text"], " transported")
 
     def test_qwen_neuron_lens_reports_relative_activation_and_scale_side(self) -> None:
@@ -380,7 +382,7 @@ class DAPIntegrationTest(unittest.TestCase):
         neuron = adapter._neuron_lens_snapshot()["neurons"][0]
 
         self.assertAlmostEqual(neuron["relativeActivation"], 2.0)
-        self.assertEqual(neuron["scaleSide"], "negative")
+        self.assertEqual(neuron["scaleSide"], "positive")
         self.assertGreater(neuron["activationScale"], 0)
 
     def test_continue_stops_at_a_source_breakpoint(self) -> None:
@@ -444,6 +446,48 @@ class DAPIntegrationTest(unittest.TestCase):
         self.assertTrue(adapter.inside_mlp)
         self.assertFalse(adapter.inside_attention)
         self.assertEqual(adapter.mlp_step_index, 3)
+
+    def test_breakpoints_from_another_source_do_not_clear_active_source(self) -> None:
+        adapter = object.__new__(LLMDebugAdapter)
+        adapter.sequence = 1
+        responses: list[dict[str, object]] = []
+        adapter.stream = SimpleNamespace(write=responses.append)
+        adapter.source_path = "/workspace/GPT-2.llmdbg.py"
+        adapter.source_lines = (31, 33, 34, 35)
+        adapter.function_source_lines = {"mlp": (23, 24, 25, 26, 27)}
+        adapter.default_token = None
+        adapter.tokens = ("The",)
+        adapter.breakpoints = ()
+        adapter.breakpoints_by_source = {}
+
+        adapter.handle(
+            {
+                "seq": 1,
+                "type": "request",
+                "command": "setBreakpoints",
+                "arguments": {
+                    "source": {"path": "/workspace/GPT-2.llmdbg.py"},
+                    "breakpoints": [{"line": 26}],
+                },
+            }
+        )
+        adapter.handle(
+            {
+                "seq": 2,
+                "type": "request",
+                "command": "setBreakpoints",
+                "arguments": {
+                    "source": {"path": "/workspace/other.llmdbg.py"},
+                    "breakpoints": [],
+                },
+            }
+        )
+
+        self.assertEqual(adapter.breakpoints, (SourceBreakpoint(26),))
+        self.assertEqual(
+            adapter.breakpoints_by_source["/workspace/GPT-2.llmdbg.py"],
+            (SourceBreakpoint(26),),
+        )
 
     def test_continue_from_internal_breakpoint_reaches_later_internal_line(self) -> None:
         adapter = object.__new__(LLMDebugAdapter)

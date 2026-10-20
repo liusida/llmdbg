@@ -99,6 +99,7 @@ with debug(model, tokens, token=token):
             config = load_debug_config(str(path))
         self.assertTrue(config["pythonProgram"])
         self.assertEqual(config["defaultToken"], 1)
+        self.assertFalse(config["stopOnEntry"])
         self.assertEqual(config["callLines"]["attention"], 21)
         self.assertEqual(config["functions"]["mlp"]["gelu"], 15)
         self.assertEqual(
@@ -182,6 +183,7 @@ with debug(model, tokens, token=token):
             config = load_debug_config(str(path))
 
         self.assertIsNone(config["defaultToken"])
+        self.assertFalse(config["stopOnEntry"])
 
     def test_rejects_layer_call_without_layer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

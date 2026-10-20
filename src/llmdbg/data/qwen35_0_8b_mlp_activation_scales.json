@@ -17,65 +17,114 @@
     {
       "layer": 0,
       "scale": 0.12809573113918304,
-      "side": "negative",
-      "signed_reference": -0.1279296875,
-      "captured_token_position": 581,
-      "analysis_token_position": 578,
-      "nearest_neuron": 3463
+      "side": "positive",
+      "signed_reference": 0.1279296875,
+      "captured_token_position": 17,
+      "analysis_token_position": 14,
+      "nearest_neuron": 1724,
+      "token_scale_percentiles": {
+        "p01": 0.05347902327775955,
+        "p10": 0.06575150787830353,
+        "p50": 0.12809573113918304,
+        "p90": 0.16792090237140656,
+        "p99": 0.20518015325069427
+      }
     },
     {
       "layer": 1,
       "scale": 0.1396484375,
       "side": "negative",
       "signed_reference": -0.1396484375,
-      "captured_token_position": 670,
-      "analysis_token_position": 667,
-      "nearest_neuron": 221
+      "captured_token_position": 120,
+      "analysis_token_position": 117,
+      "nearest_neuron": 2581,
+      "token_scale_percentiles": {
+        "p01": 0.07765036821365356,
+        "p10": 0.1005859375,
+        "p50": 0.1396484375,
+        "p90": 0.2042197585105896,
+        "p99": 0.27800795435905457
+      }
     },
     {
       "layer": 2,
       "scale": 0.1591796875,
-      "side": "positive",
-      "signed_reference": 0.1591796875,
-      "captured_token_position": 417,
-      "analysis_token_position": 414,
-      "nearest_neuron": 116
+      "side": "negative",
+      "signed_reference": -0.1591796875,
+      "captured_token_position": 142,
+      "analysis_token_position": 139,
+      "nearest_neuron": 153,
+      "token_scale_percentiles": {
+        "p01": 0.11660577356815338,
+        "p10": 0.13102541863918304,
+        "p50": 0.1591796875,
+        "p90": 0.20503027737140656,
+        "p99": 0.23930597305297852
+      }
     },
     {
       "layer": 3,
       "scale": 0.1640625,
-      "side": "negative",
-      "signed_reference": -0.1640625,
-      "captured_token_position": 600,
-      "analysis_token_position": 597,
-      "nearest_neuron": 1364
+      "side": "positive",
+      "signed_reference": 0.1640625,
+      "captured_token_position": 38,
+      "analysis_token_position": 35,
+      "nearest_neuron": 1592,
+      "token_scale_percentiles": {
+        "p01": 0.11046946048736572,
+        "p10": 0.12907229363918304,
+        "p50": 0.1640625,
+        "p90": 0.19773055613040924,
+        "p99": 0.2308698445558548
+      }
     },
     {
       "layer": 4,
       "scale": 0.16325198113918304,
       "side": "positive",
       "signed_reference": 0.1630859375,
-      "captured_token_position": 45,
-      "analysis_token_position": 42,
-      "nearest_neuron": 1985
+      "captured_token_position": 41,
+      "analysis_token_position": 38,
+      "nearest_neuron": 1431,
+      "token_scale_percentiles": {
+        "p01": 0.12031810730695724,
+        "p10": 0.14097370207309723,
+        "p50": 0.16325198113918304,
+        "p90": 0.19140625,
+        "p99": 0.21701107919216156
+      }
     },
     {
       "layer": 5,
       "scale": 0.14958010613918304,
-      "side": "positive",
-      "signed_reference": 0.1494140625,
-      "captured_token_position": 242,
-      "analysis_token_position": 239,
-      "nearest_neuron": 907
+      "side": "negative",
+      "signed_reference": -0.1494140625,
+      "captured_token_position": 65,
+      "analysis_token_position": 62,
+      "nearest_neuron": 1187,
+      "token_scale_percentiles": {
+        "p01": 0.11158625781536102,
+        "p10": 0.12827838957309723,
+        "p50": 0.14958010613918304,
+        "p90": 0.17790041863918304,
+        "p99": 0.2055273801088333
+      }
     },
     {
       "layer": 6,
       "scale": 0.171875,
       "side": "positive",
       "signed_reference": 0.171875,
-      "captured_token_position": 659,
-      "analysis_token_position": 656,
-      "nearest_neuron": 105
+      "captured_token_position": 346,
+      "analysis_token_position": 343,
+      "nearest_neuron": 138,
+      "token_scale_percentiles": {
+        "p01": 0.1278606802225113,
+        "p10": 0.145690456032753,
+        "p50": 0.171875,
+        "p90": 0.19953423738479614,
+        "p99": 0.23227150738239288
+      }
     },
     {
       "layer": 7,
@@ -84,52 +133,94 @@
       "signed_reference": -0.1533203125,
       "captured_token_position": 287,
       "analysis_token_position": 284,
-      "nearest_neuron": 1189
+      "nearest_neuron": 1189,
+      "token_scale_percentiles": {
+        "p01": 0.11546353250741959,
+        "p10": 0.13102541863918304,
+        "p50": 0.15365241467952728,
+        "p90": 0.17790041863918304,
+        "p99": 0.19835250079631805
+      }
     },
     {
       "layer": 8,
       "scale": 0.13705085217952728,
-      "side": "positive",
-      "signed_reference": 0.13671875,
-      "captured_token_position": 355,
-      "analysis_token_position": 352,
-      "nearest_neuron": 2849
+      "side": "negative",
+      "signed_reference": -0.13671875,
+      "captured_token_position": 131,
+      "analysis_token_position": 128,
+      "nearest_neuron": 238,
+      "token_scale_percentiles": {
+        "p01": 0.1011272668838501,
+        "p10": 0.11572265625,
+        "p50": 0.13705085217952728,
+        "p90": 0.16615042090415955,
+        "p99": 0.21115742623806
+      }
     },
     {
       "layer": 9,
       "scale": 0.16032229363918304,
-      "side": "positive",
-      "signed_reference": 0.16015625,
-      "captured_token_position": 609,
-      "analysis_token_position": 606,
-      "nearest_neuron": 1758
+      "side": "negative",
+      "signed_reference": -0.16015625,
+      "captured_token_position": 231,
+      "analysis_token_position": 228,
+      "nearest_neuron": 244,
+      "token_scale_percentiles": {
+        "p01": 0.11426518857479095,
+        "p10": 0.13206839561462402,
+        "p50": 0.16032229363918304,
+        "p90": 0.1982421875,
+        "p99": 0.2259446084499359
+      }
     },
     {
       "layer": 10,
       "scale": 0.16520510613918304,
-      "side": "negative",
-      "signed_reference": -0.1650390625,
-      "captured_token_position": 607,
-      "analysis_token_position": 604,
-      "nearest_neuron": 125
+      "side": "positive",
+      "signed_reference": 0.1650390625,
+      "captured_token_position": 227,
+      "analysis_token_position": 224,
+      "nearest_neuron": 1435,
+      "token_scale_percentiles": {
+        "p01": 0.12201173603534698,
+        "p10": 0.13966503739356995,
+        "p50": 0.16520510613918304,
+        "p90": 0.1993681937456131,
+        "p99": 0.2403126060962677
+      }
     },
     {
       "layer": 11,
       "scale": 0.18571291863918304,
-      "side": "negative",
-      "signed_reference": -0.185546875,
-      "captured_token_position": 402,
-      "analysis_token_position": 399,
-      "nearest_neuron": 120
+      "side": "positive",
+      "signed_reference": 0.185546875,
+      "captured_token_position": 283,
+      "analysis_token_position": 280,
+      "nearest_neuron": 1374,
+      "token_scale_percentiles": {
+        "p01": 0.1242317333817482,
+        "p10": 0.14372073113918304,
+        "p50": 0.18571291863918304,
+        "p90": 0.22037415206432343,
+        "p99": 0.23930597305297852
+      }
     },
     {
       "layer": 12,
       "scale": 0.19059573113918304,
       "side": "negative",
       "signed_reference": -0.1904296875,
-      "captured_token_position": 544,
-      "analysis_token_position": 541,
-      "nearest_neuron": 215
+      "captured_token_position": 46,
+      "analysis_token_position": 43,
+      "nearest_neuron": 422,
+      "token_scale_percentiles": {
+        "p01": 0.1357213407754898,
+        "p10": 0.15072272717952728,
+        "p50": 0.19059573113918304,
+        "p90": 0.22785454988479614,
+        "p99": 0.269418329000473
+      }
     },
     {
       "layer": 13,
@@ -138,25 +229,46 @@
       "signed_reference": -0.2265625,
       "captured_token_position": 37,
       "analysis_token_position": 34,
-      "nearest_neuron": 250
+      "nearest_neuron": 250,
+      "token_scale_percentiles": {
+        "p01": 0.1659466177225113,
+        "p10": 0.19271491467952728,
+        "p50": 0.22672854363918304,
+        "p90": 0.2776758372783661,
+        "p99": 0.31740108132362366
+      }
     },
     {
       "layer": 14,
       "scale": 0.357421875,
-      "side": "negative",
-      "signed_reference": -0.357421875,
-      "captured_token_position": 607,
-      "analysis_token_position": 604,
-      "nearest_neuron": 111
+      "side": "positive",
+      "signed_reference": 0.357421875,
+      "captured_token_position": 345,
+      "analysis_token_position": 342,
+      "nearest_neuron": 29,
+      "token_scale_percentiles": {
+        "p01": 0.2600977122783661,
+        "p10": 0.29932230710983276,
+        "p50": 0.357421875,
+        "p90": 0.4205528497695923,
+        "p99": 0.47844070196151733
+      }
     },
     {
       "layer": 15,
-      "scale": 0.44630879163742065,
+      "scale": 0.44616246223449707,
       "side": "positive",
-      "signed_reference": 0.4453125,
-      "captured_token_position": 670,
-      "analysis_token_position": 667,
-      "nearest_neuron": 56
+      "signed_reference": 0.443359375,
+      "captured_token_position": 246,
+      "analysis_token_position": 243,
+      "nearest_neuron": 739,
+      "token_scale_percentiles": {
+        "p01": 0.3006432354450226,
+        "p10": 0.36037129163742065,
+        "p50": 0.44616246223449707,
+        "p90": 0.5247659087181091,
+        "p99": 0.5797293782234192
+      }
     },
     {
       "layer": 16,
@@ -165,16 +277,30 @@
       "signed_reference": -0.31640625,
       "captured_token_position": 476,
       "analysis_token_position": 473,
-      "nearest_neuron": 24
+      "nearest_neuron": 24,
+      "token_scale_percentiles": {
+        "p01": 0.2655833065509796,
+        "p10": 0.28191420435905457,
+        "p50": 0.31740254163742065,
+        "p90": 0.3619590997695923,
+        "p99": 0.4248775541782379
+      }
     },
     {
       "layer": 17,
-      "scale": 0.30568379163742065,
+      "scale": 0.3055177330970764,
       "side": "positive",
       "signed_reference": 0.3046875,
-      "captured_token_position": 355,
-      "analysis_token_position": 352,
-      "nearest_neuron": 1650
+      "captured_token_position": 185,
+      "analysis_token_position": 182,
+      "nearest_neuron": 10,
+      "token_scale_percentiles": {
+        "p01": 0.24066351354122162,
+        "p10": 0.2679102122783661,
+        "p50": 0.3055177330970764,
+        "p90": 0.3443809747695923,
+        "p99": 0.3831445872783661
+      }
     },
     {
       "layer": 18,
@@ -183,52 +309,94 @@
       "signed_reference": -0.35546875,
       "captured_token_position": 82,
       "analysis_token_position": 79,
-      "nearest_neuron": 181
+      "nearest_neuron": 181,
+      "token_scale_percentiles": {
+        "p01": 0.27320319414138794,
+        "p10": 0.30992212891578674,
+        "p50": 0.3558008372783661,
+        "p90": 0.41472670435905457,
+        "p99": 0.4907159209251404
+      }
     },
     {
       "layer": 19,
-      "scale": 0.4375,
-      "side": "negative",
-      "signed_reference": -0.4375,
-      "captured_token_position": 316,
-      "analysis_token_position": 313,
-      "nearest_neuron": 217
+      "scale": 0.4373536705970764,
+      "side": "positive",
+      "signed_reference": 0.435546875,
+      "captured_token_position": 564,
+      "analysis_token_position": 561,
+      "nearest_neuron": 130,
+      "token_scale_percentiles": {
+        "p01": 0.30078125,
+        "p10": 0.3382227122783661,
+        "p50": 0.4373536705970764,
+        "p90": 0.5397266745567322,
+        "p99": 0.6260493993759155
+      }
     },
     {
       "layer": 20,
-      "scale": 0.44792982935905457,
+      "scale": 0.4477637708187103,
       "side": "positive",
       "signed_reference": 0.447265625,
-      "captured_token_position": 411,
-      "analysis_token_position": 408,
-      "nearest_neuron": 714
+      "captured_token_position": 67,
+      "analysis_token_position": 64,
+      "nearest_neuron": 2706,
+      "token_scale_percentiles": {
+        "p01": 0.2474721521139145,
+        "p10": 0.30147865414619446,
+        "p50": 0.4477637708187103,
+        "p90": 0.6671177744865417,
+        "p99": 0.817140519618988
+      }
     },
     {
       "layer": 21,
-      "scale": 0.48960962891578674,
+      "scale": 0.4894436001777649,
       "side": "negative",
       "signed_reference": -0.48828125,
       "captured_token_position": 266,
       "analysis_token_position": 263,
-      "nearest_neuron": 15
+      "nearest_neuron": 15,
+      "token_scale_percentiles": {
+        "p01": 0.27367329597473145,
+        "p10": 0.31683796644210815,
+        "p50": 0.4894436001777649,
+        "p90": 0.9224221110343933,
+        "p99": 1.2314790487289429
+      }
     },
     {
       "layer": 22,
       "scale": 0.6608204245567322,
       "side": "negative",
       "signed_reference": -0.66015625,
-      "captured_token_position": 565,
-      "analysis_token_position": 562,
-      "nearest_neuron": 1856
+      "captured_token_position": 152,
+      "analysis_token_position": 149,
+      "nearest_neuron": 524,
+      "token_scale_percentiles": {
+        "p01": 0.36199378967285156,
+        "p10": 0.43402546644210815,
+        "p50": 0.6608204245567322,
+        "p90": 1.3371330499649048,
+        "p99": 1.864018440246582
+      }
     },
     {
       "layer": 23,
-      "scale": 1.3919533491134644,
-      "side": "positive",
-      "signed_reference": 1.390625,
-      "captured_token_position": 633,
-      "analysis_token_position": 630,
-      "nearest_neuron": 388
+      "scale": 1.391289234161377,
+      "side": "negative",
+      "signed_reference": -1.390625,
+      "captured_token_position": 225,
+      "analysis_token_position": 222,
+      "nearest_neuron": 54,
+      "token_scale_percentiles": {
+        "p01": 0.9146159887313843,
+        "p10": 1.0716408491134644,
+        "p50": 1.391289234161377,
+        "p90": 1.7758443355560303,
+        "p99": 2.12077260017395
+      }
     }
   ]
 }
