@@ -1,5 +1,11 @@
 # llmdbg for VS Code
 
+Step through an LLM one token and one transformer layer at a time. Set
+breakpoints, inspect residual-stream representations through interpretability
+lenses, and modify internal components to test their causal effects.
+
+![llmdbg stepping through Qwen3.5 alongside Residual, MLP, and ICA Lens results](assets/screenshots/lens-overview.png)
+
 This extension connects VS Code's debugger UI to the bundled `llmdbg` Python
 Debug Adapter Protocol implementation. On first use it creates a private Python
 environment in VS Code's per-extension storage. It does not use or modify the
