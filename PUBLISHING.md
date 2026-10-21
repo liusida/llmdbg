@@ -1,13 +1,13 @@
 # Publishing the VS Code extension
 
-The Marketplace identity is `liusida.llmdbg`. Publishing is intentionally a
+The Marketplace identity is `SidaLiu.llmdbg`. Publishing is intentionally a
 manual GitHub Actions operation, with tests and packaging checks preceding the
 public upload.
 
 ## One-time Marketplace setup
 
-1. Sign in at <https://marketplace.visualstudio.com/manage/publishers/> and
-   create or confirm the publisher whose immutable ID is `liusida`.
+1. Sign in at <https://marketplace.visualstudio.com/manage/publishers/SidaLiu>
+   and confirm access to the publisher whose immutable ID is `SidaLiu`.
 2. For that publisher, configure trusted publishing for:
    - GitHub owner: `liusida`
    - Repository: `llmdbg`
@@ -15,7 +15,7 @@ public upload.
 3. No `VSCE_PAT` repository secret is needed. The workflow exchanges GitHub's
    short-lived OIDC identity for a Marketplace publishing credential.
 
-Only someone who controls the `liusida` Marketplace publisher can complete the
+Only someone who controls the `SidaLiu` Marketplace publisher can complete the
 one-time setup.
 
 ## Publish a pre-release
