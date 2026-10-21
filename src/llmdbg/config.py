@@ -212,7 +212,7 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
     stop_on_entry = False
     functions: dict[str, dict[str, int]] = {}
     function_bindings: dict[str, list[dict[str, Any]]] = {}
-    call_lines: dict[str, int] = {}
+    call_lines: dict[str, Any] = {}
     globals_: dict[str, Any] = {}
 
     for statement in tree.body:
@@ -290,10 +290,17 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
                         if "prompt" in globals_
                         else _literal(value, "prompt")
                     )
-                elif node.func.attr in {"token_embedding", "final_layernorm"}:
+                elif node.func.attr in {
+                    "token_embedding", "final_layernorm", "vocabulary_projection",
+                    "top_tokens",
+                }:
                     call_lines.setdefault(node.func.attr, node.lineno)
             elif isinstance(node.func, ast.Name) and node.func.id in _FUNCTION_OPERATIONS:
                 call_lines.setdefault(node.func.id, node.lineno)
+            elif isinstance(node.func, ast.Name) and node.func.id == "nop":
+                call_lines.setdefault("nop", []).append(node.lineno)
+            elif isinstance(node.func, ast.Name) and node.func.id == "end":
+                call_lines.setdefault("end", node.lineno)
 
     if model_call is None or not model_call.args:
         raise ValueError("Python llmdbg program must assign model = gpt2(\"model-id\", ...)")

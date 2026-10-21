@@ -1,0 +1,431 @@
+{
+  "schema_version": 2,
+  "model_id": "Qwen/Qwen3.5-2B",
+  "model_revision": "main",
+  "architecture": "qwen3_5",
+  "activation": "input channels to attention o_proj/out_proj",
+  "quantity": "activation * l2_norm(output-projection direction)",
+  "statistic": "median across analyzed tokens of token p99(abs(activation) * l2_norm(output-projection direction))",
+  "quantile": 0.99,
+  "side_definition": "sign of the activation-weighted contribution magnitude nearest p99 at the token supplying the layer median",
+  "prompt_file": "diverse_32_sentences.txt",
+  "prompt_sha256": "cb64a81e8f0ccd27000b912b3a0c22d49661cf598e8b0fd67348ce235b6ac7a8",
+  "prefix": "Context:\n",
+  "excluded_prefix_tokens": 3,
+  "analyzed_tokens": 672,
+  "captured_tokens": 675,
+  "untruncated_tokens": 675,
+  "truncated_to_model_context": false,
+  "channel_size": 2048,
+  "touched_model_bytes": 3763650432,
+  "layers": [
+    {
+      "layer": 0,
+      "attention_kind": "gated_linear_attention",
+      "scale": 0.14186236262321472,
+      "side": "negative",
+      "signed_reference": -0.14301742613315582,
+      "captured_token_position": 87,
+      "analysis_token_position": 84,
+      "nearest_channel": 163,
+      "token_scale_percentiles": {
+        "p01": 0.0535854771733284,
+        "p10": 0.06712472438812256,
+        "p50": 0.14186236262321472,
+        "p90": 0.18270619213581085,
+        "p99": 0.21280309557914734
+      }
+    },
+    {
+      "layer": 1,
+      "attention_kind": "gated_linear_attention",
+      "scale": 0.06711632758378983,
+      "side": "negative",
+      "signed_reference": -0.06836599111557007,
+      "captured_token_position": 173,
+      "analysis_token_position": 170,
+      "nearest_channel": 1655,
+      "token_scale_percentiles": {
+        "p01": 0.04403367638587952,
+        "p10": 0.05294228717684746,
+        "p50": 0.06711632758378983,
+        "p90": 0.10313905030488968,
+        "p99": 0.14887434244155884
+      }
+    },
+    {
+      "layer": 2,
+      "attention_kind": "gated_linear_attention",
+      "scale": 0.09705477952957153,
+      "side": "positive",
+      "signed_reference": 0.09755973517894745,
+      "captured_token_position": 255,
+      "analysis_token_position": 252,
+      "nearest_channel": 1576,
+      "token_scale_percentiles": {
+        "p01": 0.06840988248586655,
+        "p10": 0.07957950979471207,
+        "p50": 0.09705477952957153,
+        "p90": 0.13668493926525116,
+        "p99": 0.19194245338439941
+      }
+    },
+    {
+      "layer": 3,
+      "attention_kind": "full_attention",
+      "scale": 0.1322796642780304,
+      "side": "positive",
+      "signed_reference": 0.13232077658176422,
+      "captured_token_position": 91,
+      "analysis_token_position": 88,
+      "nearest_channel": 1413,
+      "token_scale_percentiles": {
+        "p01": 0.0910206213593483,
+        "p10": 0.10627829283475876,
+        "p50": 0.1322796642780304,
+        "p90": 0.17112857103347778,
+        "p99": 0.2030000537633896
+      }
+    },
+    {
+      "layer": 4,
+      "attention_kind": "gated_linear_attention",
+      "scale": 0.11789964139461517,
+      "side": "negative",
+      "signed_reference": -0.11882402002811432,
+      "captured_token_position": 95,
+      "analysis_token_position": 92,
+      "nearest_channel": 80,
+      "token_scale_percentiles": {
+        "p01": 0.08592693507671356,
+        "p10": 0.09760556370019913,
+        "p50": 0.11789964139461517,
+        "p90": 0.14404763281345367,
+        "p99": 0.16961324214935303
+      }
+    },
+    {
+      "layer": 5,
+      "attention_kind": "gated_linear_attention",
+      "scale": 0.1357319951057434,
+      "side": "negative",
+      "signed_reference": -0.13832633197307587,
+      "captured_token_position": 242,
+      "analysis_token_position": 239,
+      "nearest_channel": 1615,
+      "token_scale_percentiles": {
+        "p01": 0.10038141906261444,
+        "p10": 0.11276110261678696,
+        "p50": 0.1357319951057434,
+        "p90": 0.16291894018650055,
+        "p99": 0.1859895884990692
+      }
+    },
+    {
+      "layer": 6,
+      "attention_kind": "gated_linear_attention",
+      "scale": 0.14125332236289978,
+      "side": "negative",
+      "signed_reference": -0.14251035451889038,
+      "captured_token_position": 392,
+      "analysis_token_position": 389,
+      "nearest_channel": 1404,
+      "token_scale_percentiles": {
+        "p01": 0.10096240788698196,
+        "p10": 0.11627963930368423,
+        "p50": 0.14125332236289978,
+        "p90": 0.17141956090927124,
+        "p99": 0.19475163519382477
+      }
+    },
+    {
+      "layer": 7,
+      "attention_kind": "full_attention",
+      "scale": 0.27170488238334656,
+      "side": "negative",
+      "signed_reference": -0.2718246579170227,
+      "captured_token_position": 21,
+      "analysis_token_position": 18,
+      "nearest_channel": 1588,
+      "token_scale_percentiles": {
+        "p01": 0.1589488387107849,
+        "p10": 0.20278847217559814,
+        "p50": 0.27170488238334656,
+        "p90": 0.3264783024787903,
+        "p99": 0.3646986186504364
+      }
+    },
+    {
+      "layer": 8,
+      "attention_kind": "gated_linear_attention",
+      "scale": 0.13524353504180908,
+      "side": "positive",
+      "signed_reference": 0.13695091009140015,
+      "captured_token_position": 185,
+      "analysis_token_position": 182,
+      "nearest_channel": 762,
+      "token_scale_percentiles": {
+        "p01": 0.09223046898841858,
+        "p10": 0.11231814324855804,
+        "p50": 0.13524353504180908,
+        "p90": 0.164739727973938,
+        "p99": 0.2044234424829483
+      }
+    },
+    {
+      "layer": 9,
+      "attention_kind": "gated_linear_attention",
+      "scale": 0.15029165148735046,
+      "side": "negative",
+      "signed_reference": -0.1504143625497818,
+      "captured_token_position": 456,
+      "analysis_token_position": 453,
+      "nearest_channel": 1185,
+      "token_scale_percentiles": {
+        "p01": 0.10355108231306076,
+        "p10": 0.1256648749113083,
+        "p50": 0.15029165148735046,
+        "p90": 0.1805802583694458,
+        "p99": 0.2187873274087906
+      }
+    },
+    {
+      "layer": 10,
+      "attention_kind": "gated_linear_attention",
+      "scale": 0.16189874708652496,
+      "side": "positive",
+      "signed_reference": 0.165868878364563,
+      "captured_token_position": 134,
+      "analysis_token_position": 131,
+      "nearest_channel": 1519,
+      "token_scale_percentiles": {
+        "p01": 0.10726170986890793,
+        "p10": 0.1314018964767456,
+        "p50": 0.16189874708652496,
+        "p90": 0.20803214609622955,
+        "p99": 0.2657355070114136
+      }
+    },
+    {
+      "layer": 11,
+      "attention_kind": "full_attention",
+      "scale": 0.31537169218063354,
+      "side": "negative",
+      "signed_reference": -0.32155102491378784,
+      "captured_token_position": 420,
+      "analysis_token_position": 417,
+      "nearest_channel": 1659,
+      "token_scale_percentiles": {
+        "p01": 0.13355042040348053,
+        "p10": 0.18493810296058655,
+        "p50": 0.31537169218063354,
+        "p90": 0.3895456790924072,
+        "p99": 0.4413844048976898
+      }
+    },
+    {
+      "layer": 12,
+      "attention_kind": "gated_linear_attention",
+      "scale": 0.1443212330341339,
+      "side": "positive",
+      "signed_reference": 0.14471650123596191,
+      "captured_token_position": 555,
+      "analysis_token_position": 552,
+      "nearest_channel": 1235,
+      "token_scale_percentiles": {
+        "p01": 0.0880148783326149,
+        "p10": 0.10590151697397232,
+        "p50": 0.1443212330341339,
+        "p90": 0.19505462050437927,
+        "p99": 0.31836289167404175
+      }
+    },
+    {
+      "layer": 13,
+      "attention_kind": "gated_linear_attention",
+      "scale": 0.16178300976753235,
+      "side": "negative",
+      "signed_reference": -0.1620151400566101,
+      "captured_token_position": 490,
+      "analysis_token_position": 487,
+      "nearest_channel": 135,
+      "token_scale_percentiles": {
+        "p01": 0.09643875807523727,
+        "p10": 0.12530136108398438,
+        "p50": 0.16178300976753235,
+        "p90": 0.23106412589550018,
+        "p99": 0.2978494465351105
+      }
+    },
+    {
+      "layer": 14,
+      "attention_kind": "gated_linear_attention",
+      "scale": 0.24893803894519806,
+      "side": "positive",
+      "signed_reference": 0.24897463619709015,
+      "captured_token_position": 134,
+      "analysis_token_position": 131,
+      "nearest_channel": 1805,
+      "token_scale_percentiles": {
+        "p01": 0.18183809518814087,
+        "p10": 0.20674119889736176,
+        "p50": 0.24893803894519806,
+        "p90": 0.2982630133628845,
+        "p99": 0.34323278069496155
+      }
+    },
+    {
+      "layer": 15,
+      "attention_kind": "full_attention",
+      "scale": 0.4509511888027191,
+      "side": "positive",
+      "signed_reference": 0.45292356610298157,
+      "captured_token_position": 202,
+      "analysis_token_position": 199,
+      "nearest_channel": 595,
+      "token_scale_percentiles": {
+        "p01": 0.19330620765686035,
+        "p10": 0.23352691531181335,
+        "p50": 0.4509511888027191,
+        "p90": 0.6019921898841858,
+        "p99": 0.7120926380157471
+      }
+    },
+    {
+      "layer": 16,
+      "attention_kind": "gated_linear_attention",
+      "scale": 0.28940531611442566,
+      "side": "negative",
+      "signed_reference": -0.2905794382095337,
+      "captured_token_position": 119,
+      "analysis_token_position": 116,
+      "nearest_channel": 1290,
+      "token_scale_percentiles": {
+        "p01": 0.17597031593322754,
+        "p10": 0.2147768884897232,
+        "p50": 0.28940531611442566,
+        "p90": 0.37048888206481934,
+        "p99": 0.4832912087440491
+      }
+    },
+    {
+      "layer": 17,
+      "attention_kind": "gated_linear_attention",
+      "scale": 0.2261378914117813,
+      "side": "negative",
+      "signed_reference": -0.22913122177124023,
+      "captured_token_position": 419,
+      "analysis_token_position": 416,
+      "nearest_channel": 160,
+      "token_scale_percentiles": {
+        "p01": 0.13267140090465546,
+        "p10": 0.1673222780227661,
+        "p50": 0.2261378914117813,
+        "p90": 0.28307870030403137,
+        "p99": 0.33290424942970276
+      }
+    },
+    {
+      "layer": 18,
+      "attention_kind": "gated_linear_attention",
+      "scale": 0.2761300802230835,
+      "side": "positive",
+      "signed_reference": 0.2765870690345764,
+      "captured_token_position": 127,
+      "analysis_token_position": 124,
+      "nearest_channel": 1764,
+      "token_scale_percentiles": {
+        "p01": 0.1764165759086609,
+        "p10": 0.21326513588428497,
+        "p50": 0.2761300802230835,
+        "p90": 0.34899863600730896,
+        "p99": 0.42781707644462585
+      }
+    },
+    {
+      "layer": 19,
+      "attention_kind": "full_attention",
+      "scale": 0.5267003774642944,
+      "side": "positive",
+      "signed_reference": 0.5288720726966858,
+      "captured_token_position": 193,
+      "analysis_token_position": 190,
+      "nearest_channel": 1186,
+      "token_scale_percentiles": {
+        "p01": 0.21484777331352234,
+        "p10": 0.3487963378429413,
+        "p50": 0.5267003774642944,
+        "p90": 0.6973530054092407,
+        "p99": 0.8151727914810181
+      }
+    },
+    {
+      "layer": 20,
+      "attention_kind": "gated_linear_attention",
+      "scale": 0.4040297567844391,
+      "side": "positive",
+      "signed_reference": 0.4046517014503479,
+      "captured_token_position": 267,
+      "analysis_token_position": 264,
+      "nearest_channel": 1298,
+      "token_scale_percentiles": {
+        "p01": 0.24347278475761414,
+        "p10": 0.3074376583099365,
+        "p50": 0.4040297567844391,
+        "p90": 0.5372109413146973,
+        "p99": 0.6469000577926636
+      }
+    },
+    {
+      "layer": 21,
+      "attention_kind": "gated_linear_attention",
+      "scale": 0.30480504035949707,
+      "side": "positive",
+      "signed_reference": 0.30653610825538635,
+      "captured_token_position": 326,
+      "analysis_token_position": 323,
+      "nearest_channel": 819,
+      "token_scale_percentiles": {
+        "p01": 0.18505674600601196,
+        "p10": 0.2266836166381836,
+        "p50": 0.30480504035949707,
+        "p90": 0.41729220747947693,
+        "p99": 0.5151274800300598
+      }
+    },
+    {
+      "layer": 22,
+      "attention_kind": "gated_linear_attention",
+      "scale": 0.444855272769928,
+      "side": "negative",
+      "signed_reference": -0.45175546407699585,
+      "captured_token_position": 368,
+      "analysis_token_position": 365,
+      "nearest_channel": 258,
+      "token_scale_percentiles": {
+        "p01": 0.27994322776794434,
+        "p10": 0.3265254497528076,
+        "p50": 0.444855272769928,
+        "p90": 0.6023472547531128,
+        "p99": 0.726502001285553
+      }
+    },
+    {
+      "layer": 23,
+      "attention_kind": "full_attention",
+      "scale": 0.923163890838623,
+      "side": "positive",
+      "signed_reference": 0.9258508682250977,
+      "captured_token_position": 73,
+      "analysis_token_position": 70,
+      "nearest_channel": 1539,
+      "token_scale_percentiles": {
+        "p01": 0.7351043820381165,
+        "p10": 0.8153635859489441,
+        "p50": 0.923163890838623,
+        "p90": 1.0548067092895508,
+        "p99": 1.1816308498382568
+      }
+    }
+  ]
+}

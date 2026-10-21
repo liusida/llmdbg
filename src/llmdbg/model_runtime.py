@@ -64,6 +64,16 @@ class TokenScore:
 
 
 @dataclass(frozen=True)
+class TokenPrediction:
+    """One next-token prediction from the model's final vocabulary logits."""
+
+    token_id: int
+    text: str
+    logit: float
+    probability: float
+
+
+@dataclass(frozen=True)
 class NeuronProjection:
     """An activated MLP neuron and its vocabulary readouts."""
 
@@ -72,6 +82,16 @@ class NeuronProjection:
     direction_norm: float
     vocabulary: tuple[TokenScore, ...]
     contribution: tuple[TokenScore, ...]
+    j_lens: tuple[TokenScore, ...] = ()
+    r_lens: tuple[TokenScore, ...] = ()
+
+
+@dataclass(frozen=True)
+class VectorProjection:
+    """Vocabulary readouts for one model-width vector."""
+
+    norm: float
+    vocabulary: tuple[TokenScore, ...]
     j_lens: tuple[TokenScore, ...] = ()
     r_lens: tuple[TokenScore, ...] = ()
 
@@ -88,6 +108,9 @@ class ModelExecution:
     past_key_values: Any = None
     cached_through: int = -1
     interventions: dict[tuple[int, str, str, int], float] = field(default_factory=dict)
+    projection_norms: dict[tuple[int, tuple[int, ...]], Any] = field(
+        default_factory=dict
+    )
 
     @property
     def token_count(self) -> int:
@@ -119,6 +142,31 @@ class ModelExecution:
             self.past_key_values = next_cache
             self.cached_through = position
             return ModelTrace(trace.states, self.tokens)
+
+    def vocabulary_projection(
+        self, hidden: tuple[float, ...], *, count: int = 10
+    ) -> tuple[tuple[float, ...], tuple[TokenPrediction, ...]]:
+        """Project one final hidden state to logits and decode its top predictions."""
+        import torch
+
+        with _runtime_lock, torch.inference_mode():
+            weight = self.runtime.model.get_output_embeddings().weight
+            vector = torch.tensor(hidden, device=weight.device, dtype=weight.dtype)
+            logits = torch.mv(weight, vector).float()
+            values, ids = torch.topk(logits, min(count, logits.numel()))
+            probabilities = torch.softmax(logits, dim=0).index_select(0, ids)
+            predictions = tuple(
+                TokenPrediction(
+                    int(token_id),
+                    self.runtime.tokenizer.decode([int(token_id)]),
+                    float(logit),
+                    float(probability),
+                )
+                for token_id, logit, probability in zip(
+                    ids.tolist(), values.tolist(), probabilities.tolist(), strict=True
+                )
+            )
+            return tuple(logits.cpu().tolist()), predictions
 
     def set_intervention(
         self,
@@ -178,12 +226,73 @@ class ModelExecution:
             if self.runtime.architecture == "gpt2"
             else block.mlp.down_proj.weight.T
         )
+        return self._top_projected_components(
+            layer_index, activation, down_projection,
+            component_count=neuron_count, token_count=token_count,
+            include_j_lens=include_j_lens, include_r_lens=include_r_lens,
+        )
+
+    def top_attention_channels(
+        self,
+        layer_name: str,
+        activation: tuple[float, ...],
+        *,
+        channel_count: int = 5,
+        token_count: int = 5,
+        include_j_lens: bool = False,
+        include_r_lens: bool = False,
+    ) -> tuple[NeuronProjection, ...]:
+        """Project active attention channels through W_O and vocabulary readouts."""
+        import re
+
+        match = re.fullmatch(
+            r"(?:transformer\.h|model\.layers)\.(\d+)\."
+            r"(?:attention|full_attention|gated_linear_attention)",
+            layer_name,
+        )
+        if match is None:
+            return ()
+        layer_index = int(match.group(1))
+        block = self.runtime.layers[layer_index]
+        if self.runtime.architecture == "gpt2":
+            projection = block.attn.c_proj.weight
+        else:
+            mixer = (
+                block.self_attn
+                if layer_name.endswith(".full_attention")
+                else block.linear_attn
+            )
+            projection = (
+                mixer.o_proj.weight.T
+                if hasattr(mixer, "o_proj")
+                else mixer.out_proj.weight.T
+            )
+        return self._top_projected_components(
+            layer_index, activation, projection,
+            component_count=channel_count, token_count=token_count,
+            include_j_lens=include_j_lens, include_r_lens=include_r_lens,
+        )
+
+    def _top_projected_components(
+        self,
+        layer_index: int,
+        activation: tuple[float, ...],
+        projection: Any,
+        *,
+        component_count: int,
+        token_count: int,
+        include_j_lens: bool,
+        include_r_lens: bool,
+    ) -> tuple[NeuronProjection, ...]:
+        """Read individual activated input channels through a linear projection."""
+        import torch
+
         unembedding = self.runtime.model.get_output_embeddings().weight
         from llmdbg.j_lens import source_map as j_lens_map
         from llmdbg.r_lens import source_map as r_lens_map
 
         model_id = str(getattr(self.runtime.model.config, "_name_or_path", ""))
-        hidden_size = int(down_projection.shape[1])
+        hidden_size = int(projection.shape[1])
         j_lens_source = (
             j_lens_map(model_id, layer_index, hidden_size) if include_j_lens else None
         )
@@ -196,13 +305,23 @@ class ModelExecution:
         with _runtime_lock, torch.inference_mode():
             activation_tensor = torch.tensor(
                 activation,
-                dtype=down_projection.dtype,
-                device=down_projection.device,
+                dtype=projection.dtype,
+                device=projection.device,
             )
-            active_values, active_indices = torch.topk(
-                activation_tensor, min(neuron_count, activation_tensor.numel())
+            norm_key = (int(projection.data_ptr()), tuple(projection.shape))
+            all_direction_norms = self.projection_norms.get(norm_key)
+            if all_direction_norms is None:
+                all_direction_norms = torch.linalg.vector_norm(
+                    projection, ord=2, dim=1, dtype=torch.float32
+                )
+                self.projection_norms[norm_key] = all_direction_norms
+            contribution_magnitudes = activation_tensor.abs().float() * all_direction_norms
+            _, active_indices = torch.topk(
+                contribution_magnitudes,
+                min(component_count, activation_tensor.numel()),
             )
-            directions = down_projection.index_select(0, active_indices)
+            active_values = activation_tensor.index_select(0, active_indices)
+            directions = projection.index_select(0, active_indices)
             vocabulary_scores = (directions @ unembedding.T).float()
             contribution_scores = vocabulary_scores * active_values.float().unsqueeze(1)
             vocabulary_values, vocabulary_ids = torch.topk(
@@ -211,7 +330,7 @@ class ModelExecution:
             contribution_values, contribution_ids = torch.topk(
                 contribution_scores, min(token_count, contribution_scores.shape[1]), dim=1
             )
-            direction_norms = directions.float().norm(dim=1)
+            direction_norms = all_direction_norms.index_select(0, active_indices)
             def transported_scores(source: Any) -> tuple[Any, Any]:
                 if source is None:
                     return None, None
@@ -219,7 +338,7 @@ class ModelExecution:
                 mapping = mapping.to(device=directions.device, dtype=torch.float32)
                 mapped = torch.einsum("oi,bi->bo", mapping, directions.float())
                 normalized = self.runtime.final_norm(
-                    mapped.to(dtype=down_projection.dtype)[:, None, :]
+                    mapped.to(dtype=projection.dtype)[:, None, :]
                 )[:, 0]
                 scores = (normalized @ unembedding.T).float()
                 values, ids = torch.topk(
@@ -262,6 +381,70 @@ class ModelExecution:
             )
             for rank in range(active_indices.shape[0])
         )
+
+    def vector_lens(
+        self,
+        layer_name: str,
+        vector: tuple[float, ...],
+        *,
+        token_count: int = 10,
+        include_j_lens: bool = False,
+        include_r_lens: bool = False,
+    ) -> VectorProjection:
+        """Read one MLP/residual vector directly and through J/R transport maps."""
+        import re
+
+        import torch
+
+        match = re.match(r"(?:transformer\.h|model\.layers)\.(\d+)(?:\.|$)", layer_name)
+        layer_index = int(match.group(1)) if match is not None else None
+        model_id = str(getattr(self.runtime.model.config, "_name_or_path", ""))
+        hidden_size = len(vector)
+        from llmdbg.j_lens import source_map as j_lens_map
+        from llmdbg.r_lens import source_map as r_lens_map
+
+        j_source = (
+            j_lens_map(model_id, layer_index, hidden_size)
+            if include_j_lens and layer_index is not None else None
+        )
+        r_source = (
+            r_lens_map(model_id, layer_index, hidden_size)
+            if include_r_lens and layer_index is not None else None
+        )
+        with _runtime_lock, torch.inference_mode():
+            unembedding = self.runtime.model.get_output_embeddings().weight
+            direction = torch.tensor(
+                vector, device=unembedding.device, dtype=unembedding.dtype
+            )
+
+            def readout(value: Any) -> tuple[TokenScore, ...]:
+                normalized = self.runtime.final_norm(value[None, None, :])[0, 0]
+                logits = (normalized @ unembedding.T).float()
+                values, ids = torch.topk(logits, min(token_count, logits.numel()))
+                return tuple(
+                    TokenScore(
+                        int(token_id),
+                        self.runtime.tokenizer.decode([int(token_id)]),
+                        float(score),
+                    )
+                    for token_id, score in zip(ids.tolist(), values.tolist(), strict=True)
+                )
+
+            def transported(source: Any) -> tuple[TokenScore, ...]:
+                if source is None:
+                    return ()
+                mapping, _ = source
+                mapped = mapping.to(
+                    device=direction.device, dtype=torch.float32
+                ) @ direction.float()
+                return readout(mapped.to(dtype=direction.dtype))
+
+            return VectorProjection(
+                norm=float(direction.float().norm()),
+                vocabulary=readout(direction),
+                j_lens=transported(j_source),
+                r_lens=transported(r_source),
+            )
 
 _runtime_lock = RLock()
 _runtime_key: tuple[str, str, str, str] | None = None

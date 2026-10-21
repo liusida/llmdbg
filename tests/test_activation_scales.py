@@ -2,10 +2,46 @@ from __future__ import annotations
 
 import unittest
 
-from llmdbg.activation_scales import mlp_activation_scale
+from llmdbg.activation_scales import (
+    attention_channel_activation_scale,
+    mlp_activation_scale,
+)
 
 
 class ActivationScalesTest(unittest.TestCase):
+    def test_attention_channel_scales_cover_every_supported_model(self) -> None:
+        layer_counts = {
+            "openai-community/gpt2": 12,
+            "Qwen/Qwen3.5-0.8B": 24,
+            "Qwen/Qwen3.5-2B": 24,
+            "Qwen/Qwen3.5-9B": 32,
+            "Qwen/Qwen3.5-27B": 64,
+        }
+        for model_id, layer_count in layer_counts.items():
+            records = [
+                attention_channel_activation_scale(
+                    model_id,
+                    (
+                        f"transformer.h.{layer}.attention"
+                        if model_id == "openai-community/gpt2"
+                        else f"model.layers.{layer}."
+                        + ("full_attention" if layer % 4 == 3 else "gated_linear_attention")
+                    ),
+                )
+                for layer in range(layer_count)
+            ]
+            with self.subTest(model=model_id):
+                self.assertTrue(all(record is not None for record in records))
+                self.assertTrue(all(float(record["scale"]) > 0 for record in records))
+                self.assertTrue(
+                    all(record["side"] in {"positive", "negative"} for record in records)
+                )
+        self.assertIsNone(
+            attention_channel_activation_scale(
+                "Qwen/Qwen3.5-2B", "model.layers.0.mlp"
+            )
+        )
+
     def test_supported_qwen35_models_have_every_layer(self) -> None:
         layer_counts = {
             "openai-community/gpt2": 12,

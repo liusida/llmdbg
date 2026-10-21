@@ -89,6 +89,9 @@ assignment to let ordinary breakpoints stop at every token position; the existin
 `with debug(..., token=token)` call may remain unchanged. llmdbg prefills earlier tokens into the KV cache and
 executes the selected token as a one-token cached forward pass. The **Token**
 scope shows its position, token ID, decoded text, and prompt prefix.
+Use `layer=6` to stop only in zero-based transformer block 6. Combine filters
+with `token=4, layer=6`; llmdbg parses the condition without assigning to the
+Python-like `layer` local.
 
 Watch one zero-based dimension with `residual_stream[42]`, `output[42]`,
 `input[42]`, or `delta[42]`. Run **llmdbg: Plot Current Vector** to open a

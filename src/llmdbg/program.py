@@ -6,7 +6,7 @@ import inspect
 from dataclasses import dataclass
 from typing import Any, Iterator, Sequence
 
-from llmdbg.model_runtime import ModelExecution, prepare_model_execution
+from llmdbg.model_runtime import ModelExecution, TokenPrediction, prepare_model_execution
 
 
 @dataclass(frozen=True)
@@ -139,6 +139,11 @@ class RemoteModel:
     def vocabulary_projection(self, x: TensorHandle) -> TensorHandle:
         return self._require_session().vocabulary_projection(x)
 
+    def top_tokens(
+        self, logits: TensorHandle, *, k: int = 10
+    ) -> tuple[TokenPrediction, ...]:
+        return self._require_session().top_tokens(logits, k=k)
+
     def _require_session(self) -> "DebugSession":
         if self._session is None:
             raise RuntimeError("model operations must run inside with debug(...)")
@@ -146,14 +151,15 @@ class RemoteModel:
 
 
 class DebugSession:
-    def __init__(self, model: RemoteModel, tokens: Prompt, token: int):
-        self.model, self.tokens, self.token = model, tokens, token
+    def __init__(self, model: RemoteModel, tokens: Prompt, token: int | None):
+        self.model, self.prompt = model, tokens
+        self.token = 0 if token is None else token
         self.execution: ModelExecution | None = None
         self._states: dict[str, Any] = {}
 
     def __enter__(self) -> "DebugSession":
         self.execution = prepare_model_execution(
-            self.model.model, revision=self.model.revision, prompt=self.tokens.text,
+            self.model.model, revision=self.model.revision, prompt=self.prompt.text,
             device=self.model.device, dtype=self.model.dtype,
         )
         self.model._session = self
@@ -167,6 +173,16 @@ class DebugSession:
     def layer_count(self) -> int:
         assert self.execution is not None
         return len(self.execution.runtime.layers)
+
+    @property
+    def tokens(self) -> Iterator[int]:
+        """Yield real token-position locals while selecting each runtime trace."""
+        assert self.execution is not None
+        count = int(self.execution.input_ids.shape[1])
+        for position in range(count):
+            self.token = position
+            self._refresh()
+            yield position
 
     def layer_kind(self, index: int) -> str:
         assert self.execution is not None
@@ -202,13 +218,18 @@ class DebugSession:
         self._refresh()
 
     def vocabulary_projection(self, x: TensorHandle) -> TensorHandle:
-        import torch
         assert self.execution is not None
-        runtime = self.execution.runtime
-        weight = runtime.model.lm_head.weight
-        hidden = torch.tensor(x._values, device=weight.device, dtype=weight.dtype)
-        logits = torch.mv(weight, hidden).float().cpu().tolist()
-        return TensorHandle(self, "vocabulary", "logits", tuple(logits))
+        logits, _ = self.execution.vocabulary_projection(x._values)
+        return TensorHandle(self, "vocabulary_projection", "logits", logits)
+
+    def top_tokens(
+        self, logits: TensorHandle, *, k: int = 10
+    ) -> tuple[TokenPrediction, ...]:
+        assert self.execution is not None
+        _, predictions = self.execution.vocabulary_projection(
+            self.output(self.final_norm_name)._values, count=k
+        )
+        return predictions
 
 
 def gpt2(
@@ -231,5 +252,16 @@ def qwen35(
     return RemoteModel(model, architecture="qwen3_5", revision=revision, device=device, dtype=dtype)
 
 
-def debug(model: RemoteModel, tokens: Prompt, *, token: int = 0) -> DebugSession:
+def debug(
+    model: RemoteModel, tokens: Prompt, *, token: int | None = None
+) -> DebugSession:
     return DebugSession(model, tokens, token)
+
+
+def nop() -> None:
+    """Do nothing while providing a stable source location for a breakpoint."""
+
+
+def end() -> None:
+    """Compatibility alias for the historical terminal no-op."""
+    nop()

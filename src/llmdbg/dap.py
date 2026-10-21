@@ -13,17 +13,21 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 from llmdbg.config import load_debug_config
-from llmdbg.activation_scales import mlp_activation_scale
-from llmdbg.demo_model import FEATURES, LayerState, run_demo
+from llmdbg.activation_scales import (
+    attention_channel_activation_scale,
+    mlp_activation_scale,
+)
+from llmdbg.demo_model import FEATURES, Layer, LayerState, run_demo
 from llmdbg.model_runtime import ModelExecution, NeuronProjection, prepare_model_execution
 
 
 @dataclass(frozen=True)
 class SourceBreakpoint:
-    """A model-step source line with an optional token-position condition."""
+    """A model-step source line with optional token and transformer-layer filters."""
 
     line: int
     token_position: int | None = None
+    transformer_layer: int | None = None
 
 
 class ProtocolStream:
@@ -63,6 +67,8 @@ class LLMDebugAdapter:
     FRAME_ID = 1
     SCOPE_TOKEN = 50
     SCOPE_TOKENS = 60
+    SCOPE_PREDICTIONS = 70
+    SCOPE_BREAKPOINT_CONDITIONS = 80
     SCOPE_LAYER = 100
     SCOPE_INPUT = 200
     SCOPE_RESIDUAL = 300
@@ -155,6 +161,7 @@ class LLMDebugAdapter:
         self.attention_source_lines: tuple[int, ...] = ()
         self.function_bindings: dict[str, list[dict[str, Any]]] = {}
         self.function_source_lines: dict[str, tuple[int, ...]] = {}
+        self.predictions: tuple[Any, ...] = ()
 
     @property
     def internal_steps(self) -> tuple[tuple[str, str, str], ...]:
@@ -450,20 +457,30 @@ class LLMDebugAdapter:
                 )
         elif command == "scopes":
             scopes = [
+                {
+                    "name": "Breakpoint Conditions",
+                    "variablesReference": self.SCOPE_BREAKPOINT_CONDITIONS,
+                    "expensive": False,
+                },
                 {"name": "Local variables", "variablesReference": self.SCOPE_TOKEN, "expensive": False},
             ]
             result_state = self.previous_state
             if result_state is not None:
-                scopes.extend(
-                    [
-                        {
-                            "name": f"Previous output — {result_state.layer.name}",
-                            "variablesReference": self.SCOPE_RESIDUAL,
-                            "expensive": False,
-                        },
-                        {"name": "Previous delta", "variablesReference": self.SCOPE_DELTA, "expensive": False},
-                    ]
+                scopes.append(
+                    {
+                        "name": f"Previous output — {result_state.layer.name}",
+                        "variablesReference": self.SCOPE_RESIDUAL,
+                        "expensive": False,
+                    }
                 )
+                if len(result_state.input_vector) == len(result_state.output_vector):
+                    scopes.append(
+                        {
+                            "name": "Previous delta",
+                            "variablesReference": self.SCOPE_DELTA,
+                            "expensive": False,
+                        }
+                    )
                 scopes.extend(
                     {
                         "name": label,
@@ -531,6 +548,7 @@ class LLMDebugAdapter:
             self.send_response(
                 request,
                 self._neuron_lens_snapshot(
+                    view=str(arguments.get("view", "neurons")),
                     include_j_lens=mode in {"j-lens", "all"},
                     include_r_lens=mode in {"r-lens", "all"},
                 ),
@@ -604,23 +622,25 @@ class LLMDebugAdapter:
                     )
                 else:
                     condition = str(item.get("condition", "")).strip()
-                    token_position = (
-                        self._parse_token_condition(condition)
-                        if condition
-                        else self.default_token
-                    )
-                    if condition and token_position is None:
+                    parsed_condition = self._parse_breakpoint_condition(condition)
+                    if condition and parsed_condition is None:
                         breakpoint.update(
                             {
                                 "verified": False,
                                 "line": resolved_line,
                                 "message": (
-                                    "Use a token condition such as token=4"
+                                    "Use token=4, layer=6, or token=4, layer=6"
                                 ),
                             }
                         )
                         breakpoints.append(breakpoint)
                         continue
+                    condition_token, transformer_layer = parsed_condition or (None, None)
+                    token_position = (
+                        condition_token
+                        if condition_token is not None
+                        else self.default_token
+                    )
                     if token_position is not None and token_position >= len(self.tokens):
                         breakpoint.update(
                             {
@@ -635,7 +655,9 @@ class LLMDebugAdapter:
                         breakpoints.append(breakpoint)
                         continue
                     breakpoint["line"] = resolved_line
-                    configured.append(SourceBreakpoint(resolved_line, token_position))
+                    configured.append(
+                        SourceBreakpoint(resolved_line, token_position, transformer_layer)
+                    )
                 breakpoints.append(breakpoint)
             self.breakpoints_by_source[source_key] = tuple(configured)
             if is_current_source:
@@ -716,29 +738,71 @@ class LLMDebugAdapter:
                     state_name(index, "mlp"),
                 ]
             )
-        available.append(final_norm_name)
+        available.extend(
+            [final_norm_name, "vocabulary_projection", "predictions", "end"]
+        )
         if arguments.get("pythonProgram"):
             call_lines = arguments.get("callLines", {})
             step_paths = []
             step_lines: dict[str, int] = {}
+            nop_lines = [int(line) for line in call_lines.get("nop", ())]
+            token_line = int(call_lines.get("token_embedding", 0))
+            final_norm_line = int(call_lines.get("final_layernorm", 1 << 30))
+            loop_nops = [
+                (index, line) for index, line in enumerate(nop_lines)
+                if token_line < line < final_norm_line
+            ]
             if "token_embedding" in call_lines:
                 step_paths.append("token_embedding")
                 step_lines["token_embedding"] = int(call_lines["token_embedding"])
             for index in range(len(runtime_layers)):
                 mixer_kind = layer_kind(index)
+                layer_entries: list[tuple[int, str]] = []
                 for kind in (mixer_kind, "mlp"):
                     if kind in call_lines:
                         name = state_name(index, kind)
-                        step_paths.append(name)
                         step_lines[name] = int(call_lines[kind])
+                        layer_entries.append((step_lines[name], name))
+                for nop_index, nop_line in loop_nops:
+                    nop_path = f"nop:{nop_index}:{index}"
+                    step_lines[nop_path] = nop_line
+                    layer_entries.append((nop_line, nop_path))
+                layer_entries.sort(key=lambda entry: entry[0])
+                step_paths.extend(path for _line, path in layer_entries)
             if "final_layernorm" in call_lines:
                 step_paths.append(final_norm_name)
                 step_lines[final_norm_name] = int(call_lines["final_layernorm"])
+            if "vocabulary_projection" in call_lines:
+                step_paths.append("vocabulary_projection")
+                step_lines["vocabulary_projection"] = int(
+                    call_lines["vocabulary_projection"]
+                )
+            if "top_tokens" in call_lines:
+                step_paths.append("predictions")
+                step_lines["predictions"] = int(call_lines["top_tokens"])
+            if "end" in call_lines:
+                step_paths.append("end")
+                step_lines["end"] = int(call_lines["end"])
+            loop_nop_indexes = {index for index, _line in loop_nops}
+            for nop_index, nop_line in enumerate(nop_lines):
+                if nop_index in loop_nop_indexes:
+                    continue
+                nop_path = f"nop:{nop_index}"
+                insert_at = next(
+                    (
+                        index for index, path in enumerate(step_paths)
+                        if step_lines[path] > int(nop_line)
+                    ),
+                    len(step_paths),
+                )
+                step_paths.insert(insert_at, nop_path)
+                step_lines[nop_path] = int(nop_line)
         else:
             step_paths = list(arguments.get("stepPaths", []))
             step_lines = arguments.get("stepLines", {})
-        selected = [path for path in available if path in set(step_paths)]
-        if selected != step_paths:
+        executable_paths = [path for path in step_paths if not path.startswith("nop:")]
+        selected = [path for path in available if path in set(executable_paths)]
+        if selected != executable_paths:
             raise ValueError(
                 "submodules must be a valid subsequence of model execution; "
                 f"available paths are {available!r}"
@@ -785,19 +849,180 @@ class LLMDebugAdapter:
             return
         model_trace = self.execution.trace_token(position)
         states_by_name = {state.layer.name: state for state in model_trace.states}
+        self.predictions = ()
+        if "vocabulary_projection" in self.step_paths:
+            final_norm_name = self.execution.runtime.final_norm_name
+            final_state = states_by_name[final_norm_name]
+            logits, self.predictions = self.execution.vocabulary_projection(
+                final_state.output_vector
+            )
+            states_by_name["vocabulary_projection"] = LayerState(
+                Layer(
+                    "vocabulary_projection", "vocabulary_projection",
+                    "Project the final hidden state into vocabulary logits.", 1.0, 0.0,
+                ),
+                final_state.output_vector,
+                logits,
+                "Produces one logit for every vocabulary token.",
+            )
+            states_by_name["predictions"] = LayerState(
+                Layer(
+                    "predictions", "top_tokens",
+                    "Select and decode the highest-scoring next tokens.", 1.0, 0.0,
+                ),
+                logits,
+                logits,
+                "Ranks the vocabulary logits without changing them.",
+            )
+            states_by_name["end"] = LayerState(
+                Layer(
+                    "end", "end", "End of the authored model program.", 1.0, 0.0,
+                ),
+                logits,
+                logits,
+                "Terminal breakpoint with predictions available.",
+            )
+        previous = None
+        for path in self.step_paths:
+            if path.startswith("nop:"):
+                if previous is None:
+                    raise ValueError("nop() requires an earlier model operation")
+                states_by_name[path] = LayerState(
+                    Layer(
+                        path, "nop", "No operation; stable breakpoint location.",
+                        1.0, 0.0,
+                    ),
+                    previous.output_vector,
+                    previous.output_vector,
+                    "Preserves the current value without executing a model operation.",
+                )
+            previous = states_by_name[path]
         self.trace = tuple(states_by_name[path] for path in self.step_paths)
         self.token_index = position
 
     @staticmethod
     def _parse_token_condition(condition: str) -> int | None:
-        if not condition:
-            return None
-        match = re.fullmatch(
-            r"token\s*=\s*(\d+)",
-            condition,
-            flags=re.IGNORECASE,
+        parsed = LLMDebugAdapter._parse_breakpoint_condition(condition)
+        return parsed[0] if parsed is not None else None
+
+    @staticmethod
+    def _parse_breakpoint_condition(
+        condition: str,
+    ) -> tuple[int | None, int | None] | None:
+        """Parse declarative breakpoint filters without evaluating Python code."""
+        if not condition.strip():
+            return None, None
+        values: dict[str, int] = {}
+        terms = re.split(r"\s*(?:,|&&|\band\b)\s*", condition, flags=re.IGNORECASE)
+        for term in terms:
+            match = re.fullmatch(
+                r"(token|layer)\s*(?:=|==)\s*(\d+)", term, flags=re.IGNORECASE
+            )
+            if match is None:
+                return None
+            name = match.group(1).lower()
+            if name in values:
+                return None
+            values[name] = int(match.group(2))
+        return values.get("token"), values.get("layer")
+
+    @staticmethod
+    def _transformer_layer_index(path: str) -> int | None:
+        match = re.match(r"(?:transformer\.h|model\.layers)\.(\d+)(?:\.|$)", path)
+        if match is not None:
+            return int(match.group(1))
+        nop_match = re.fullmatch(r"nop:\d+:(\d+)", path)
+        if nop_match is not None:
+            return int(nop_match.group(1))
+        demo_match = re.fullmatch(r"(?:attention|mlp)_(\d+)", path)
+        return int(demo_match.group(1)) if demo_match is not None else None
+
+    def _current_lens_phase(self) -> int:
+        """Return the explicit block phase: pre, attention, mid, MLP, or post."""
+        path = self.outer_state.layer.name
+        function_name = self._function_name_for_path(path)
+        if function_name in {"attention", "full_attention", "gated_linear_attention"}:
+            if (
+                self.inside_internal
+                and self.internal_steps[self.mlp_step_index][0] == "residual_add"
+            ):
+                return 2
+            return 1 if self.inside_internal else 0
+        if function_name == "mlp":
+            if (
+                self.inside_internal
+                and self.internal_steps[self.mlp_step_index][0] == "residual_add"
+            ):
+                return 4
+            return 3 if self.inside_internal else 2
+        block = self._transformer_layer_index(path)
+        if path.startswith("nop:") and block is not None:
+            prior_function = ""
+            next_function = ""
+            for index in range(self.layer_index - 1, -1, -1):
+                candidate = self.trace[index]
+                if self._transformer_layer_index(candidate.layer.name) == block:
+                    prior_function = self._function_name_for_path(candidate.layer.name)
+                    if prior_function:
+                        break
+            for index in range(self.layer_index + 1, len(self.trace)):
+                candidate = self.trace[index]
+                if self._transformer_layer_index(candidate.layer.name) == block:
+                    next_function = self._function_name_for_path(candidate.layer.name)
+                    if next_function:
+                        break
+            if prior_function == "mlp":
+                return 4
+            if prior_function in {
+                "attention", "full_attention", "gated_linear_attention"
+            }:
+                return 2
+            if next_function in {
+                "attention", "full_attention", "gated_linear_attention"
+            }:
+                return 0
+        return 5
+
+    def _lens_result_is_saved(self, view: str, result_layer: str | None = None) -> bool:
+        lens_phase = {
+            "residual-pre": 0,
+            "residual-input": 0,
+            "residual-stream": 0,
+            "attention-neurons": 1,
+            "attention-output": 1,
+            "residual-mid": 2,
+            "neurons": 3,
+            "mlp-output": 3,
+            "residual-post": 4,
+            "residual-output": 4,
+        }[view]
+        if result_layer is not None:
+            active_block = self._transformer_layer_index(self.outer_state.layer.name)
+            result_block = self._transformer_layer_index(result_layer)
+            if (
+                active_block is not None
+                and result_block is not None
+                and active_block != result_block
+            ):
+                return True
+        return lens_phase < self._current_lens_phase()
+
+    def _breakpoint_matches(
+        self,
+        breakpoint: SourceBreakpoint,
+        token_position: int,
+        trace_layer_index: int,
+    ) -> bool:
+        if breakpoint.token_position is not None and breakpoint.token_position != token_position:
+            return False
+        if breakpoint.transformer_layer is None:
+            return True
+        path = (
+            self.step_paths[trace_layer_index]
+            if trace_layer_index < len(self.step_paths)
+            else ""
         )
-        return int(match.group(1)) if match else None
+        return self._transformer_layer_index(path) == breakpoint.transformer_layer
 
     def _breakpoint_source_key(self, path: str | None) -> str:
         """Return a stable DAP source key without letting other files clear this source."""
@@ -832,9 +1057,8 @@ class LLMDebugAdapter:
                         continue
                     if any(
                         breakpoint.line == line
-                        and (
-                            breakpoint.token_position is None
-                            or breakpoint.token_position == token_position
+                        and self._breakpoint_matches(
+                            breakpoint, token_position, layer_index
                         )
                         for breakpoint in self.breakpoints
                     ):
@@ -864,9 +1088,8 @@ class LLMDebugAdapter:
         for index, line in enumerate(lines):
             if any(
                 breakpoint.line == line
-                and (
-                    breakpoint.token_position is None
-                    or breakpoint.token_position == self.token_index
+                and self._breakpoint_matches(
+                    breakpoint, self.token_index, self.layer_index
                 )
                 for breakpoint in self.breakpoints
             ):
@@ -888,6 +1111,10 @@ class LLMDebugAdapter:
             if self.layer_index < len(self.step_paths)
             else self.outer_state.layer.name
         )
+        if path == "vocabulary_projection":
+            return ["x"]
+        if path == "predictions" or self._predictions_are_available():
+            return ["logits"]
         if self.inside_internal or self.layer_index > 0 or path != "token_embedding":
             names.append("x")
         if self.inside_internal:
@@ -901,6 +1128,15 @@ class LLMDebugAdapter:
                     latest[str(binding["name"])] = str(binding["operation"])
             names.extend(name for name in latest if name not in names)
         return names
+
+    def _predictions_are_available(self) -> bool:
+        """Whether the current source location follows model.top_tokens(...)."""
+        step_paths = getattr(self, "step_paths", ())
+        try:
+            predictions_index = step_paths.index("predictions")
+        except ValueError:
+            return False
+        return self.layer_index > predictions_index
 
     def _local_variables(self) -> list[dict[str, Any]]:
         """Build Python-like locals for the active authored source frame."""
@@ -918,17 +1154,26 @@ class LLMDebugAdapter:
                 "variablesReference": self.SCOPE_TOKENS,
             },
             {
-                "name": "token_pos", "value": str(self.token_index), "type": "int",
-                "variablesReference": 0, "evaluateName": "token_pos",
+                "name": "token", "value": str(self.token_index), "type": "int",
+                "variablesReference": 0, "evaluateName": "token",
             },
         ]
-        path = self.step_paths[self.layer_index] if self.layer_index < len(self.step_paths) else ""
-        if self.inside_internal or self._function_name_for_path(path):
-            variables.append(
-                {
-                    "name": "layer", "value": repr(self.outer_state.layer.name), "type": "layer",
-                    "variablesReference": 0, "evaluateName": "layer",
-                }
+        step_paths = getattr(self, "step_paths", ())
+        path = step_paths[self.layer_index] if self.layer_index < len(step_paths) else ""
+        transformer_layer = self._transformer_layer_index(path)
+        if transformer_layer is not None:
+            variables.extend(
+                [
+                    {
+                        "name": "layer", "value": str(transformer_layer), "type": "int",
+                        "variablesReference": 0, "evaluateName": "layer",
+                    },
+                    {
+                        "name": "block", "value": f"model.layers[{transformer_layer}]",
+                        "type": "LayerHandle", "variablesReference": 0,
+                        "evaluateName": "block",
+                    },
+                ]
             )
         for offset, name in enumerate(self._local_vector_names()):
             vector = self._vector(self._source_expression(name))
@@ -937,6 +1182,16 @@ class LLMDebugAdapter:
                     "name": name, "value": f"{len(vector)}D vector", "type": "TensorHandle",
                     "variablesReference": self.LOCAL_VECTOR_REFERENCE + offset,
                     "evaluateName": name,
+                }
+            )
+        path = self.step_paths[self.layer_index] if self.layer_index < len(self.step_paths) else ""
+        if self._predictions_are_available():
+            variables.append(
+                {
+                    "name": "predictions", "value": f"{len(self.predictions)} tokens",
+                    "type": "next-token predictions",
+                    "variablesReference": self.SCOPE_PREDICTIONS,
+                    "evaluateName": "predictions",
                 }
             )
         variables.extend(
@@ -958,6 +1213,27 @@ class LLMDebugAdapter:
         return variables
 
     def _variables(self, reference: int) -> list[dict[str, Any]]:
+        if reference == self.SCOPE_BREAKPOINT_CONDITIONS:
+            transformer_layer = self._transformer_layer_index(self.outer_state.layer.name)
+            return [
+                {
+                    "name": "token",
+                    "value": str(self.token_index),
+                    "type": "breakpoint condition · token=N",
+                    "variablesReference": 0,
+                    "evaluateName": "token",
+                },
+                {
+                    "name": "layer",
+                    "value": (
+                        str(transformer_layer)
+                        if transformer_layer is not None else "not in a transformer block"
+                    ),
+                    "type": "breakpoint condition · layer=N",
+                    "variablesReference": 0,
+                    "evaluateName": "layer",
+                },
+            ]
         if reference == self.SCOPE_TOKEN:
             return self._local_variables()
         if reference == self.SCOPE_TOKENS:
@@ -967,6 +1243,19 @@ class LLMDebugAdapter:
                     "variablesReference": 0,
                 }
                 for index, text in enumerate(self.tokens)
+            ]
+        if reference == self.SCOPE_PREDICTIONS:
+            return [
+                {
+                    "name": f"[{index}]",
+                    "value": (
+                        f"{prediction.text!r} · logit {prediction.logit:.2f} · "
+                        f"{prediction.probability:.2%}"
+                    ),
+                    "type": "token prediction", "variablesReference": 0,
+                    "evaluateName": f"predictions[{index}]",
+                }
+                for index, prediction in enumerate(self.predictions)
             ]
         if reference >= self.LOCAL_VECTOR_REFERENCE:
             offset = reference - self.LOCAL_VECTOR_REFERENCE
@@ -1006,7 +1295,10 @@ class LLMDebugAdapter:
             return [
                 {
                     "name": f"neuron[{neuron.index}]",
-                    "value": f"activation {neuron.activation:+.6f}",
+                    "value": (
+                        f"activation {neuron.activation:+.6f} · "
+                        f"|delta| {abs(neuron.activation) * neuron.direction_norm:.6f}"
+                    ),
                     "type": "MLP neuron",
                     "variablesReference": self.NEURON_REFERENCE + rank,
                 }
@@ -1227,18 +1519,27 @@ class LLMDebugAdapter:
         self, include_j_lens: bool = False, include_r_lens: bool = False
     ) -> tuple[NeuronProjection, ...]:
         """Return cached direct vocabulary projections for the current MLP state."""
-        result_state = self.previous_state
+        inside_mlp = (
+            self.inside_internal
+            and self._function_name_for_path(self.outer_state.layer.name) == "mlp"
+        )
+        result_state = (
+            self.outer_state
+            if inside_mlp
+            else self._prior_operation_state("mlp")
+        )
+        expansion_complete = not inside_mlp or any(
+            vector == "mlp_expansion"
+            for _operation, vector, _meaning in self.internal_steps[: self.mlp_step_index]
+        )
         if (
             self.execution is None
             or result_state is None
+            or not expansion_complete
             or "mlp_expansion" not in result_state.details
         ):
             return ()
-        layer_name = (
-            self.outer_state.layer.name
-            if getattr(self, "inside_internal", False)
-            else result_state.layer.name
-        )
+        layer_name = result_state.layer.name
         key = (self.token_index, layer_name, include_j_lens, include_r_lens)
         if key not in self.neuron_cache:
             self.neuron_cache[key] = self.execution.top_mlp_neurons(
@@ -1249,16 +1550,82 @@ class LLMDebugAdapter:
             )
         return self.neuron_cache[key]
 
+    def _top_attention_channels(
+        self, include_j_lens: bool = False, include_r_lens: bool = False
+    ) -> tuple[NeuronProjection, ...]:
+        """Return the strongest mixed-attention channels and their W_O directions."""
+        function_names = {"attention", "full_attention", "gated_linear_attention"}
+        inside_attention = (
+            self.inside_internal
+            and self._function_name_for_path(self.outer_state.layer.name) in function_names
+        )
+        result_state = (
+            self.outer_state
+            if inside_attention
+            else self._prior_operation_state(*function_names)
+        )
+        if self.execution is None or result_state is None:
+            return ()
+        function_name = self._function_name_for_path(result_state.layer.name)
+        vector_name = {
+            "attention": "attention_mixing",
+            "full_attention": "full_attention_mixing",
+            "gated_linear_attention": "gated_delta_mixing",
+        }[function_name]
+        mixing_complete = not inside_attention or any(
+            detail == vector_name
+            for _operation, detail, _meaning in self.internal_steps[: self.mlp_step_index]
+        )
+        activation = result_state.details.get(vector_name)
+        if not mixing_complete or activation is None:
+            return ()
+        layer_name = result_state.layer.name
+        key = (
+            self.token_index, "attention:" + layer_name,
+            include_j_lens, include_r_lens,
+        )
+        if key not in self.neuron_cache:
+            self.neuron_cache[key] = self.execution.top_attention_channels(
+                layer_name, activation,
+                include_j_lens=include_j_lens,
+                include_r_lens=include_r_lens,
+            )
+        return self.neuron_cache[key]
+
+    def _prior_operation_state(self, *function_names: str) -> LayerState | None:
+        """Return the latest completed matching operation before the current line."""
+        for index in range(self.layer_index - 1, -1, -1):
+            candidate = self.trace[index]
+            if self._function_name_for_path(candidate.layer.name) in function_names:
+                return candidate
+        return None
+
     def _evaluate(self, expression: str) -> str | None:
         expression = self._source_expression(expression)
         if expression == "prompt":
             return self.prompt
-        if expression in ("token", "token.text"):
+        if expression == "token":
+            return str(self.token_index)
+        if expression in ("token_text", "token.text"):
             return self.tokens[self.token_index]
         if expression in ("token_pos", "position", "token.position"):
             return str(self.token_index)
-        if expression in ("layer", "name"):
-            return self.state.layer.name
+        if expression == "layer":
+            transformer_layer = self._transformer_layer_index(
+                self.outer_state.layer.name
+            )
+            return (
+                str(transformer_layer)
+                if transformer_layer is not None else "not in a transformer block"
+            )
+        if expression in ("block", "name"):
+            transformer_layer = self._transformer_layer_index(
+                self.outer_state.layer.name
+            )
+            return (
+                f"model.layers[{transformer_layer}]"
+                if transformer_layer is not None else self.state.layer.name
+            )
         if expression in ("meaning", "interpretation"):
             return self.state.layer.meaning
         if expression == "operation":
@@ -1354,6 +1721,48 @@ class LLMDebugAdapter:
 
     def _evaluate_body(self, expression: str) -> dict[str, Any] | None:
         """Build a DAP evaluate result, including expandable synthetic values."""
+        step_paths = getattr(self, "step_paths", ())
+        path = step_paths[self.layer_index] if self.layer_index < len(step_paths) else ""
+        if expression == "predictions":
+            if not self._predictions_are_available():
+                return {
+                    "result": "available after model.top_tokens(...) executes",
+                    "type": "next-token predictions", "variablesReference": 0,
+                }
+            return {
+                "result": f"{len(self.predictions)} tokens",
+                "type": "next-token predictions",
+                "variablesReference": self.SCOPE_PREDICTIONS,
+                "indexedVariables": len(self.predictions),
+            }
+        prediction_match = re.fullmatch(
+            r"predictions\[(\d+)\](?:\.(token|token_id|logit|probability))?",
+            expression,
+        )
+        if prediction_match:
+            index = int(prediction_match.group(1))
+            attribute = prediction_match.group(2)
+            if not self._predictions_are_available() or index >= len(self.predictions):
+                return {
+                    "result": f"prediction {index} is not available",
+                    "variablesReference": 0,
+                }
+            prediction = self.predictions[index]
+            values = {
+                "token": repr(prediction.text),
+                "token_id": str(prediction.token_id),
+                "logit": f"{prediction.logit:.8f}",
+                "probability": f"{prediction.probability:.8f}",
+            }
+            if attribute is not None:
+                return {"result": values[attribute], "variablesReference": 0}
+            return {
+                "result": (
+                    f"{prediction.text!r} · logit {prediction.logit:.2f} · "
+                    f"{prediction.probability:.2%}"
+                ),
+                "type": "token prediction", "variablesReference": 0,
+            }
         if expression in ("top_neurons", "top_activated_neurons"):
             result_state = self.previous_state
             if (
@@ -1367,7 +1776,7 @@ class LLMDebugAdapter:
                     "variablesReference": 0,
                 }
             return {
-                "result": "top 5 post-GELU activations",
+                "result": "top 5 residual-contribution magnitudes",
                 "type": "MLP neurons",
                 "variablesReference": self.SCOPE_TOP_NEURONS,
                 "namedVariables": 5,
@@ -1419,6 +1828,11 @@ class LLMDebugAdapter:
         return {"result": result, "variablesReference": 0}
 
     def _vector(self, name: str) -> tuple[float, ...]:
+        if name == "logits":
+            for state in self.trace:
+                if state.layer.name == "vocabulary_projection":
+                    return state.output_vector
+            raise ValueError("logits are not available before vocabulary projection")
         if name == "x":
             return self.outer_state.input_vector
         if name == "input":
@@ -1533,27 +1947,300 @@ class LLMDebugAdapter:
         }
 
     def _neuron_lens_snapshot(
-        self, include_j_lens: bool = False, include_r_lens: bool = False
+        self,
+        view: str = "neurons",
+        include_j_lens: bool = False,
+        include_r_lens: bool = False,
     ) -> dict[str, Any]:
         """Describe top MLP neurons through direct and residual-transport lenses."""
-        neurons = self._top_neurons(
-            include_j_lens=include_j_lens, include_r_lens=include_r_lens
+        if view not in {
+            "neurons", "attention-neurons", "attention-output",
+            "mlp-output", "residual-pre", "residual-mid", "residual-post",
+            "residual-input", "residual-output", "residual-stream",
+        }:
+            raise ValueError(f"unknown lens view: {view}")
+        previous_state = self.previous_state
+        inside_mlp = (
+            self.inside_internal
+            and self._function_name_for_path(self.outer_state.layer.name) == "mlp"
         )
+        result_state = self.outer_state if inside_mlp else previous_state
+        layer = result_state.layer.name if result_state is not None else ""
+
+        def prior_operation(*function_names: str) -> LayerState | None:
+            return self._prior_operation_state(*function_names)
+
+        def next_operation(*function_names: str) -> LayerState | None:
+            for index in range(self.layer_index + 1, len(self.trace)):
+                candidate = self.trace[index]
+                function_name = self._function_name_for_path(candidate.layer.name)
+                if function_name in function_names:
+                    return candidate
+                if function_name:
+                    return None
+            return None
+
+        def block_operation(*function_names: str) -> LayerState | None:
+            """Resolve an operation by block identity, independent of nearby no-ops."""
+            block = self._transformer_layer_index(self.outer_state.layer.name)
+            if block is None:
+                return None
+            for candidate in self.trace:
+                if (
+                    self._transformer_layer_index(candidate.layer.name) == block
+                    and self._function_name_for_path(candidate.layer.name)
+                    in function_names
+                ):
+                    return candidate
+            return None
+
+        def residual_geometry(
+            state: LayerState | None, transition: str
+        ) -> dict[str, float | str] | None:
+            """Return the measured geometry of x + delta for a residual update."""
+            if state is None or len(state.input_vector) != len(state.output_vector):
+                return None
+            input_vector = tuple(float(value) for value in state.input_vector)
+            delta = tuple(
+                float(output) - float(input_value)
+                for input_value, output in zip(
+                    state.input_vector, state.output_vector, strict=True
+                )
+            )
+            input_norm = sum(value * value for value in input_vector) ** 0.5
+            delta_norm = sum(value * value for value in delta) ** 0.5
+            output_norm = sum(
+                float(value) * float(value) for value in state.output_vector
+            ) ** 0.5
+            cosine = None
+            if input_norm > 0.0 and delta_norm > 0.0:
+                cosine = max(
+                    -1.0,
+                    min(
+                        1.0,
+                        sum(
+                            input_value * delta_value
+                            for input_value, delta_value in zip(
+                                input_vector, delta, strict=True
+                            )
+                        )
+                        / (input_norm * delta_norm),
+                    ),
+                )
+            return {
+                "transition": transition,
+                "inputNorm": input_norm,
+                "deltaNorm": delta_norm,
+                "outputNorm": output_norm,
+                "deltaRatio": delta_norm / input_norm if input_norm > 0.0 else 0.0,
+                "cosine": cosine,
+            }
+
+        residual_geometry_data = None
+
+        if view == "neurons" and not inside_mlp:
+            result_state = prior_operation("mlp")
+            layer = result_state.layer.name if result_state is not None else ""
+        elif view == "attention-neurons":
+            attention_names = (
+                "attention", "full_attention", "gated_linear_attention"
+            )
+            inside_attention = (
+                self.inside_internal
+                and self._function_name_for_path(self.outer_state.layer.name)
+                in attention_names
+            )
+            result_state = (
+                self.outer_state
+                if inside_attention
+                else prior_operation(*attention_names)
+            )
+            layer = result_state.layer.name if result_state is not None else ""
+
+        if view not in {"neurons", "attention-neurons"}:
+            if self.execution is None:
+                raise ValueError("a loaded model is required for vector lenses")
+            if view in {"residual-pre", "residual-input", "residual-stream"}:
+                attention_names = (
+                    "attention", "full_attention", "gated_linear_attention"
+                )
+                current_function = self._function_name_for_path(
+                    self.outer_state.layer.name
+                )
+                if current_function in attention_names:
+                    result_state = self.outer_state
+                else:
+                    result_state = block_operation(*attention_names)
+                    if result_state is None:
+                        result_state = next_operation(*attention_names)
+                    if result_state is None:
+                        result_state = prior_operation(*attention_names)
+                    if (
+                        result_state is None
+                        and self._function_name_for_path(self.outer_state.layer.name)
+                        == "mlp"
+                    ):
+                        result_state = self.outer_state
+                if result_state is None:
+                    raise ValueError(
+                        "Residual Lens · Pre requires an attention operation in the current block"
+                    )
+                layer = result_state.layer.name
+                vector = result_state.input_vector
+                label = "Residual Lens · Pre"
+            elif view == "residual-mid":
+                inside_attention = (
+                    self.inside_internal
+                    and self._function_name_for_path(self.outer_state.layer.name)
+                    in {"attention", "full_attention", "gated_linear_attention"}
+                )
+                if inside_attention:
+                    if self.internal_steps[self.mlp_step_index][0] != "residual_add":
+                        raise ValueError(
+                            "Residual Lens · Mid is available after attention residual addition"
+                        )
+                    result_state = self.outer_state
+                else:
+                    result_state = prior_operation(
+                        "attention", "full_attention", "gated_linear_attention"
+                    )
+                    if result_state is None:
+                        raise ValueError(
+                            "Residual Lens · Mid is available after attention completes"
+                        )
+                layer = result_state.layer.name
+                vector = result_state.output_vector
+                label = "Residual Lens · Mid"
+                residual_geometry_data = residual_geometry(
+                    result_state, "attention update"
+                )
+            elif view in {"residual-post", "residual-output"}:
+                if self.inside_internal:
+                    if (
+                        self._function_name_for_path(self.outer_state.layer.name) != "mlp"
+                        or self.internal_steps[self.mlp_step_index][0] != "residual_add"
+                    ):
+                        raise ValueError(
+                            "Residual Lens · Post is available after MLP residual addition"
+                        )
+                    result_state = self.outer_state
+                else:
+                    result_state = prior_operation("mlp")
+                if (
+                    result_state is None
+                    or self._function_name_for_path(result_state.layer.name) != "mlp"
+                ):
+                    raise ValueError(
+                        "Residual Lens · Post is available after an MLP completes"
+                    )
+                layer = result_state.layer.name
+                vector = result_state.output_vector
+                label = "Residual Lens · Post"
+                residual_geometry_data = residual_geometry(result_state, "MLP update")
+            elif view == "attention-output":
+                inside_attention = (
+                    self.inside_internal
+                    and self._function_name_for_path(self.outer_state.layer.name)
+                    in {"attention", "full_attention", "gated_linear_attention"}
+                )
+                attention_state = self.outer_state if inside_attention else None
+                if attention_state is None and self.layer_index > 0:
+                    attention_state = prior_operation(
+                        "attention", "full_attention", "gated_linear_attention"
+                    )
+                if attention_state is None:
+                    raise ValueError(
+                        "Attention Output Lens is available after attention output projection completes"
+                    )
+                projection_complete = not inside_attention or any(
+                    detail == "attention_projection"
+                    for _operation, detail, _meaning in self.internal_steps[: self.mlp_step_index]
+                )
+                vector = attention_state.details.get("attention_projection")
+                if not projection_complete or vector is None:
+                    raise ValueError(
+                        "Attention Output Lens is available after attention output projection completes"
+                    )
+                result_state = attention_state
+                layer = attention_state.layer.name
+                label = "Attention output"
+            else:
+                if not inside_mlp:
+                    result_state = prior_operation("mlp")
+                    layer = result_state.layer.name if result_state is not None else ""
+                if result_state is None or not layer.endswith(".mlp"):
+                    raise ValueError("MLP Output Lens is available after an MLP completes")
+                projection_complete = not inside_mlp or any(
+                    vector == "mlp_projection"
+                    for _operation, vector, _meaning in self.internal_steps[: self.mlp_step_index]
+                )
+                vector = result_state.details.get("mlp_projection")
+                label = "MLP output"
+                if not projection_complete or vector is None:
+                    raise ValueError("MLP Output Lens is available after down projection completes")
+            projection = self.execution.vector_lens(
+                layer,
+                vector,
+                include_j_lens=include_j_lens,
+                include_r_lens=include_r_lens,
+            )
+
+            def tokens(items: Any) -> list[dict[str, Any]]:
+                return [
+                    {
+                        "rank": rank, "id": token.token_id,
+                        "text": token.text, "logit": token.score,
+                    }
+                    for rank, token in enumerate(items, start=1)
+                ]
+
+            return {
+                "view": view,
+                "tokenPosition": self.token_index,
+                "token": self.tokens[self.token_index],
+                "layer": layer,
+                "transformerLayer": self._transformer_layer_index(layer),
+                "saved": self._lens_result_is_saved(view, layer),
+                "vectorLabel": label,
+                "vectorNorm": projection.norm,
+                "residualGeometry": residual_geometry_data,
+                "jLensResolved": include_j_lens,
+                "rLensResolved": include_r_lens,
+                "logitTokens": tokens(projection.vocabulary),
+                "jLensTokens": tokens(projection.j_lens),
+                "rLensTokens": tokens(projection.r_lens),
+            }
+        if view == "attention-neurons":
+            neurons = self._top_attention_channels(
+                include_j_lens=include_j_lens, include_r_lens=include_r_lens
+            )
+            if not neurons:
+                raise ValueError(
+                    "Attention Output Channel Lens is available after attention mixing completes"
+                )
+            scale_record = attention_channel_activation_scale(
+                getattr(self, "model_name", ""), layer
+            )
+        else:
+            neurons = self._top_neurons(
+                include_j_lens=include_j_lens, include_r_lens=include_r_lens
+            )
+            scale_record = mlp_activation_scale(getattr(self, "model_name", ""), layer)
         if not neurons:
             raise ValueError(
-                "Neuron Lens is available after an MLP GELU activation has completed"
+                "MLP Neuron Lens is available after an MLP activation has completed"
             )
-        layer = (
-            self.outer_state.layer.name
-            if self.inside_internal
-            else self.previous_state.layer.name  # type: ignore[union-attr]
-        )
-        scale_record = mlp_activation_scale(getattr(self, "model_name", ""), layer)
         scale = float(scale_record["scale"]) if scale_record is not None else None
         return {
+            "view": view,
+            "componentLabel": (
+                "channel" if view == "attention-neurons" else "MLP neuron"
+            ),
             "tokenPosition": self.token_index,
             "token": self.tokens[self.token_index],
             "layer": layer,
+            "transformerLayer": self._transformer_layer_index(layer),
+            "saved": self._lens_result_is_saved(view, layer),
             "jLensResolved": include_j_lens,
             "rLensResolved": include_r_lens,
             "neurons": [
@@ -1561,8 +2248,16 @@ class LLMDebugAdapter:
                     "rank": rank,
                     "index": neuron.index,
                     "activation": neuron.activation,
+                    "contributionMagnitude": abs(neuron.activation) * neuron.direction_norm,
+                    "relativeContribution": (
+                        neuron.activation * neuron.direction_norm / scale
+                        if scale is not None and scale > 0 else None
+                    ),
+                    "contributionScale": scale,
+                    # Compatibility aliases for older extension builds.
                     "relativeActivation": (
-                        neuron.activation / scale if scale is not None and scale > 0 else None
+                        neuron.activation * neuron.direction_norm / scale
+                        if scale is not None and scale > 0 else None
                     ),
                     "activationScale": scale,
                     "scaleSide": (

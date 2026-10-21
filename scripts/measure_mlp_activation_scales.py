@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure per-layer median token-p99 MLP activation scales."""
+"""Measure per-layer median token-p99 MLP residual-contribution scales."""
 
 from __future__ import annotations
 
@@ -101,8 +101,8 @@ def plot_token_scales(
     )
     ax.set_yscale("log")
     ax.set_xlabel("Layer")
-    ax.set_ylabel("Token p99 of |MLP hidden activation| (log scale)")
-    ax.set_title(f"{model_id} · MLP activation-scale calibration")
+    ax.set_ylabel("Token p99 of |activation| × |down-projection direction| (log scale)")
+    ax.set_title(f"{model_id} · MLP contribution-scale calibration")
     ax.grid(axis="y", which="both", alpha=0.18)
     ax.legend(loc="upper left", frameon=False)
     for spine in ("top", "right"):
@@ -168,16 +168,35 @@ def main() -> None:
     token_scales: dict[int, list[float]] = {}
     intermediate_sizes: set[int] = set()
 
+    direction_norms = []
+    for module in hook_modules:
+        weight = module.weight.detach()
+        direction_norms.append(
+            torch.linalg.vector_norm(
+                weight,
+                ord=2,
+                dim=1 if architecture == "gpt2" else 0,
+                dtype=torch.float32,
+            ).cpu()
+        )
+
     def make_hook(layer_index: int):
         def hook(_module: torch.nn.Module, inputs: tuple[torch.Tensor, ...]) -> None:
             values = inputs[0][0].detach().float().cpu()
             intermediate_sizes.add(int(values.shape[-1]))
             values = values[len(prefix_ids) :]
-            magnitudes = values.abs()
+            norms = direction_norms[layer_index]
+            if norms.shape[0] != values.shape[-1]:
+                raise RuntimeError(
+                    f"layer {layer_index} has {values.shape[-1]} activations but "
+                    f"{norms.shape[0]} projection directions"
+                )
+            contributions = values * norms
+            magnitudes = contributions.abs()
             token_p99 = torch.quantile(magnitudes, args.quantile, dim=1)
             token_scales[layer_index] = token_p99.tolist()
             nearest = (magnitudes - token_p99[:, None]).abs().argmin(dim=1)
-            signed_references = values.gather(1, nearest[:, None]).squeeze(1)
+            signed_references = contributions.gather(1, nearest[:, None]).squeeze(1)
             median = torch.quantile(token_p99, 0.50)
             median_token_offset = int((token_p99 - median).abs().argmin())
             scale = float(median)
@@ -227,15 +246,19 @@ def main() -> None:
     if len(intermediate_sizes) != 1:
         raise RuntimeError(f"captured inconsistent MLP widths: {intermediate_sizes}")
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "model_id": args.model,
         "model_revision": getattr(config, "_commit_hash", None) or args.revision,
         "architecture": architecture,
         "activation": activation_definition,
-        "statistic": "median across analyzed tokens of token p99(abs(activation))",
+        "quantity": "activation * l2_norm(down-projection direction)",
+        "statistic": (
+            "median across analyzed tokens of token p99(abs(activation) * "
+            "l2_norm(down-projection direction))"
+        ),
         "quantile": args.quantile,
         "side_definition": (
-            "sign of the actual neuron activation nearest the p99 magnitude at "
+            "sign of the activation-weighted contribution magnitude nearest p99 at "
             "the token supplying the layer median"
         ),
         "prompt_file": args.prompt_file.name,

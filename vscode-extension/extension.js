@@ -171,18 +171,25 @@ function neuronLensHtml(webview) {
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
 <style>
 *{box-sizing:border-box} body{margin:0;padding:16px;font:13px/1.4 var(--vscode-font-family);color:var(--vscode-foreground);background:var(--vscode-editor-background)}
-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px} h2{font-size:15px;font-weight:600;margin:0}.actions{display:flex;align-items:center;gap:8px}select{color:var(--vscode-dropdown-foreground);background:var(--vscode-dropdown-background);border:1px solid var(--vscode-dropdown-border);padding:3px 24px 3px 7px;font:inherit}button{padding:4px 12px;border:0;border-radius:2px;background:var(--vscode-button-background);color:var(--vscode-button-foreground);font:inherit;cursor:pointer} button:hover{background:var(--vscode-button-hoverBackground)}
-#context{color:var(--vscode-descriptionForeground);margin-bottom:12px}.error{color:var(--vscode-errorForeground)}
-#neurons{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:8px}.card{border:1px solid var(--vscode-panel-border);background:var(--vscode-sideBar-background)}.readouts{display:flex;flex-direction:column}.readout{display:flex;align-items:center;flex-wrap:wrap;gap:5px;padding:5px 8px}.readout+.readout{border-top:1px solid var(--vscode-panel-border)}.readout-title{font-weight:600;color:var(--vscode-descriptionForeground);white-space:nowrap}.empty{color:var(--vscode-descriptionForeground)}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.actions{display:flex;align-items:center;gap:8px}select{color:var(--vscode-dropdown-foreground);background:var(--vscode-dropdown-background);border:1px solid var(--vscode-dropdown-border);padding:3px 24px 3px 7px;font:inherit}.view-select{font-size:15px;font-weight:600}button{padding:4px 12px;border:0;border-radius:2px;background:var(--vscode-button-background);color:var(--vscode-button-foreground);font:inherit;cursor:pointer} button:hover{background:var(--vscode-button-hoverBackground)}
+#context{color:var(--vscode-descriptionForeground);margin-bottom:12px}#context:empty{display:none}.error{color:var(--vscode-errorForeground)}
+#neurons{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:8px}.card{position:relative;border:1px solid var(--vscode-panel-border);background:var(--vscode-sideBar-background)}.card.full-width{grid-column:1/-1}.card.saved{opacity:.6;border-color:transparent;background:linear-gradient(rgba(0,0,0,.24),rgba(0,0,0,.24)),var(--vscode-sideBar-background)}.card.saved::after{content:"";position:absolute;inset:-1px;pointer-events:none;background:repeating-linear-gradient(90deg,var(--vscode-descriptionForeground) 0 12px,transparent 12px 21px) top left/100% 1px no-repeat,repeating-linear-gradient(90deg,var(--vscode-descriptionForeground) 0 12px,transparent 12px 21px) bottom left/100% 1px no-repeat,repeating-linear-gradient(0deg,var(--vscode-descriptionForeground) 0 12px,transparent 12px 21px) top left/1px 100% no-repeat,repeating-linear-gradient(0deg,var(--vscode-descriptionForeground) 0 12px,transparent 12px 21px) top right/1px 100% no-repeat}.readouts{display:flex;flex-direction:column}.readout{display:flex;align-items:center;flex-wrap:wrap;gap:5px;padding:5px 8px}.readout+.readout{border-top:1px solid var(--vscode-panel-border)}.readout-title{font-weight:600;color:var(--vscode-descriptionForeground);white-space:nowrap}.empty{color:var(--vscode-descriptionForeground)}
+.target-heading{grid-column:1/-1;display:flex;align-items:center;gap:6px;margin:7px 0 0;font-size:13px;color:var(--vscode-descriptionForeground)}.target-magnitude{font-weight:400;font-variant-numeric:tabular-nums}.residual-triangle{display:block;flex:0 0 auto;width:34px;height:24px;overflow:visible}.residual-triangle line{stroke-width:1.8;stroke-linecap:round}.triangle-input{stroke:#5aa7e8;stroke-dasharray:3 2}.triangle-delta{stroke:#e6a15c}.triangle-output{stroke:#58c5ad}.residual-triangle circle{stroke:none}
 .card-head{display:flex;align-items:center;flex-wrap:wrap;gap:5px 10px;padding:7px 9px;border-bottom:1px solid var(--vscode-panel-border)}.neuron-badge{display:inline-flex;align-items:center;justify-content:center;min-width:28px;padding:1px 6px;border:1px solid var(--vscode-badge-background);border-radius:10px;background:var(--vscode-badge-background);color:var(--vscode-badge-foreground);font-weight:600;font-variant-numeric:tabular-nums}.stats{color:var(--vscode-descriptionForeground);font-variant-numeric:tabular-nums}.card-head .stats:first-of-type{margin-left:auto}
-.token-chip{flex:0 0 auto;max-width:100%;padding:3px 7px;border:1px solid var(--vscode-panel-border);border-radius:3px;color:var(--vscode-foreground);font-family:var(--vscode-editor-font-family);white-space:pre-wrap;overflow-wrap:anywhere;text-align:center;cursor:help}.readout-logit .token-chip{background:rgba(42,92,145,.42);border-color:rgba(82,148,214,.55)}.readout-j-lens .token-chip{background:rgba(105,67,145,.42);border-color:rgba(164,111,211,.55)}.readout-r-lens .token-chip{background:rgba(35,112,94,.42);border-color:rgba(63,164,139,.55)}.token-chip:hover,.token-chip:focus{border-color:var(--vscode-focusBorder);outline:none;filter:brightness(1.22)}
-</style></head><body><header><h2>Neuron Lens</h2><div class="actions"><select id="mode" title="Vocabulary readout"><option value="logit">Logit Lens</option><option value="j-lens">J-Lens</option><option value="r-lens">R-Lens</option><option value="all">All lenses</option></select><button id="refresh">Refresh</button></div></header><div id="context">Loading…</div><main id="neurons"></main>
+.token-chip{flex:0 0 auto;max-width:100%;padding:3px 7px 2px;border:1px solid var(--vscode-panel-border);border-radius:3px;color:var(--vscode-foreground);font-family:var(--vscode-editor-font-family);white-space:pre-wrap;overflow-wrap:anywhere;text-align:center;cursor:help}.readout-logit .token-chip{background:rgba(24,54,86,.78);border-color:rgba(82,148,214,.55)}.readout-j-lens .token-chip{background:rgba(55,35,78,.78);border-color:rgba(164,111,211,.55)}.readout-r-lens .token-chip{background:rgba(20,64,54,.78);border-color:rgba(63,164,139,.55)}.token-chip:hover,.token-chip:focus{border-color:var(--vscode-focusBorder);outline:none;filter:brightness(1.22)}
+</style></head><body><header><select id="view" class="view-select" title="Lens target"><option value="residual-pre">Residual Lens · Pre</option><option value="attention-neurons">Attention Output Channel Lens</option><option value="attention-output">Attention Output Lens</option><option value="residual-mid">Residual Lens · Mid</option><option value="neurons">MLP Neuron Lens</option><option value="mlp-output">MLP Output Lens</option><option value="residual-post">Residual Lens · Post</option><option value="all" selected>All</option></select><div class="actions"><select id="mode" title="Vocabulary readout"><option value="logit">Logit Lens</option><option value="j-lens" selected>J-Lens</option><option value="r-lens">R-Lens</option><option value="all">All lenses</option></select><button id="refresh">Refresh</button></div></header><div id="context">Loading…</div><main id="neurons"></main>
 <script nonce="${nonce}">
-const vscode=acquireVsCodeApi(),context=document.getElementById('context'),neurons=document.getElementById('neurons'),mode=document.getElementById('mode');let snapshot;
+const vscode=acquireVsCodeApi(),context=document.getElementById('context'),neurons=document.getElementById('neurons'),mode=document.getElementById('mode'),view=document.getElementById('view');let snapshot;const saved={};
 function tokenLabel(text){const encoded=JSON.stringify(text);return encoded.slice(1,-1).replace(/ /g,'·')}
 function tokensFor(kind,title,items){const box=document.createElement('div');box.className='readout readout-'+kind;const heading=document.createElement('span');heading.className='readout-title';heading.textContent=title+':';box.append(heading);if(!items.length){const empty=document.createElement('span');empty.className='empty';empty.textContent='No compatible artifact is available.';box.append(empty);return box}for(const item of items){const chip=document.createElement('span');chip.className='token-chip';chip.tabIndex=0;chip.textContent=tokenLabel(item.text);chip.title='rank '+item.rank+' · token ID '+item.id+' · logit '+item.logit.toFixed(2);chip.setAttribute('aria-label',item.text+', '+chip.title);box.append(chip)}return box}
-function render(){if(!snapshot)return;context.className='';context.textContent='token '+snapshot.tokenPosition+' '+JSON.stringify(snapshot.token)+' · '+snapshot.layer+' · neuron W_down vocabulary readout';neurons.replaceChildren();for(const neuron of snapshot.neurons){const card=document.createElement('section');card.className='card';const head=document.createElement('div');head.className='card-head';const title=document.createElement('span');title.className='neuron-badge';title.textContent=String(neuron.index);title.title='neuron['+neuron.index+'] · activation rank '+neuron.rank;const stats=document.createElement('span');stats.className='stats';const relative=neuron.relativeActivation==null?'':(' ('+(neuron.relativeActivation>=0?'+':'')+neuron.relativeActivation.toFixed(2)+'×)');stats.textContent='activation '+neuron.activation.toFixed(2)+relative;const norm=document.createElement('span');norm.className='stats';norm.textContent='|d| '+neuron.directionNorm.toFixed(2);head.append(title,stats,norm);const readouts=document.createElement('div');readouts.className='readouts';if(mode.value==='logit'||mode.value==='all')readouts.append(tokensFor('logit','Logit Lens',neuron.logitTokens));if(mode.value==='j-lens'||mode.value==='all')readouts.append(tokensFor('j-lens','J-Lens',neuron.jLensTokens));if(mode.value==='r-lens'||mode.value==='all')readouts.append(tokensFor('r-lens','R-Lens',neuron.rLensTokens));card.append(head,readouts);neurons.append(card)}}
-window.addEventListener('message',event=>{if(event.data.type==='error'){context.className='error';context.textContent=event.data.message;neurons.replaceChildren();return}if(event.data.type==='lens'){snapshot=event.data;render()}});mode.onchange=()=>{const needsJ=(mode.value==='j-lens'||mode.value==='all')&&!snapshot?.jLensResolved;const needsR=(mode.value==='r-lens'||mode.value==='all')&&!snapshot?.rLensResolved;if(needsJ||needsR){context.textContent='Downloading or loading '+(needsJ&&needsR?'lens artifacts':needsJ?'J-Lens':'R-Lens')+'…';vscode.postMessage({type:'refresh',mode:mode.value})}else render()};document.getElementById('refresh').onclick=()=>vscode.postMessage({type:'refresh',mode:mode.value});vscode.postMessage({type:'refresh',mode:'logit'});
+function addReadouts(card,source){const readouts=document.createElement('div');readouts.className='readouts';if(mode.value==='logit'||mode.value==='all')readouts.append(tokensFor('logit','Logit Lens',source.logitTokens));if(mode.value==='j-lens'||mode.value==='all')readouts.append(tokensFor('j-lens','J-Lens',source.jLensTokens));if(mode.value==='r-lens'||mode.value==='all')readouts.append(tokensFor('r-lens','R-Lens',source.rLensTokens));card.append(readouts)}
+function styleCard(card,item){if(item.saved)card.classList.add('saved')}
+function renderSnapshot(item){if(item.error){const card=document.createElement('section');card.className='card full-width';const head=document.createElement('div');head.className='card-head error';head.textContent=item.label+': '+item.error;card.append(head);neurons.append(card);return}if(!['neurons','attention-neurons'].includes(item.view)){const card=document.createElement('section');card.className='card full-width';styleCard(card,item);addReadouts(card,item);neurons.append(card);return}for(const neuron of item.neurons){const card=document.createElement('section');card.className='card';styleCard(card,item);const head=document.createElement('div');head.className='card-head';const title=document.createElement('span');title.className='neuron-badge';title.textContent=String(neuron.index);title.title=(item.componentLabel||'neuron')+'['+neuron.index+'] · residual-contribution rank '+neuron.rank;const value=neuron.relativeContribution??neuron.relativeActivation;const relative=value==null?'':(' ('+(value>=0?'+':'')+value.toFixed(2)+'×)');const impact=document.createElement('span');impact.className='stats';impact.textContent='|Δx| '+neuron.contributionMagnitude.toFixed(2)+relative;impact.title='residual contribution magnitude |Δx| = |a| × |d|';const activation=document.createElement('span');activation.className='stats';activation.textContent='a '+neuron.activation.toFixed(2);activation.title='activation coefficient a = '+neuron.activation.toFixed(6);const norm=document.createElement('span');norm.className='stats';norm.textContent='|d| '+neuron.directionNorm.toFixed(2);norm.title='output direction norm |d| = '+neuron.directionNorm.toFixed(6);head.append(title,impact,activation,norm);card.append(head);addReadouts(card,neuron);neurons.append(card)}}
+function residualTriangle(view,geometry){const ns='http://www.w3.org/2000/svg',svg=document.createElementNS(ns,'svg');svg.classList.add('residual-triangle');svg.setAttribute('viewBox','0 0 34 24');svg.setAttribute('role','img');const title=document.createElementNS(ns,'title'),origin=[3,12],inputTip=[27,12],legend='Dashed blue: residual input x · Orange: update Δx · Teal: residual output x + Δx';if(view==='residual-pre'||!geometry){title.textContent=view==='residual-pre'?'Dashed blue: residual input x':legend+' · Update geometry is unavailable';svg.append(title);const line=document.createElementNS(ns,'line');line.classList.add('triangle-input');line.setAttribute('x1',origin[0]);line.setAttribute('y1',origin[1]);line.setAttribute('x2',inputTip[0]);line.setAttribute('y2',inputTip[1]);svg.append(line);const tip=document.createElementNS(ns,'circle');tip.setAttribute('cx',inputTip[0]);tip.setAttribute('cy',inputTip[1]);tip.setAttribute('r','1.7');tip.setAttribute('fill','#5aa7e8');svg.append(tip);return svg}const cosine=geometry.cosine==null?0:Math.max(-1,Math.min(1,geometry.cosine)),ratio=Math.max(0,geometry.deltaRatio||0),unitLength=inputTip[0]-origin[0],points=[origin,inputTip,[inputTip[0]+unitLength*ratio*cosine,inputTip[1]-unitLength*ratio*Math.sqrt(Math.max(0,1-cosine*cosine))]];title.textContent=legend+' · '+geometry.transition+' · cos(x, Δx) '+(geometry.cosine==null?'undefined':geometry.cosine.toFixed(3))+' · |Δx|/|x| '+geometry.deltaRatio.toFixed(3);svg.append(title);function segment(from,to,className,color){const line=document.createElementNS(ns,'line');line.classList.add(className);line.setAttribute('x1',points[from][0]);line.setAttribute('y1',points[from][1]);line.setAttribute('x2',points[to][0]);line.setAttribute('y2',points[to][1]);svg.append(line);const tip=document.createElementNS(ns,'circle');tip.setAttribute('cx',points[to][0]);tip.setAttribute('cy',points[to][1]);tip.setAttribute('r','1.7');tip.setAttribute('fill',color);svg.append(tip)}segment(0,2,'triangle-output','#58c5ad');segment(0,1,'triangle-input','#5aa7e8');segment(1,2,'triangle-delta','#e6a15c');return svg}
+function targetHeading(item){const heading=document.createElement('h2');heading.className='target-heading';if(item.view.startsWith('residual-'))heading.append(residualTriangle(item.view,item.residualGeometry));const label=document.createElement('span'),layer=Number.isInteger(item.transformerLayer)?' [layer '+item.transformerLayer+']':'';label.textContent=({"residual-pre":'Residual Lens · Pre','attention-neurons':'Attention Output Channel Lens','attention-output':'Attention Output Lens','residual-mid':'Residual Lens · Mid',neurons:'MLP Neuron Lens','mlp-output':'MLP Output Lens','residual-post':'Residual Lens · Post'})[item.view]+layer;heading.append(label);if(Number.isFinite(item.vectorNorm)){const magnitude=document.createElement('span');magnitude.className='target-magnitude';magnitude.textContent=(item.view.startsWith('residual-')?'|x| ':'|Δx| ')+item.vectorNorm.toFixed(2);magnitude.title=item.view.startsWith('residual-')?'residual stream norm |x|':'residual update norm |Δx|';heading.append(magnitude)}return heading}
+function render(){if(!snapshot)return;context.className='';context.textContent='';neurons.replaceChildren();if(snapshot.view==='all'){view.value='all';for(const item of snapshot.items){neurons.append(targetHeading(item));renderSnapshot(item)}return}view.value=snapshot.view||'neurons';renderSnapshot(snapshot)}
+function requestRefresh(){context.className='';context.textContent='Loading…';vscode.postMessage({type:'refresh',mode:mode.value,view:view.value})}
+window.addEventListener('message',event=>{const data=event.data;if(data.type==='reset'){for(const key of Object.keys(saved))delete saved[key];snapshot=undefined;neurons.replaceChildren();context.textContent='Loading…';return}if(data.type==='error'){context.className='error';context.textContent=data.message;neurons.replaceChildren();return}if(data.type==='lens-error'){const old=saved[data.mode+'|'+data.view];if(old){snapshot={...old,saved:true};render()}else{context.className='error';context.textContent=data.message;neurons.replaceChildren()}return}if(data.type==='lens'){if(data.view==='all'){data.items=data.items.map(item=>{const latestKey=data.mode+'|'+item.view;if(!item.error){saved[latestKey]=item;saved[latestKey+'|'+item.layer]=item;return item}const old=saved[latestKey];return old?{...old,saved:true}:item});const pre=data.items.find(item=>item.view==='residual-pre'&&!item.error);const activeTransformerLayer=pre&&pre.transformerLayer;if(Number.isInteger(activeTransformerLayer)){data.items=data.items.map(item=>!item.error&&Number.isInteger(item.transformerLayer)&&item.transformerLayer!==activeTransformerLayer?{...item,saved:true}:item)}}else{saved[data.mode+'|'+data.view]=data;saved[data.mode+'|'+data.view+'|'+data.layer]=data}snapshot=data;render()}});mode.onchange=requestRefresh;view.onchange=requestRefresh;document.getElementById('refresh').onclick=requestRefresh;vscode.postMessage({type:'refresh',mode:'j-lens',view:'all'});
 </script></body></html>`;
 }
 
@@ -255,7 +262,8 @@ function activate(context) {
   let hostSource;
   let vectorPanel;
   let neuronLensPanel;
-  let neuronLensMode = "logit";
+  let neuronLensMode = "j-lens";
+  let neuronLensView = "all";
   let residentModel;
   const modelStatus = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Right,
@@ -443,7 +451,7 @@ function activate(context) {
     await sendPlotSnippets();
   }
 
-  async function refreshNeuronLens(mode = neuronLensMode) {
+  async function refreshNeuronLens(mode = neuronLensMode, view = neuronLensView) {
     if (!neuronLensPanel) return;
     const active = vscode.debug.activeDebugSession;
     if (!active || active.type !== "llmdbg") {
@@ -451,22 +459,45 @@ function activate(context) {
       return;
     }
     try {
-      const result = await active.customRequest("llmdbg/neuronLens", { mode });
-      await neuronLensPanel.webview.postMessage({ type: "lens", ...result });
+      if (view === "all") {
+        const targets = [
+          ["residual-pre", "Residual Lens · Pre"],
+          ["attention-neurons", "Attention Output Channel Lens"],
+          ["attention-output", "Attention Output Lens"],
+          ["residual-mid", "Residual Lens · Mid"],
+          ["neurons", "MLP Neuron Lens"],
+          ["mlp-output", "MLP Output Lens"],
+          ["residual-post", "Residual Lens · Post"]
+        ];
+        const items = [];
+        for (const [targetView, label] of targets) {
+          try {
+            items.push(await active.customRequest("llmdbg/neuronLens", { mode, view: targetView }));
+          } catch (error) {
+            items.push({ view: targetView, label, error: error.message });
+          }
+        }
+        await neuronLensPanel.webview.postMessage({ type: "lens", mode, view: "all", items });
+        return;
+      }
+      const result = await active.customRequest("llmdbg/neuronLens", { mode, view });
+      await neuronLensPanel.webview.postMessage({ type: "lens", mode, ...result });
     } catch (error) {
-      await neuronLensPanel.webview.postMessage({ type: "error", message: error.message });
+      await neuronLensPanel.webview.postMessage({ type: "lens-error", mode, view, message: error.message });
     }
   }
 
-  async function showNeuronLens() {
-    if (!vscode.debug.activeDebugSession || vscode.debug.activeDebugSession.type !== "llmdbg") {
-      vscode.window.showErrorMessage("Start and pause an llmdbg session before opening Neuron Lens.");
+  async function showNeuronLens(session = vscode.debug.activeDebugSession) {
+    if (!session || session.type !== "llmdbg") {
+      vscode.window.showErrorMessage("Start and pause an llmdbg session before opening Lens.");
       return;
     }
     if (!neuronLensPanel) {
-      neuronLensMode = "logit";
+      neuronLensMode = "j-lens";
+      neuronLensView = "all";
       neuronLensPanel = vscode.window.createWebviewPanel(
-        "llmdbg.neuronLens", "llmdbg Neuron Lens", vscode.ViewColumn.Beside,
+        "llmdbg.neuronLens", "llmdbg Lens",
+        { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
         { enableScripts: true, retainContextWhenHidden: true }
       );
       neuronLensPanel.webview.html = neuronLensHtml(neuronLensPanel.webview);
@@ -475,6 +506,9 @@ function activate(context) {
           if (message.type !== "refresh") return;
           if (["logit", "j-lens", "r-lens", "all"].includes(message.mode)) {
             neuronLensMode = message.mode;
+          }
+          if (["residual-pre", "attention-neurons", "attention-output", "residual-mid", "neurons", "mlp-output", "residual-post", "all"].includes(message.view)) {
+            neuronLensView = message.view;
           }
           refreshNeuronLens();
         }, null, context.subscriptions
@@ -613,7 +647,7 @@ function activate(context) {
       }
     }),
     vscode.commands.registerCommand("llmdbg.plotCurrentVector", showVectorPlot),
-    vscode.commands.registerCommand("llmdbg.showNeuronLens", showNeuronLens),
+    vscode.commands.registerCommand("llmdbg.showNeuronLens", () => showNeuronLens()),
     vscode.commands.registerCommand("llmdbg.showModelStatus", showModelStatus),
     vscode.commands.registerCommand("llmdbg.unloadModel", unloadModel),
     vscode.debug.onDidReceiveDebugSessionCustomEvent((event) => {
@@ -625,6 +659,11 @@ function activate(context) {
       } else if (event.event === "llmdbg/vectorChanged") {
         refreshNeuronLens();
       }
+    }),
+    vscode.debug.onDidStartDebugSession((session) => {
+      if (session.type !== "llmdbg") return;
+      if (neuronLensPanel) neuronLensPanel.webview.postMessage({ type: "reset" });
+      void showNeuronLens(session);
     }),
     modelStatus
   );

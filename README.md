@@ -32,40 +32,48 @@ so F5 starts llmdbg rather than the ordinary Python debugger, while the editor
 still uses Python syntax highlighting.
 
 ```python
-from llmdbg import debug, gpt2
+from llmdbg import debug, gpt2, nop
 
 model = gpt2("openai-community/gpt2", device="cuda", dtype="bfloat16")
 prompt = "The capital of France is"
-token = 3
 tokens = model.tokenize(prompt)
 
-def attention(x, layer):
-    normalized = layer.layernorm(x)
-    qkv = layer.qkv_projection(normalized)
-    mixed = layer.attention_mixing(qkv)
-    update = layer.output_projection(mixed)
+def attention(x, block):
+    normalized = block.layernorm(x)
+    qkv = block.qkv_projection(normalized)
+    mixed = block.attention_mixing(qkv)
+    update = block.output_projection(mixed)
     return x + update
 
-def mlp(x, layer):
-    normalized = layer.layernorm(x)
-    hidden = layer.expansion(normalized)
-    hidden = layer.gelu(hidden)
-    update = layer.projection(hidden)
+def mlp(x, block):
+    normalized = block.layernorm(x)
+    hidden = block.expansion(normalized)
+    hidden = block.gelu(hidden)
+    update = block.projection(hidden)
     return x + update
 
-with debug(model, tokens, token=token):
-    x = model.token_embedding(tokens)
-    for layer in model.layers:
-        x = attention(x, layer)
-        x = mlp(x, layer)
-    x = model.final_layernorm(x)
-    logits = model.vocabulary_projection(x)
+with debug(model, tokens) as run:
+    for token in run.tokens:
+        x = model.token_embedding(tokens)
+        for layer, block in enumerate(model.layers):
+            nop()  # resid-pre
+            x = attention(x, block)
+            nop()  # resid-mid
+            x = mlp(x, block)
+            nop()  # resid-post
+
+        x = model.final_layernorm(x)
+        logits = model.vocabulary_projection(x)
+        predictions = model.top_tokens(logits, k=10)
+        nop()  # Stable breakpoint with predictions available.
 ```
 
 This is executable Python. Model and tensor objects are handles over llmdbg's
 runtime; `hidden[1843] = 0` records an activation intervention and recomputes
 the selected token. Python indexing and slicing such as `hidden[:10]` work in
-source and Watch. The original compact `gpt2.llmdbg` format remains supported:
+source and Watch. `nop()` is a repeatable no-operation statement for placing a
+breakpoint after an assignment; the older `end()` spelling remains supported as
+an alias. The original compact `gpt2.llmdbg` format remains supported:
 
 ```text
 model = "openai-community/gpt2"
@@ -147,6 +155,8 @@ expression `token=4`. Positions are zero-based. The debugger prefills tokens
 before the selected position into the KV cache, then captures that token with
 a one-token forward pass. Stepping beyond the last selected layer advances to
 the next token using the updated cache.
+Use `layer=6` to stop only in zero-based transformer block 6, or combine the
+filters as `token=4, layer=6`. These are llmdbg selectors, not Python assignments.
 
 Watch one zero-based dimension with `residual_stream[42]`, `input[42]`,
 `output[42]`, or `delta[42]`. The **Residual stream (output)** debugger scope
@@ -180,21 +190,22 @@ the top five tokens from `W_down[neuron] @ W_unembed`, and the top five direct
 token contributions after scaling by the current activation. Token IDs and
 decoded text are both displayed. Results are cached for the current token and
 layer.
-For Qwen3.5 0.8B, 2B, 9B, and 27B, the activation is also shown relative to a
-packaged, model- and layer-specific scale. Each scale is the median across a
-fixed 672-token calibration prompt of the per-token p99 absolute post-SwiGLU
-activation. The displayed positive/negative side records the sign of the
-calibration activation nearest that p99 magnitude; unsupported checkpoints
-show only the raw value instead of silently borrowing another model's scale.
-GPT-2 is calibrated the same way on its post-GELU MLP hidden activation. Its
+For GPT-2 and Qwen3.5 0.8B, 2B, 9B, and 27B, MLP neurons and attention output
+channels are ranked by the norm of the vector each component adds to the
+residual stream: `abs(activation) * norm(projection direction)`. The signed
+`(±…×)` value uses a packaged, model- and layer-specific scale for that same
+quantity. Each scale is the median across a fixed calibration prompt of the
+per-token p99 component contribution magnitude. Unsupported checkpoints show
+the raw activation without silently borrowing another model's scale. GPT-2's
 1,024-token context limit leaves 1,021 analyzed tokens after the calibration
 prefix; that explicit truncation is recorded in the JSON provenance.
-The corresponding calibration plots live beside the JSON data in
-`src/llmdbg/data/` as `*_mlp_activation_scales.png`. They show every
+The MLP and attention-channel calibration plots live beside the JSON data in
+`src/llmdbg/data/`. They show every
 token p99 measurement as a scatter point, continuous p10–p90 and p1–p99
 percentile ribbons, and the packaged median scale as a marked guide line. Run
-`scripts/measure_mlp_activation_scales.py` with `--plot-output` to reproduce
-them from the calibration prompt.
+`scripts/measure_mlp_activation_scales.py` or
+`scripts/measure_attention_channel_activation_scales.py` with `--plot-output`
+to reproduce them from the calibration prompt.
 The toolbar's **Lens** view has a selector for **Logit Lens**, **J-Lens**,
 **R-Lens**, or **All lenses**. Logit Lens projects the neuron's down-projection
 direction directly through the unembedding. J-Lens first transports it through

@@ -70,7 +70,7 @@ with debug(model, tokens, token=token):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "gpt2.llmdbg.py"
             path.write_text(
-                '''from llmdbg import debug, gpt2
+                '''from llmdbg import debug, gpt2, nop
 model = gpt2("openai-community/gpt2", device="cuda", dtype="bfloat16")
 prompt = "hello world"
 token = 1
@@ -93,6 +93,10 @@ with debug(model, tokens, token=token):
         x = attention(x, layer)
         x = mlp(x, layer)
     x = model.final_layernorm(x)
+    nop()
+    logits = model.vocabulary_projection(x)
+    predictions = model.top_tokens(logits, k=10)
+    nop()
 ''',
                 encoding="utf-8",
             )
@@ -102,6 +106,9 @@ with debug(model, tokens, token=token):
         self.assertFalse(config["stopOnEntry"])
         self.assertEqual(config["callLines"]["attention"], 21)
         self.assertEqual(config["functions"]["mlp"]["gelu"], 15)
+        self.assertEqual(config["callLines"]["nop"], [24, 27])
+        self.assertEqual(config["callLines"]["vocabulary_projection"], 25)
+        self.assertEqual(config["callLines"]["top_tokens"], 26)
         self.assertEqual(
             config["functionBindings"]["mlp"],
             [
