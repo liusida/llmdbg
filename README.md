@@ -30,6 +30,11 @@ Marketplace publishing and pre-release instructions are in
 
 The recommended format is now a real Python program named `gpt2.llmdbg.py`:
 
+For a new workspace, run **llmdbg: Create Starter Files** from the VS Code
+Command Palette. It creates examples for GPT-2 and every supported Qwen3.5
+size (0.8B, 2B, 9B, and 27B), plus matching `.vscode/launch.json` entries,
+while leaving any existing files untouched.
+
 The compound suffix is intentional: VS Code recognizes it as **llmdbg Python**,
 so F5 starts llmdbg rather than the ordinary Python debugger, while the editor
 still uses Python syntax highlighting.
@@ -37,7 +42,7 @@ still uses Python syntax highlighting.
 ```python
 from llmdbg import debug, gpt2, nop
 
-model = gpt2("openai-community/gpt2", device="cuda", dtype="bfloat16")
+model = gpt2("openai-community/gpt2", device="auto", dtype="auto")
 prompt = "The capital of France is"
 tokens = model.tokenize(prompt)
 
@@ -81,8 +86,8 @@ an alias. The original compact `gpt2.llmdbg` format remains supported:
 ```text
 model = "openai-community/gpt2"
 revision = "main"
-device = "cuda"
-dtype = "bfloat16"
+device = "auto"
+dtype = "auto"
 prompt = "The capital of France is"
 token = 3
 stop_on_entry = false
@@ -158,8 +163,9 @@ expression `token=4`. Positions are zero-based. The debugger prefills tokens
 before the selected position into the KV cache, then captures that token with
 a one-token forward pass. Stepping beyond the last selected layer advances to
 the next token using the updated cache.
-Use `layer=6` to stop only in zero-based transformer block 6, or combine the
-filters as `token=4, layer=6`. These are llmdbg selectors, not Python assignments.
+Use `layer=6` to stop only in zero-based transformer block 6, or comparisons
+such as `layer>=15` to stop in later blocks. Combine filters as
+`token=4, layer>=15`. These are llmdbg selectors, not Python assignments.
 
 Watch one zero-based dimension with `residual_stream[42]`, `input[42]`,
 `output[42]`, or `delta[42]`. The **Residual stream (output)** debugger scope
@@ -216,6 +222,13 @@ an averaged ordinary Jacobian. R-Lens uses the same transport construction
 with value-preserving RelP backward rules. Both transported views then apply
 the final norm and unembedding. A missing artifact is reported explicitly;
 the debugger never silently substitutes the direct projection.
+
+Its block selector supports multiple checked sections. GPT-2 Small and
+Qwen3.5 2B/9B additionally expose ICA decompositions of residual Pre/Mid/Post
+and the attention/MLP updates. They show the top three absolute component
+scores and reuse the selected Logit/J/R readout. These projections use the
+published per-layer `resid_post` bases; module updates omit the fitted center
+because they are displacement vectors.
 
 These implementations follow the methods introduced in:
 

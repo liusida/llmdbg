@@ -17,17 +17,33 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertEqual(manifest["icon"], "assets/icon.png")
         self.assertTrue((root / "vscode-extension" / manifest["icon"]).is_file())
         self.assertIn("bundled/**", manifest["files"])
-        self.assertIn("assets/icon.png", manifest["files"])
+        self.assertIn("assets/**", manifest["files"])
         self.assertIn("stage-adapter", manifest["scripts"])
         self.assertEqual(manifest["contributes"]["languages"][0]["extensions"], [".llmdbg"])
         self.assertEqual(manifest["contributes"]["languages"][1]["extensions"], [".llmdbg.py"])
         self.assertEqual(manifest["contributes"]["breakpoints"][0]["language"], "llmdbg")
         self.assertEqual(manifest["contributes"]["breakpoints"][1]["language"], "llmdbg-python")
         command_ids = {command["command"] for command in manifest["contributes"]["commands"]}
+        self.assertIn("llmdbg.initializeProject", command_ids)
+        self.assertIn("llmdbg.showRuntimeDiagnostics", command_ids)
+        self.assertIn("llmdbg.rebuildRuntime", command_ids)
         self.assertIn("llmdbg.plotCurrentVector", command_ids)
         self.assertIn("llmdbg.showNeuronLens", command_ids)
         self.assertIn("llmdbg.unloadModel", command_ids)
         self.assertIn("llmdbg.showModelStatus", command_ids)
+        commands = {
+            command["command"]: command for command in manifest["contributes"]["commands"]
+        }
+        self.assertEqual(commands["llmdbg.showNeuronLens"]["icon"]["dark"], "assets/lens-dark.svg")
+        self.assertEqual(commands["llmdbg.plotCurrentVector"]["icon"]["dark"], "assets/plot-dark.svg")
+        toolbar = manifest["contributes"]["menus"]["debug/toolBar"]
+        self.assertEqual(
+            [(item["command"], item["group"]) for item in toolbar],
+            [
+                ("llmdbg.showNeuronLens", "llmdbg@1"),
+                ("llmdbg.plotCurrentVector", "llmdbg@2"),
+            ],
+        )
 
     def test_extension_uses_a_private_runtime(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -53,6 +69,16 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn("viewColumn: vectorPanel?.viewColumn || vscode.ViewColumn.Beside", source)
         self.assertIn('"matplotlib>=3.10,<4"', source)
         self.assertIn('registerCommand("llmdbg.plotCurrentVector"', source)
+        self.assertIn('registerCommand("llmdbg.initializeProject"', source)
+        self.assertIn('registerCommand("llmdbg.showRuntimeDiagnostics"', source)
+        self.assertIn('registerCommand("llmdbg.rebuildRuntime"', source)
+        self.assertIn('const GPT2_STARTER_FILE = "GPT-2.llmdbg.py"', source)
+        self.assertIn('["Qwen35-27B.llmdbg.py", qwen35StarterSource("Qwen/Qwen3.5-27B")]', source)
+        self.assertIn('config: `\\${workspaceFolder}/${file}`', source)
+        self.assertIn("Left existing", source)
+        self.assertIn('cu128: { id: "cu128", torch: "2.10.0"', source)
+        self.assertIn('process.platform === "darwin"', source)
+        self.assertIn('torch.backends.mps.is_available()', source)
         self.assertIn('registerCommand("llmdbg.showNeuronLens"', source)
         self.assertIn('"llmdbg.neuronLens", "llmdbg Lens"', source)
         self.assertIn("void showNeuronLens(session)", source)
@@ -67,6 +93,8 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn("vscode.extensions.onDidChange", source)
         self.assertIn("newestInstalledVersion(context)", source)
         self.assertIn("fs.promises.readdir(extensionParent", source)
+        self.assertIn('`${publisher}.${name}`.toLowerCase()', source)
+        self.assertIn("entry.name.toLowerCase().startsWith(directoryPrefix)", source)
         self.assertIn("compareVersions(installedVersion, runningVersion) > 0", source)
         self.assertIn('event.event === "llmdbg/modelLoaded"', source)
         self.assertIn("modelBytes", source)
@@ -78,49 +106,70 @@ class ExtensionManifestTest(unittest.TestCase):
         source = (root / "vscode-extension" / "extension.js").read_text()
 
         self.assertIn('let neuronLensMode = "j-lens"', source)
-        self.assertIn('let neuronLensView = "all"', source)
+        self.assertIn('let neuronLensViews = [', source)
         self.assertIn(
-            'async function refreshNeuronLens(mode = neuronLensMode, view = neuronLensView)',
+            'async function refreshNeuronLens(mode = neuronLensMode, views = neuronLensViews, force = false)',
             source,
         )
         self.assertIn("neuronLensMode = message.mode", source)
-        self.assertIn("neuronLensView = message.view", source)
-        self.assertIn('<option value="mlp-output">MLP Output Lens</option>', source)
-        self.assertIn('<option value="attention-output">Attention Output Lens</option>', source)
-        self.assertIn('<option value="attention-neurons">Attention Output Channel Lens</option>', source)
-        self.assertIn('<option value="neurons">MLP Neuron Lens</option>', source)
+        self.assertIn("neuronLensViews = message.views.filter", source)
+        self.assertIn("viewMenu", source)
+        self.assertIn("box.type='checkbox'", source)
         expected_lenses = (
-            '<option value="residual-pre">Residual Lens · Pre</option>',
-            '<option value="attention-neurons">Attention Output Channel Lens</option>',
-            '<option value="attention-output">Attention Output Lens</option>',
-            '<option value="residual-mid">Residual Lens · Mid</option>',
-            '<option value="neurons">MLP Neuron Lens</option>',
-            '<option value="mlp-output">MLP Output Lens</option>',
-            '<option value="residual-post">Residual Lens · Post</option>',
+            "['residual-pre','Residual Lens · Pre']",
+            "['attention-neurons','Attention Output Channel Lens']",
+            "['attention-output','Attention Output Lens']",
+            "['residual-mid','Residual Lens · Mid']",
+            "['neurons','MLP Neuron Lens']",
+            "['mlp-output','MLP Output Lens']",
+            "['residual-post','Residual Lens · Post']",
         )
         positions = [source.index(option) for option in expected_lenses]
         self.assertEqual(positions, sorted(positions))
         self.assertNotIn("saved from layer ", source)
         self.assertIn("' [layer '+item.transformerLayer+']'", source)
-        self.assertIn("item.view.startsWith('residual-')?'|x| ':'|Δx| '", source)
+        self.assertIn("const residual=item.view.includes('residual-')", source)
         self.assertIn("item.vectorNorm.toFixed(2)", source)
         self.assertIn("item.transformerLayer!==activeTransformerLayer", source)
         self.assertIn("#context:empty{display:none}", source)
         self.assertIn("context.textContent=''", source)
         self.assertIn("opacity:.6", source)
-        self.assertIn('<option value="all" selected>All</option>', source)
-        self.assertIn('if (view === "all")', source)
+        self.assertIn("value.startsWith('ica-')&&!icaSupported", source)
+        self.assertIn('active.customRequest("llmdbg/icaSupport", {})', source)
+        self.assertIn("componentId.className='ica-component-id'", source)
+        self.assertIn("componentId.textContent='L'+item.transformerLayer+':C'+component.index", source)
+        self.assertIn("Intervention: Remove", source)
+        self.assertIn('"llmdbg/removeIcaComponent"', source)
+        self.assertIn('"llmdbg/removeProjectedComponent"', source)
+        self.assertIn("intervention logged to ${result.log.note}", source)
+        self.assertIn("if(component.removed)card.classList.add('intervention-removed')", source)
+        self.assertIn("if(neuron.removed)card.classList.add('intervention-removed')", source)
+        self.assertIn("if(!item.saved&&!neuron.removed)title.oncontextmenu", source)
+        self.assertIn("item.view.startsWith('ica-residual-')&&!item.saved&&!component.removed", source)
+        self.assertIn("opacity:.3;filter:grayscale(1)", source)
         self.assertIn('<option value="j-lens" selected>J-Lens</option>', source)
         self.assertIn('<option value="all">All lenses</option>', source)
         self.assertIn("chip.title='rank '+item.rank+' · token ID '+item.id+' · logit '", source)
         self.assertIn("title.className='neuron-badge'", source)
+        self.assertIn("width:62px;flex:0 0 62px", source)
+        self.assertIn("Math.min(Math.abs(meterValue),10)*10", source)
+        self.assertIn("meterValue>=0?'rgba(126,55,52,.82)':'rgba(43,73,112,.86)'", source)
+        self.assertIn("full width = 10×", source)
         self.assertIn("title.textContent=String(neuron.index)", source)
         self.assertIn("norm.textContent='|d| '+neuron.directionNorm.toFixed(2)", source)
-        self.assertIn("impact.textContent='|Δx| '+neuron.contributionMagnitude.toFixed(2)+relative", source)
+        self.assertIn("projectionImpact.textContent='along Δx '+neuron.outputProjection.toFixed(3)", source)
+        self.assertIn("impact.textContent='|Δxᵢ| '+neuron.contributionMagnitude.toFixed(2)+relative", source)
         self.assertIn("activation.textContent='a '+neuron.activation.toFixed(2)", source)
         self.assertIn("activation coefficient a = ", source)
         self.assertIn("output direction norm |d| = ", source)
-        self.assertIn("head.append(title,impact,activation,norm)", source)
+        self.assertIn("details.append(projectionImpact,impact,activation,norm)", source)
+        self.assertIn("head.append(title,details,componentTriangle(neuron.componentGeometry))", source)
+        self.assertIn("head.classList.toggle('expanded')", source)
+        self.assertIn("title.setAttribute('aria-expanded',String(expanded))", source)
+        self.assertIn("componentTriangle(neuron.componentGeometry)", source)
+        self.assertIn(".component-triangle{", source)
+        self.assertIn("Solid gray: this component update vᵢ", source)
+        self.assertIn("Dashed teal: hypothetical residual x + vᵢ", source)
         self.assertIn(".card.full-width{grid-column:1/-1}", source)
         self.assertIn("card.className='card full-width'", source)
         self.assertIn(".residual-triangle{", source)
@@ -134,10 +183,12 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn("Dashed blue: residual input x", source)
         self.assertIn("Orange: update Δx", source)
         self.assertIn("Teal: residual output x + Δx", source)
-        self.assertIn("styleCard(card,item);addReadouts(card,item);neurons.append(card);return", source)
+        self.assertIn("styleCard(card,item);addReadouts(card,item);target.append(card);return", source)
+        self.assertIn(".lens-group.submodule{padding-left:24px;border-left:4px solid", source)
+        self.assertIn("group.className='lens-group'+(residual?'':' submodule')", source)
         self.assertNotIn("title.textContent=item.vectorLabel", source)
         self.assertIn("neuron.relativeContribution??neuron.relativeActivation", source)
-        self.assertIn("residual-contribution rank", source)
+        self.assertIn("output-projection rank", source)
         self.assertIn("heading.textContent=title+':'", source)
         self.assertIn(".readout{display:flex;align-items:center;flex-wrap:wrap", source)
         self.assertNotIn("className='token-list'", source)
@@ -146,11 +197,15 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertNotIn("text-overflow:ellipsis", source)
         self.assertNotIn("table.innerHTML='<thead><tr><th", source)
         self.assertIn('event.event === "llmdbg/vectorChanged"', source)
+        self.assertIn('event.event === "llmdbg/computationStarted"', source)
+        self.assertIn('class="waiting-indicator"', source)
+        self.assertIn("function setBusy(value){waiting.hidden=!value}", source)
+        self.assertIn("render();setBusy(false)", source)
         self.assertIn("card.classList.add('saved')", source)
         self.assertIn("repeating-linear-gradient", source)
         self.assertIn("rgba(0,0,0,.24)", source)
         self.assertNotIn("Saved result from an earlier execution position", source)
-        self.assertIn('type: "lens-error"', source)
+        self.assertIn("const old=saved[latestKey]", source)
         self.assertIn('type: "reset"', source)
 
 

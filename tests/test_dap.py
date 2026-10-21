@@ -283,11 +283,28 @@ class DAPIntegrationTest(unittest.TestCase):
 
     def test_breakpoint_condition_parser_supports_layer_and_combinations(self) -> None:
         parse = LLMDebugAdapter._parse_breakpoint_condition
-        self.assertEqual(parse("layer=6"), (None, 6))
-        self.assertEqual(parse("token=3, layer=6"), (3, 6))
-        self.assertEqual(parse("layer == 6 and token == 3"), (3, 6))
+        self.assertEqual(parse("layer=6"), (None, ("==", 6)))
+        self.assertEqual(parse("token=3, layer=6"), (("==", 3), ("==", 6)))
+        self.assertEqual(
+            parse("layer >= 6 and token < 3"), (("<", 3), (">=", 6))
+        )
         self.assertIsNone(parse("l=6"))
         self.assertIsNone(parse("layer=6, layer=7"))
+
+    def test_breakpoint_comparison_filters_match_actual_token_and_layer(self) -> None:
+        adapter = object.__new__(LLMDebugAdapter)
+        adapter.step_paths = ("model.layers.14.mlp", "model.layers.15.mlp")
+        breakpoint = SourceBreakpoint(
+            20,
+            token_position=2,
+            transformer_layer=15,
+            token_operator=">=",
+            layer_operator=">=",
+        )
+
+        self.assertFalse(adapter._breakpoint_matches(breakpoint, 1, 1))
+        self.assertFalse(adapter._breakpoint_matches(breakpoint, 2, 0))
+        self.assertTrue(adapter._breakpoint_matches(breakpoint, 2, 1))
 
     def test_mlp_step_into_uses_authored_function_lines(self) -> None:
         adapter = object.__new__(LLMDebugAdapter)

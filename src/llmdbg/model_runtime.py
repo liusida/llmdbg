@@ -84,6 +84,10 @@ class NeuronProjection:
     contribution: tuple[TokenScore, ...]
     j_lens: tuple[TokenScore, ...] = ()
     r_lens: tuple[TokenScore, ...] = ()
+    output_projection: float = 0.0
+    residual_norm: float = 0.0
+    residual_cosine: float | None = None
+    potential_norm: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -96,6 +100,17 @@ class VectorProjection:
     r_lens: tuple[TokenScore, ...] = ()
 
 
+@dataclass(frozen=True)
+class ICAProjection:
+    """One active ICA component and vocabulary readouts for its signed vector."""
+
+    index: int
+    rank: int
+    score: float
+    energy: float
+    projection: VectorProjection
+
+
 @dataclass
 class ModelExecution:
     """A prompt execution that advances one token at a time with a KV cache."""
@@ -105,9 +120,14 @@ class ModelExecution:
     tokens: tuple[str, ...]
     device: str
     progress: Callable[[str], None]
+    dtype: str = "float32"
     past_key_values: Any = None
     cached_through: int = -1
     interventions: dict[tuple[int, str, str, int], float] = field(default_factory=dict)
+    ica_interventions: set[tuple[int, str, str, int]] = field(default_factory=set)
+    ica_observations: dict[
+        tuple[int, str, str, int], tuple[tuple[float, ...], tuple[float, ...]]
+    ] = field(default_factory=dict)
     projection_norms: dict[tuple[int, tuple[int, ...]], Any] = field(
         default_factory=dict
     )
@@ -138,6 +158,8 @@ class ModelExecution:
                 progress=self.progress,
                 token_position=position,
                 interventions=self.interventions,
+                ica_interventions=self.ica_interventions,
+                ica_observations=self.ica_observations,
             )
             self.past_key_values = next_cache
             self.cached_through = position
@@ -179,6 +201,18 @@ class ModelExecution:
         """Persist one vector override for subsequent replays of a token."""
         self.interventions[(token_position, layer_name, vector_name, index)] = value
 
+    def remove_ica_component(
+        self,
+        token_position: int,
+        layer_name: str,
+        vector_name: str,
+        component: int,
+    ) -> None:
+        """Persist an ICA component ablation for subsequent token replays."""
+        self.ica_interventions.add(
+            (token_position, layer_name, vector_name, component)
+        )
+
     def _prefill(self, position: int) -> None:
         """Run uncaptured prompt tokens into the cache before a target token."""
         import torch
@@ -206,10 +240,14 @@ class ModelExecution:
         layer_name: str,
         activation: tuple[float, ...],
         *,
+        output: tuple[float, ...] | None = None,
+        residual: tuple[float, ...] | None = None,
         neuron_count: int = 5,
         token_count: int = 5,
+        include_logit_lens: bool = True,
         include_j_lens: bool = False,
         include_r_lens: bool = False,
+        include_indices: tuple[int, ...] = (),
     ) -> tuple[NeuronProjection, ...]:
         """Project active MLP neurons through direct, J-Lens, and R-Lens readouts."""
         import re
@@ -228,8 +266,12 @@ class ModelExecution:
         )
         return self._top_projected_components(
             layer_index, activation, down_projection,
+            output=output,
+            residual=residual,
             component_count=neuron_count, token_count=token_count,
+            include_logit_lens=include_logit_lens,
             include_j_lens=include_j_lens, include_r_lens=include_r_lens,
+            include_indices=include_indices,
         )
 
     def top_attention_channels(
@@ -237,10 +279,14 @@ class ModelExecution:
         layer_name: str,
         activation: tuple[float, ...],
         *,
+        output: tuple[float, ...] | None = None,
+        residual: tuple[float, ...] | None = None,
         channel_count: int = 5,
         token_count: int = 5,
+        include_logit_lens: bool = True,
         include_j_lens: bool = False,
         include_r_lens: bool = False,
+        include_indices: tuple[int, ...] = (),
     ) -> tuple[NeuronProjection, ...]:
         """Project active attention channels through W_O and vocabulary readouts."""
         import re
@@ -269,9 +315,119 @@ class ModelExecution:
             )
         return self._top_projected_components(
             layer_index, activation, projection,
+            output=output,
+            residual=residual,
             component_count=channel_count, token_count=token_count,
+            include_logit_lens=include_logit_lens,
             include_j_lens=include_j_lens, include_r_lens=include_r_lens,
+            include_indices=include_indices,
         )
+
+    def component_fan_geometry(
+        self,
+        layer_name: str,
+        activation: tuple[float, ...],
+        output: tuple[float, ...],
+        *,
+        component_count: int = 5,
+    ) -> dict[str, Any] | None:
+        """Project the strongest component updates into the top-1/output plane.
+
+        Coordinates are measured in units of the strongest component's norm, so
+        the top-1 vector is always (1, 0).  The other component vectors retain
+        their measured relative lengths and directions in that plane.
+        """
+        import re
+
+        import torch
+
+        match = re.fullmatch(
+            r"(?:transformer\.h|model\.layers)\.(\d+)\."
+            r"(mlp|attention|full_attention|gated_linear_attention)",
+            layer_name,
+        )
+        if match is None:
+            return None
+        layer_index = int(match.group(1))
+        operation = match.group(2)
+        block = self.runtime.layers[layer_index]
+        if operation == "mlp":
+            projection = (
+                block.mlp.c_proj.weight
+                if self.runtime.architecture == "gpt2"
+                else block.mlp.down_proj.weight.T
+            )
+        elif self.runtime.architecture == "gpt2":
+            projection = block.attn.c_proj.weight
+        else:
+            mixer = (
+                block.self_attn
+                if operation == "full_attention"
+                else block.linear_attn
+            )
+            projection = (
+                mixer.o_proj.weight.T
+                if hasattr(mixer, "o_proj")
+                else mixer.out_proj.weight.T
+            )
+
+        with _runtime_lock, torch.inference_mode():
+            coefficients = torch.tensor(
+                activation, dtype=projection.dtype, device=projection.device
+            )
+            result = torch.tensor(
+                output, dtype=torch.float32, device=projection.device
+            )
+            result_norm = torch.linalg.vector_norm(result)
+            if float(result_norm) == 0.0:
+                return None
+            output_unit = result / result_norm
+            output_projections = coefficients.float() * (
+                projection.float() @ output_unit
+            )
+            count = min(component_count, coefficients.numel())
+            if count == 0:
+                return None
+            _, indices = torch.topk(output_projections, count)
+            vectors = (
+                projection.index_select(0, indices).float()
+                * coefficients.index_select(0, indices).float().unsqueeze(1)
+            )
+            top_norm = torch.linalg.vector_norm(vectors[0])
+            if float(top_norm) == 0.0:
+                return None
+            e1 = vectors[0] / top_norm
+            perpendicular = result - torch.dot(result, e1) * e1
+            perpendicular_norm = torch.linalg.vector_norm(perpendicular)
+            if float(perpendicular_norm) <= 1e-8:
+                for candidate in vectors[1:]:
+                    perpendicular = candidate - torch.dot(candidate, e1) * e1
+                    perpendicular_norm = torch.linalg.vector_norm(perpendicular)
+                    if float(perpendicular_norm) > 1e-8:
+                        break
+            e2 = (
+                perpendicular / perpendicular_norm
+                if float(perpendicular_norm) > 1e-8
+                else torch.zeros_like(e1)
+            )
+
+            def coordinates(vector: Any) -> dict[str, float]:
+                return {
+                    "x": float(torch.dot(vector, e1) / top_norm),
+                    "y": float(torch.dot(vector, e2) / top_norm),
+                }
+
+            return {
+                "topIndex": int(indices[0]),
+                "topNorm": float(top_norm),
+                "result": coordinates(result),
+                "components": [
+                    {"index": int(index), **coordinates(vector)}
+                    for index, vector in zip(
+                        indices[1:].tolist(), vectors[1:], strict=True
+                    )
+                ],
+            }
 
     def _top_projected_components(
         self,
@@ -281,8 +437,12 @@ class ModelExecution:
         *,
         component_count: int,
         token_count: int,
+        include_logit_lens: bool,
         include_j_lens: bool,
         include_r_lens: bool,
+        output: tuple[float, ...] | None = None,
+        residual: tuple[float, ...] | None = None,
+        include_indices: tuple[int, ...] = (),
     ) -> tuple[NeuronProjection, ...]:
         """Read individual activated input channels through a linear projection."""
         import torch
@@ -315,22 +475,81 @@ class ModelExecution:
                     projection, ord=2, dim=1, dtype=torch.float32
                 )
                 self.projection_norms[norm_key] = all_direction_norms
-            contribution_magnitudes = activation_tensor.abs().float() * all_direction_norms
+            if output is None:
+                ranking_scores = activation_tensor.abs().float() * all_direction_norms
+                all_output_projections = torch.zeros_like(ranking_scores)
+            else:
+                output_tensor = torch.tensor(
+                    output, dtype=torch.float32, device=projection.device
+                )
+                output_norm = torch.linalg.vector_norm(output_tensor)
+                if float(output_norm) == 0.0:
+                    ranking_scores = activation_tensor.abs().float() * all_direction_norms
+                    all_output_projections = torch.zeros_like(ranking_scores)
+                else:
+                    output_unit = output_tensor / output_norm
+                    all_output_projections = activation_tensor.float() * (
+                        projection.float() @ output_unit
+                    )
+                    ranking_scores = all_output_projections
             _, active_indices = torch.topk(
-                contribution_magnitudes,
-                min(component_count, activation_tensor.numel()),
+                ranking_scores, min(component_count, activation_tensor.numel())
+            )
+            selected = active_indices.tolist()
+            selected.extend(index for index in include_indices if index not in selected)
+            if any(index < 0 or index >= activation_tensor.numel() for index in selected):
+                raise ValueError(
+                    f"component index is outside range 0..{activation_tensor.numel() - 1}"
+                )
+            active_indices = torch.tensor(
+                selected, dtype=torch.long, device=activation_tensor.device
             )
             active_values = activation_tensor.index_select(0, active_indices)
             directions = projection.index_select(0, active_indices)
-            vocabulary_scores = (directions @ unembedding.T).float()
-            contribution_scores = vocabulary_scores * active_values.float().unsqueeze(1)
-            vocabulary_values, vocabulary_ids = torch.topk(
-                vocabulary_scores, min(token_count, vocabulary_scores.shape[1]), dim=1
-            )
-            contribution_values, contribution_ids = torch.topk(
-                contribution_scores, min(token_count, contribution_scores.shape[1]), dim=1
-            )
+            vocabulary_values = vocabulary_ids = None
+            contribution_values = contribution_ids = None
+            if include_logit_lens:
+                vocabulary_scores = (directions @ unembedding.T).float()
+                contribution_scores = (
+                    vocabulary_scores * active_values.float().unsqueeze(1)
+                )
+                vocabulary_values, vocabulary_ids = torch.topk(
+                    vocabulary_scores,
+                    min(token_count, vocabulary_scores.shape[1]),
+                    dim=1,
+                )
+                contribution_values, contribution_ids = torch.topk(
+                    contribution_scores,
+                    min(token_count, contribution_scores.shape[1]),
+                    dim=1,
+                )
             direction_norms = all_direction_norms.index_select(0, active_indices)
+            output_projections = all_output_projections.index_select(0, active_indices)
+            component_vectors = directions.float() * active_values.float().unsqueeze(1)
+            residual_norm = 0.0
+            residual_cosines: list[float | None] = [None] * active_indices.shape[0]
+            potential_norms = [0.0] * active_indices.shape[0]
+            if residual is not None:
+                residual_tensor = torch.tensor(
+                    residual, dtype=torch.float32, device=projection.device
+                )
+                residual_norm_tensor = torch.linalg.vector_norm(residual_tensor)
+                residual_norm = float(residual_norm_tensor)
+                component_norms = torch.linalg.vector_norm(component_vectors, dim=1)
+                dots = component_vectors @ residual_tensor
+                potential = component_vectors + residual_tensor.unsqueeze(0)
+                potential_norms = torch.linalg.vector_norm(potential, dim=1).tolist()
+                if residual_norm > 0.0:
+                    residual_cosines = [
+                        (
+                            float(dot / (residual_norm_tensor * component_norm))
+                            if float(component_norm) > 0.0
+                            else None
+                        )
+                        for dot, component_norm in zip(
+                            dots, component_norms, strict=True
+                        )
+                    ]
             def transported_scores(source: Any) -> tuple[Any, Any]:
                 if source is None:
                     return None, None
@@ -364,9 +583,15 @@ class ModelExecution:
                 index=int(active_indices[rank]),
                 activation=float(active_values[rank]),
                 direction_norm=float(direction_norms[rank]),
-                vocabulary=token_scores(vocabulary_ids[rank], vocabulary_values[rank]),
-                contribution=token_scores(
-                    contribution_ids[rank], contribution_values[rank]
+                vocabulary=(
+                    token_scores(vocabulary_ids[rank], vocabulary_values[rank])
+                    if vocabulary_ids is not None and vocabulary_values is not None
+                    else ()
+                ),
+                contribution=(
+                    token_scores(contribution_ids[rank], contribution_values[rank])
+                    if contribution_ids is not None and contribution_values is not None
+                    else ()
                 ),
                 j_lens=(
                     token_scores(j_lens_ids[rank], j_lens_values[rank])
@@ -378,6 +603,10 @@ class ModelExecution:
                     if r_lens_ids is not None and r_lens_values is not None
                     else ()
                 ),
+                output_projection=float(output_projections[rank]),
+                residual_norm=residual_norm,
+                residual_cosine=residual_cosines[rank],
+                potential_norm=float(potential_norms[rank]),
             )
             for rank in range(active_indices.shape[0])
         )
@@ -388,10 +617,31 @@ class ModelExecution:
         vector: tuple[float, ...],
         *,
         token_count: int = 10,
+        include_logit_lens: bool = True,
         include_j_lens: bool = False,
         include_r_lens: bool = False,
     ) -> VectorProjection:
         """Read one MLP/residual vector directly and through J/R transport maps."""
+        return self._vectors_lens(
+            layer_name,
+            (vector,),
+            token_count=token_count,
+            include_logit_lens=include_logit_lens,
+            include_j_lens=include_j_lens,
+            include_r_lens=include_r_lens,
+        )[0]
+
+    def _vectors_lens(
+        self,
+        layer_name: str,
+        vectors: tuple[tuple[float, ...], ...],
+        *,
+        token_count: int,
+        include_logit_lens: bool,
+        include_j_lens: bool,
+        include_r_lens: bool,
+    ) -> tuple[VectorProjection, ...]:
+        """Batch model-width vectors through selected vocabulary readouts."""
         import re
 
         import torch
@@ -399,7 +649,9 @@ class ModelExecution:
         match = re.match(r"(?:transformer\.h|model\.layers)\.(\d+)(?:\.|$)", layer_name)
         layer_index = int(match.group(1)) if match is not None else None
         model_id = str(getattr(self.runtime.model.config, "_name_or_path", ""))
-        hidden_size = len(vector)
+        if not vectors:
+            return ()
+        hidden_size = len(vectors[0])
         from llmdbg.j_lens import source_map as j_lens_map
         from llmdbg.r_lens import source_map as r_lens_map
 
@@ -413,42 +665,147 @@ class ModelExecution:
         )
         with _runtime_lock, torch.inference_mode():
             unembedding = self.runtime.model.get_output_embeddings().weight
-            direction = torch.tensor(
-                vector, device=unembedding.device, dtype=unembedding.dtype
+            directions = torch.tensor(
+                vectors, device=unembedding.device, dtype=unembedding.dtype
             )
 
-            def readout(value: Any) -> tuple[TokenScore, ...]:
-                normalized = self.runtime.final_norm(value[None, None, :])[0, 0]
+            def readout(values_to_read: Any) -> tuple[tuple[TokenScore, ...], ...]:
+                normalized = self.runtime.final_norm(values_to_read[:, None, :])[:, 0]
                 logits = (normalized @ unembedding.T).float()
-                values, ids = torch.topk(logits, min(token_count, logits.numel()))
+                values, ids = torch.topk(
+                    logits, min(token_count, logits.shape[1]), dim=1
+                )
                 return tuple(
-                    TokenScore(
-                        int(token_id),
-                        self.runtime.tokenizer.decode([int(token_id)]),
-                        float(score),
+                    tuple(
+                        TokenScore(
+                            int(token_id),
+                            self.runtime.tokenizer.decode([int(token_id)]),
+                            float(score),
+                        )
+                        for token_id, score in zip(
+                            row_ids.tolist(), row_values.tolist(), strict=True
+                        )
                     )
-                    for token_id, score in zip(ids.tolist(), values.tolist(), strict=True)
+                    for row_ids, row_values in zip(ids, values, strict=True)
                 )
 
-            def transported(source: Any) -> tuple[TokenScore, ...]:
+            def transported(source: Any) -> tuple[tuple[TokenScore, ...], ...]:
                 if source is None:
-                    return ()
+                    return tuple(() for _ in vectors)
                 mapping, _ = source
-                mapped = mapping.to(
-                    device=direction.device, dtype=torch.float32
-                ) @ direction.float()
-                return readout(mapped.to(dtype=direction.dtype))
+                mapped = directions.float() @ mapping.to(
+                    device=directions.device, dtype=torch.float32
+                ).T
+                return readout(mapped.to(dtype=directions.dtype))
 
-            return VectorProjection(
-                norm=float(direction.float().norm()),
-                vocabulary=readout(direction),
-                j_lens=transported(j_source),
-                r_lens=transported(r_source),
+            direct = (
+                readout(directions)
+                if include_logit_lens
+                else tuple(() for _ in vectors)
             )
+            j_readouts = transported(j_source)
+            r_readouts = transported(r_source)
+            norms = torch.linalg.vector_norm(directions.float(), dim=1).tolist()
+            return tuple(
+                VectorProjection(
+                    norm=float(norms[index]),
+                    vocabulary=direct[index],
+                    j_lens=j_readouts[index],
+                    r_lens=r_readouts[index],
+                )
+                for index in range(len(vectors))
+            )
+
+    def ica_components(
+        self,
+        layer_name: str,
+        vector: tuple[float, ...],
+        *,
+        is_delta: bool,
+        component_count: int = 3,
+        token_count: int = 10,
+        include_logit_lens: bool = True,
+        include_j_lens: bool = False,
+        include_r_lens: bool = False,
+        include_indices: tuple[int, ...] = (),
+    ) -> tuple[ICAProjection, ...]:
+        """Project a vector through the published resid-post ICA basis."""
+        import re
+
+        from llmdbg.ica_lens import top_components
+
+        match = re.match(r"(?:transformer\.h|model\.layers)\.(\d+)(?:\.|$)", layer_name)
+        if match is None:
+            return ()
+        model_id = str(getattr(self.runtime.model.config, "_name_or_path", ""))
+        components = top_components(
+            model_id,
+            int(match.group(1)),
+            vector,
+            is_delta=is_delta,
+            count=component_count,
+            include_indices=include_indices,
+        )
+        projections = self._vectors_lens(
+            layer_name,
+            tuple(component["vector"] for component in components),
+            token_count=token_count,
+            include_logit_lens=include_logit_lens,
+            include_j_lens=include_j_lens,
+            include_r_lens=include_r_lens,
+        )
+        return tuple(
+            ICAProjection(
+                index=component["index"],
+                rank=component["rank"],
+                score=component["score"],
+                energy=component["energy"],
+                projection=projection,
+            )
+            for component, projection in zip(components, projections, strict=True)
+        )
 
 _runtime_lock = RLock()
 _runtime_key: tuple[str, str, str, str] | None = None
 _runtime: ModelRuntime | None = None
+
+
+def _resolve_device_and_dtype(device: str, dtype: str) -> tuple[str, str]:
+    """Resolve portable automatic settings against the installed torch backend."""
+    import torch
+
+    if device not in {"auto", "cuda", "mps", "cpu"}:
+        raise ValueError(f"unsupported device: {device}")
+    if dtype not in {"auto", "bfloat16", "float16", "float32"}:
+        raise ValueError(f"unsupported dtype: {dtype}")
+    if device == "auto":
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+    if device == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA was requested, but this PyTorch runtime cannot use CUDA. "
+            f"Installed torch is {torch.__version__} (built CUDA: {torch.version.cuda}). "
+            "Run 'llmdbg: Show Runtime Diagnostics' for details."
+        )
+    if device == "mps" and not (
+        hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+    ):
+        raise RuntimeError(
+            "MPS was requested, but this PyTorch runtime cannot use Apple Metal. "
+            "Run 'llmdbg: Show Runtime Diagnostics' for details."
+        )
+    if dtype == "auto":
+        if device == "cuda":
+            dtype = "bfloat16" if torch.cuda.is_bf16_supported() else "float16"
+        elif device == "mps":
+            dtype = "float16"
+        else:
+            dtype = "float32"
+    return device, dtype
 
 
 def _get_model_runtime(
@@ -484,7 +841,7 @@ def _get_model_runtime(
     }[dtype]
     progress(f"Downloading tokenizer for {model_name_or_path}...\n")
     tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, revision=revision)
-    progress(f"Loading {model_name_or_path} tensors through gb10-load-llm...\n")
+    progress(f"Loading {model_name_or_path} tensors on {device} through gb10-load-llm...\n")
     model = from_pretrained_to_cuda(
         AutoModelForCausalLM,
         model_name_or_path,
@@ -538,8 +895,8 @@ def load_model_trace(
     *,
     revision: str = "main",
     prompt: str,
-    device: str = "cuda",
-    dtype: str = "bfloat16",
+    device: str = "auto",
+    dtype: str = "auto",
     progress: Callable[[str], None] | None = None,
 ) -> ModelTrace:
     """Load a supported model and return a layer-by-layer trace for one prompt.
@@ -563,8 +920,8 @@ def prepare_model_execution(
     *,
     revision: str = "main",
     prompt: str,
-    device: str = "cuda",
-    dtype: str = "bfloat16",
+    device: str = "auto",
+    dtype: str = "auto",
     progress: Callable[[str], None] | None = None,
 ) -> ModelExecution:
     """Load/reuse a model and tokenize a prompt without running its forward pass."""
@@ -580,12 +937,13 @@ def prepare_model_execution(
 
     if not prompt:
         raise ValueError("prompt must not be empty")
-    if dtype not in {"bfloat16", "float16", "float32"}:
-        raise ValueError(f"unsupported dtype: {dtype}")
-    if device == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError("CUDA was requested, but torch.cuda.is_available() is false")
-
     report = progress or (lambda _message: None)
+    requested_device, requested_dtype = device, dtype
+    device, dtype = _resolve_device_and_dtype(device, dtype)
+    report(
+        f"Runtime selection: device={device}, dtype={dtype} "
+        f"(requested device={requested_device}, dtype={requested_dtype}).\n"
+    )
     with _runtime_lock:
         runtime = _get_model_runtime(
             model_name_or_path,
@@ -605,7 +963,7 @@ def prepare_model_execution(
             runtime.tokenizer.decode([token_id]) for token_id in input_ids[0].tolist()
         )
     report(f"Prepared {len(tokens)} prompt tokens; forward execution is deferred.\n")
-    return ModelExecution(runtime, input_ids, tokens, device, report)
+    return ModelExecution(runtime, input_ids, tokens, device, report, dtype=dtype)
 
 
 def _capture_gpt2_token_trace(
@@ -618,6 +976,10 @@ def _capture_gpt2_token_trace(
     progress: Callable[[str], None],
     token_position: int,
     interventions: dict[tuple[int, str, str, int], float],
+    ica_interventions: set[tuple[int, str, str, int]],
+    ica_observations: dict[
+        tuple[int, str, str, int], tuple[tuple[float, ...], tuple[float, ...]]
+    ],
 ) -> tuple[ModelTrace, Any]:
     """Capture all layer states for one token using an existing KV cache."""
     import torch
@@ -639,10 +1001,28 @@ def _capture_gpt2_token_trace(
                 tensor[..., index] = value
         return tensor
 
+    def apply_ica_interventions(tensor: Any, state_name: str, vector_name: str) -> Any:
+        from llmdbg.ica_lens import remove_component
+
+        for position, layer, vector, component in sorted(ica_interventions):
+            if position == token_position and layer == state_name and vector == vector_name:
+                layer_index = int(state_name.split(".")[2])
+                before = tuple(float(value) for value in tensor[..., -1, :].float().cpu().tolist()[0])
+                remove_component(
+                    str(getattr(model.config, "_name_or_path", "")),
+                    layer_index,
+                    tensor,
+                    component,
+                )
+                after = tuple(float(value) for value in tensor[..., -1, :].float().cpu().tolist()[0])
+                ica_observations[(position, layer, vector, component)] = (before, after)
+        return tensor
+
     def capture(name: str, operation: str, meaning: str, apply_final_norm: bool):
         def hook(_module, _inputs, output) -> None:
             tensor = _tensor_from_output(output)
             apply_interventions(tensor, name, "output")
+            apply_ica_interventions(tensor, name, "output")
             captured.append((name, operation, meaning, tensor.detach(), apply_final_norm))
 
         return hook
@@ -651,6 +1031,7 @@ def _capture_gpt2_token_trace(
         def hook(_module, inputs) -> None:
             hidden = inputs[0]
             apply_interventions(hidden, name, "output")
+            apply_ica_interventions(hidden, name, "output")
             captured.append((name, operation, meaning, hidden.detach(), True))
 
         return hook
@@ -684,6 +1065,9 @@ def _capture_gpt2_token_trace(
     for index, block in enumerate(model.transformer.h):
         attention_name = f"transformer.h.{index}.attention"
         mlp_name = f"transformer.h.{index}.mlp"
+        def intervene_block_input(_module, inputs, name=attention_name):
+            apply_ica_interventions(inputs[0], name, "input")
+        handles.append(block.register_forward_pre_hook(intervene_block_input))
         handles.append(
             block.ln_1.register_forward_hook(
                 capture_detail(attention_name, "normalized_input")
@@ -812,6 +1196,10 @@ def _capture_qwen35_token_trace(
     progress: Callable[[str], None],
     token_position: int,
     interventions: dict[tuple[int, str, str, int], float],
+    ica_interventions: set[tuple[int, str, str, int]],
+    ica_observations: dict[
+        tuple[int, str, str, int], tuple[tuple[float, ...], tuple[float, ...]]
+    ],
 ) -> tuple[ModelTrace, Any]:
     """Capture Qwen3.5 residual, hybrid-attention, and gated-MLP states."""
     import torch
@@ -832,10 +1220,28 @@ def _capture_qwen35_token_trace(
                 tensor[..., index] = value
         return tensor
 
+    def apply_ica_interventions(tensor: Any, state_name: str, vector_name: str) -> Any:
+        from llmdbg.ica_lens import remove_component
+
+        for position, layer, vector, component in sorted(ica_interventions):
+            if position == token_position and layer == state_name and vector == vector_name:
+                layer_index = int(state_name.split(".")[2])
+                before = tuple(float(value) for value in tensor[..., -1, :].float().cpu().tolist()[0])
+                remove_component(
+                    str(getattr(model.config, "_name_or_path", "")),
+                    layer_index,
+                    tensor,
+                    component,
+                )
+                after = tuple(float(value) for value in tensor[..., -1, :].float().cpu().tolist()[0])
+                ica_observations[(position, layer, vector, component)] = (before, after)
+        return tensor
+
     def capture(name: str, operation: str, meaning: str, apply_final_norm: bool):
         def hook(_module, _inputs, output) -> None:
             tensor = _tensor_from_output(output)
             apply_interventions(tensor, name, "output")
+            apply_ica_interventions(tensor, name, "output")
             captured.append((name, operation, meaning, tensor.detach(), apply_final_norm))
         return hook
 
@@ -843,6 +1249,7 @@ def _capture_qwen35_token_trace(
         def hook(_module, inputs) -> None:
             tensor = inputs[0]
             apply_interventions(tensor, name, "output")
+            apply_ica_interventions(tensor, name, "output")
             captured.append((name, operation, meaning, tensor.detach(), True))
         return hook
 
@@ -884,6 +1291,9 @@ def _capture_qwen35_token_trace(
         attention_kind = runtime.layer_kind(index)
         attention_name = runtime.state_name(index, attention_kind)
         mlp_name = runtime.state_name(index, "mlp")
+        def intervene_block_input(_module, inputs, name=attention_name):
+            apply_ica_interventions(inputs[0], name, "input")
+        handles.append(block.register_forward_pre_hook(intervene_block_input))
         handles.append(
             block.input_layernorm.register_forward_hook(
                 capture_detail(attention_name, "normalized_input")

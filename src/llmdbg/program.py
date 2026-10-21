@@ -236,8 +236,8 @@ def gpt2(
     model: str,
     *,
     revision: str = "main",
-    device: str = "cuda",
-    dtype: str = "bfloat16",
+    device: str = "auto",
+    dtype: str = "auto",
 ) -> RemoteModel:
     return RemoteModel(model, architecture="gpt2", revision=revision, device=device, dtype=dtype)
 
@@ -246,8 +246,8 @@ def qwen35(
     model: str,
     *,
     revision: str = "main",
-    device: str = "cuda",
-    dtype: str = "bfloat16",
+    device: str = "auto",
+    dtype: str = "auto",
 ) -> RemoteModel:
     return RemoteModel(model, architecture="qwen3_5", revision=revision, device=device, dtype=dtype)
 

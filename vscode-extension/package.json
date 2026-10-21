@@ -2,7 +2,7 @@
   "name": "llmdbg",
   "displayName": "llmdbg",
   "description": "Step through LLM layers and inspect human-readable internal representations.",
-  "version": "0.0.118",
+  "version": "0.0.143",
   "publisher": "SidaLiu",
   "icon": "assets/icon.png",
   "license": "MIT",
@@ -23,7 +23,7 @@
   ],
   "files": [
     "extension.js",
-    "assets/icon.png",
+    "assets/**",
     "bundled/**",
     "LICENSE",
     "README.md",
@@ -33,14 +33,35 @@
   "contributes": {
     "commands": [
       {
+        "command": "llmdbg.initializeProject",
+        "title": "llmdbg: Create Starter Files",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "llmdbg.showRuntimeDiagnostics",
+        "title": "llmdbg: Show Runtime Diagnostics",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "llmdbg.rebuildRuntime",
+        "title": "llmdbg: Rebuild Python Runtime",
+        "icon": "$(sync)"
+      },
+      {
         "command": "llmdbg.plotCurrentVector",
         "title": "llmdbg: Plot Current Vector",
-        "icon": "$(graph-line)"
+        "icon": {
+          "light": "assets/plot-light.svg",
+          "dark": "assets/plot-dark.svg"
+        }
       },
       {
         "command": "llmdbg.showNeuronLens",
         "title": "Lens",
-        "icon": "$(telescope)"
+        "icon": {
+          "light": "assets/lens-light.svg",
+          "dark": "assets/lens-dark.svg"
+        }
       },
       {
         "command": "llmdbg.unloadModel",
@@ -56,14 +77,14 @@
     "menus": {
       "debug/toolBar": [
         {
-          "command": "llmdbg.plotCurrentVector",
-          "when": "debugType == llmdbg",
-          "group": "navigation@20"
-        },
-        {
           "command": "llmdbg.showNeuronLens",
           "when": "debugType == llmdbg",
-          "group": "navigation@21"
+          "group": "llmdbg@1"
+        },
+        {
+          "command": "llmdbg.plotCurrentVector",
+          "when": "debugType == llmdbg",
+          "group": "llmdbg@2"
         }
       ]
     },
@@ -145,19 +166,22 @@
               "device": {
                 "type": "string",
                 "enum": [
+                  "auto",
                   "cuda",
+                  "mps",
                   "cpu"
                 ],
-                "default": "cuda"
+                "default": "auto"
               },
               "dtype": {
                 "type": "string",
                 "enum": [
+                  "auto",
                   "bfloat16",
                   "float16",
                   "float32"
                 ],
-                "default": "bfloat16"
+                "default": "auto"
               },
               "adapterSource": {
                 "type": "string",
@@ -200,6 +224,18 @@
           "type": "string",
           "default": "uv",
           "description": "uv executable used to create and update llmdbg's private environment."
+        },
+        "llmdbg.torchBackend": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "cu128",
+            "cu126",
+            "cu118",
+            "cpu"
+          ],
+          "default": "auto",
+          "description": "PyTorch backend for llmdbg's private runtime. Auto detects NVIDIA CUDA on Windows/Linux, Apple MPS on macOS, and otherwise uses CPU."
         },
         "llmdbg.developmentSourcePath": {
           "type": "string",

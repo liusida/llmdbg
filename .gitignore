@@ -16,4 +16,5 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
+.logs/
 /src/llmdbg/data/r_lens/

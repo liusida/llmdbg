@@ -13,7 +13,7 @@ reloads the VS Code window by default. Set `llmdbg.autoReloadAfterUpdate` to
 
 ## Prototype quick start
 
-1. Create or open a `.llmdbg.py` Python model program (recommended) or legacy `.llmdbg` file.
+1. Run **llmdbg: Create Starter Files** from the Command Palette, or create/open a `.llmdbg.py` Python model program (recommended) or legacy `.llmdbg` file. The command creates examples for GPT-2 and every supported Qwen3.5 size (0.8B, 2B, 9B, and 27B), plus matching `.vscode/launch.json` entries, without overwriting existing files.
 2. Press **F5** while that file is active. If prompted, select **llmdbg**.
 3. Wait for the private debugger environment to be created on first use.
 4. Expand **Variables** and use **Step Over** to advance through model layers.
@@ -31,8 +31,8 @@ available; for example:
 ```text
 model = "openai-community/gpt2"
 revision = "main"
-device = "cuda"
-dtype = "bfloat16"
+device = "auto"
+dtype = "auto"
 prompt = "The capital of France is"
 token = 3
 stop_on_entry = false
@@ -66,6 +66,21 @@ The extension can start directly from the active `.llmdbg` file, so a
 `launch.json` is optional. If one is used, it only needs a `llmdbg` launch with
 `"config": "${file}"`.
 
+## Runtime backends
+
+The extension owns a private Python environment and selects its PyTorch backend
+automatically. Windows and Linux use an NVIDIA CUDA wheel when `nvidia-smi`
+reports a supported driver; Apple Silicon macOS uses MPS; other supported
+systems use CPU. Current PyTorch releases no longer provide Intel macOS wheels,
+so automatic macOS setup requires Apple Silicon. Model programs should normally
+specify `device="auto"` and `dtype="auto"`.
+The automatic dtype is BF16 on capable CUDA GPUs, FP16 on other CUDA GPUs and
+MPS, and FP32 on CPU.
+
+Run **llmdbg: Show Runtime Diagnostics** to see the resolved backend, PyTorch
+build, CUDA/MPS availability, GPU, and memory. Run **llmdbg: Rebuild Python
+Runtime** to repair the private environment or apply a backend override.
+
 The debugger keeps that same `.llmdbg` document active while stepping. Runtime
 state appears in the debugger panels; it does not create or switch to a second
 `*.execution.llmdbg` editor and never rewrites the configuration file.
@@ -89,8 +104,9 @@ assignment to let ordinary breakpoints stop at every token position; the existin
 `with debug(..., token=token)` call may remain unchanged. llmdbg prefills earlier tokens into the KV cache and
 executes the selected token as a one-token cached forward pass. The **Token**
 scope shows its position, token ID, decoded text, and prompt prefix.
-Use `layer=6` to stop only in zero-based transformer block 6. Combine filters
-with `token=4, layer=6`; llmdbg parses the condition without assigning to the
+Use `layer=6` to stop only in zero-based transformer block 6, or comparisons
+such as `layer>=15` to stop in later blocks. Combine filters with
+`token=4, layer>=15`; llmdbg parses the condition without assigning to the
 Python-like `layer` local.
 
 Watch one zero-based dimension with `residual_stream[42]`, `output[42]`,
@@ -117,6 +133,14 @@ both with the direct Logit Lens. Lens artifacts are downloaded lazily from
 2B, 9B, and 27B with both J-Lens and R-Lens maps (and also retains the earlier
 0.8B maps). Large 9B/27B files resolve to the R-Lens authors' pinned,
 checksum-verified release rather than being duplicated.
+
+The block selector is a checkbox popup, so several sections can remain visible
+at once. For GPT-2 Small and Qwen3.5 2B/9B it also offers ICA sections for the
+pre-, mid-, and post-residual states plus attention and MLP updates. Each ICA
+section shows the three largest absolute component scores and reads the signed
+component vector through the currently selected Logit/J/R lenses. The published
+ICA bases were fitted at `resid_post`; pre/mid states use that affine basis,
+while attention/MLP displacement vectors use its linear part without centering.
 
 The methods are from [Verbalizable Representations Form a Global Workspace in
 Language Models](https://transformer-circuits.pub/2026/workspace/index.html)

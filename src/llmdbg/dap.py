@@ -5,9 +5,13 @@ from __future__ import annotations
 import json
 import ast
 import base64
+import hashlib
+import importlib.metadata
 import io
+import platform
 import re
 import sys
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -28,6 +32,8 @@ class SourceBreakpoint:
     line: int
     token_position: int | None = None
     transformer_layer: int | None = None
+    token_operator: str = "=="
+    layer_operator: str = "=="
 
 
 class ProtocolStream:
@@ -150,9 +156,8 @@ class LLMDebugAdapter:
         self.source_path: str | None = None
         self.breakpoints: tuple[SourceBreakpoint, ...] = ()
         self.breakpoints_by_source: dict[str, tuple[SourceBreakpoint, ...]] = {}
-        self.neuron_cache: dict[
-            tuple[int, str, bool, bool], tuple[NeuronProjection, ...]
-        ] = {}
+        self.neuron_cache: dict[tuple[Any, ...], tuple[NeuronProjection, ...]] = {}
+        self.lens_snapshot_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
         self.inside_mlp = False
         self.mlp_step_index = 0
         self.mlp_source_content = ""
@@ -162,6 +167,9 @@ class LLMDebugAdapter:
         self.function_bindings: dict[str, list[dict[str, Any]]] = {}
         self.function_source_lines: dict[str, tuple[int, ...]] = {}
         self.predictions: tuple[Any, ...] = ()
+        self.model_revision = "main"
+        self.requested_device = "auto"
+        self.requested_dtype = "auto"
 
     @property
     def internal_steps(self) -> tuple[tuple[str, str, str], ...]:
@@ -290,6 +298,7 @@ class LLMDebugAdapter:
         self.stream.write(message)
 
     def stop(self, reason: str) -> None:
+        getattr(self, "lens_snapshot_cache", {}).clear()
         self.send_event(
             "stopped",
             {
@@ -335,6 +344,9 @@ class LLMDebugAdapter:
             model = arguments.get("model")
             self.model_name = str(model) if model else "built-in demo"
             self.prompt = str(arguments.get("prompt", "The capital of France is"))
+            self.model_revision = str(arguments.get("revision", "main"))
+            self.requested_device = str(arguments.get("device", "auto"))
+            self.requested_dtype = str(arguments.get("dtype", "auto"))
             if model:
                 self.send_event(
                     "output",
@@ -344,8 +356,8 @@ class LLMDebugAdapter:
                     str(model),
                     revision=str(arguments.get("revision", "main")),
                     prompt=self.prompt,
-                    device=str(arguments.get("device", "cuda")),
-                    dtype=str(arguments.get("dtype", "bfloat16")),
+                    device=str(arguments.get("device", "auto")),
+                    dtype=str(arguments.get("dtype", "auto")),
                     progress=lambda output: self.send_event(
                         "output", {"category": "console", "output": f"llmdbg: {output}"}
                     ),
@@ -356,7 +368,7 @@ class LLMDebugAdapter:
                 model_bytes = int(loaded_model.get_memory_footprint(return_buffers=True))
                 cuda_allocated_bytes = 0
                 cuda_reserved_bytes = 0
-                if str(arguments.get("device", "cuda")).startswith("cuda"):
+                if self.execution.device.startswith("cuda"):
                     import torch
 
                     if torch.cuda.is_available():
@@ -367,8 +379,8 @@ class LLMDebugAdapter:
                     {
                         "model": str(model),
                         "revision": str(arguments.get("revision", "main")),
-                        "device": str(arguments.get("device", "cuda")),
-                        "dtype": str(arguments.get("dtype", "bfloat16")),
+                        "device": self.execution.device,
+                        "dtype": self.execution.dtype,
                         "modelBytes": model_bytes,
                         "cudaAllocatedBytes": cuda_allocated_bytes,
                         "cudaReservedBytes": cuda_reserved_bytes,
@@ -545,16 +557,65 @@ class LLMDebugAdapter:
             )
         elif command == "llmdbg/neuronLens":
             mode = str(arguments.get("mode", "logit"))
-            self.send_response(
-                request,
-                self._neuron_lens_snapshot(
-                    view=str(arguments.get("view", "neurons")),
+            view = str(arguments.get("view", "neurons"))
+            cache_key = (
+                self.token_index,
+                self.layer_index,
+                self.inside_mlp,
+                self.inside_attention,
+                self.mlp_step_index,
+                mode,
+                view,
+            )
+            snapshot = self.lens_snapshot_cache.get(cache_key)
+            if snapshot is None:
+                snapshot = self._neuron_lens_snapshot(
+                    view=view,
+                    include_logit_lens=mode in {"logit", "all"},
                     include_j_lens=mode in {"j-lens", "all"},
                     include_r_lens=mode in {"r-lens", "all"},
-                ),
+                )
+                self.lens_snapshot_cache[cache_key] = snapshot
+            self.send_response(request, snapshot)
+        elif command == "llmdbg/icaSupport":
+            from llmdbg.ica_lens import artifact_repository
+
+            repository = artifact_repository(str(self.model_name))
+            self.send_response(
+                request,
+                {"supported": repository is not None, "repository": repository},
+            )
+        elif command == "llmdbg/removeIcaComponent":
+            self.send_event(
+                "llmdbg/computationStarted", {"command": command}
+            )
+            result = self._remove_ica_component(
+                str(arguments.get("view", "")),
+                int(arguments.get("component", -1)),
+            )
+            self.send_response(request, result)
+            self.send_event("invalidated", {"areas": ["variables", "watch"]})
+            self.send_event(
+                "llmdbg/vectorChanged",
+                {"tokenPosition": self.token_index, "layer": self.state.layer.name},
+            )
+        elif command == "llmdbg/removeProjectedComponent":
+            self.send_event(
+                "llmdbg/computationStarted", {"command": command}
+            )
+            result = self._remove_projected_component(
+                str(arguments.get("view", "")),
+                int(arguments.get("component", -1)),
+            )
+            self.send_response(request, result)
+            self.send_event("invalidated", {"areas": ["variables", "watch"]})
+            self.send_event(
+                "llmdbg/vectorChanged",
+                {"tokenPosition": self.token_index, "layer": self.state.layer.name},
             )
         elif command in ("next", "stepIn", "stepOut"):
             self.send_response(request)
+            self.send_event("llmdbg/computationStarted", {"command": command})
             function_name = self._function_name_for_path(self.outer_state.layer.name)
             internal_lines = self._internal_source_lines()
             can_enter_mlp = function_name == "mlp" and internal_lines
@@ -578,6 +639,7 @@ class LLMDebugAdapter:
                 self._advance_outer()
         elif command == "continue":
             self.send_response(request, {"allThreadsContinued": True})
+            self.send_event("llmdbg/computationStarted", {"command": command})
             self._continue_to_breakpoint(include_current=False)
         elif command == "pause":
             self.send_response(request)
@@ -629,19 +691,28 @@ class LLMDebugAdapter:
                                 "verified": False,
                                 "line": resolved_line,
                                 "message": (
-                                    "Use token=4, layer=6, or token=4, layer=6"
+                                    "Use conditions such as token=4, layer>=15, "
+                                    "or token=4, layer>=15"
                                 ),
                             }
                         )
                         breakpoints.append(breakpoint)
                         continue
-                    condition_token, transformer_layer = parsed_condition or (None, None)
+                    token_filter, layer_filter = parsed_condition or (None, None)
+                    condition_token = token_filter[1] if token_filter is not None else None
+                    token_operator = token_filter[0] if token_filter is not None else "=="
+                    transformer_layer = layer_filter[1] if layer_filter is not None else None
+                    layer_operator = layer_filter[0] if layer_filter is not None else "=="
                     token_position = (
                         condition_token
                         if condition_token is not None
                         else self.default_token
                     )
-                    if token_position is not None and token_position >= len(self.tokens):
+                    if (
+                        token_position is not None
+                        and token_operator == "=="
+                        and token_position >= len(self.tokens)
+                    ):
                         breakpoint.update(
                             {
                                 "verified": False,
@@ -656,7 +727,13 @@ class LLMDebugAdapter:
                         continue
                     breakpoint["line"] = resolved_line
                     configured.append(
-                        SourceBreakpoint(resolved_line, token_position, transformer_layer)
+                        SourceBreakpoint(
+                            resolved_line,
+                            token_position,
+                            transformer_layer,
+                            token_operator,
+                            layer_operator,
+                        )
                     )
                 breakpoints.append(breakpoint)
             self.breakpoints_by_source[source_key] = tuple(configured)
@@ -686,8 +763,8 @@ class LLMDebugAdapter:
             "# Generated llmdbg demo source. This view is read-only.",
             f"model = {json.dumps(model)}",
             f"revision = {json.dumps(str(arguments.get('revision', 'main')))}",
-            f"device = {json.dumps(str(arguments.get('device', 'cuda')))}",
-            f"dtype = {json.dumps(str(arguments.get('dtype', 'bfloat16')))}",
+            f"device = {json.dumps(str(arguments.get('device', 'auto')))}",
+            f"dtype = {json.dumps(str(arguments.get('dtype', 'auto')))}",
             f"prompt = {json.dumps(str(arguments.get('prompt', '')))}",
         ]
         source_lines = []
@@ -903,27 +980,32 @@ class LLMDebugAdapter:
     @staticmethod
     def _parse_token_condition(condition: str) -> int | None:
         parsed = LLMDebugAdapter._parse_breakpoint_condition(condition)
-        return parsed[0] if parsed is not None else None
+        if parsed is None or parsed[0] is None or parsed[0][0] != "==":
+            return None
+        return parsed[0][1]
 
     @staticmethod
     def _parse_breakpoint_condition(
         condition: str,
-    ) -> tuple[int | None, int | None] | None:
+    ) -> tuple[tuple[str, int] | None, tuple[str, int] | None] | None:
         """Parse declarative breakpoint filters without evaluating Python code."""
         if not condition.strip():
             return None, None
-        values: dict[str, int] = {}
+        values: dict[str, tuple[str, int]] = {}
         terms = re.split(r"\s*(?:,|&&|\band\b)\s*", condition, flags=re.IGNORECASE)
         for term in terms:
             match = re.fullmatch(
-                r"(token|layer)\s*(?:=|==)\s*(\d+)", term, flags=re.IGNORECASE
+                r"(token|layer)\s*(==|=|<=|>=|<|>)\s*(\d+)",
+                term,
+                flags=re.IGNORECASE,
             )
             if match is None:
                 return None
             name = match.group(1).lower()
             if name in values:
                 return None
-            values[name] = int(match.group(2))
+            operator = "==" if match.group(2) == "=" else match.group(2)
+            values[name] = (operator, int(match.group(3)))
         return values.get("token"), values.get("layer")
 
     @staticmethod
@@ -1013,7 +1095,23 @@ class LLMDebugAdapter:
         token_position: int,
         trace_layer_index: int,
     ) -> bool:
-        if breakpoint.token_position is not None and breakpoint.token_position != token_position:
+        def compare(actual: int, operator: str, expected: int) -> bool:
+            return {
+                "==": actual == expected,
+                "<": actual < expected,
+                "<=": actual <= expected,
+                ">": actual > expected,
+                ">=": actual >= expected,
+            }[operator]
+
+        if (
+            breakpoint.token_position is not None
+            and not compare(
+                token_position,
+                breakpoint.token_operator,
+                breakpoint.token_position,
+            )
+        ):
             return False
         if breakpoint.transformer_layer is None:
             return True
@@ -1022,7 +1120,15 @@ class LLMDebugAdapter:
             if trace_layer_index < len(self.step_paths)
             else ""
         )
-        return self._transformer_layer_index(path) == breakpoint.transformer_layer
+        actual_layer = self._transformer_layer_index(path)
+        return (
+            actual_layer is not None
+            and compare(
+                actual_layer,
+                breakpoint.layer_operator,
+                breakpoint.transformer_layer,
+            )
+        )
 
     def _breakpoint_source_key(self, path: str | None) -> str:
         """Return a stable DAP source key without letting other files clear this source."""
@@ -1513,10 +1619,535 @@ class LLMDebugAdapter:
         self._load_token(self.token_index)
         self.layer_index = current_layer
         self.neuron_cache.clear()
+        getattr(self, "lens_snapshot_cache", {}).clear()
         return value
 
+    def _remove_ica_component(self, view: str, component: int) -> dict[str, Any]:
+        """Ablate one residual ICA component and replay the current token."""
+        if self.execution is None:
+            raise ValueError("ICA intervention requires a loaded model")
+        if view not in {
+            "ica-residual-pre", "ica-residual-mid", "ica-residual-post"
+        }:
+            raise ValueError("ICA removal is available only for residual vectors")
+        if component < 0:
+            raise ValueError("ICA component must be non-negative")
+        snapshot = self._neuron_lens_snapshot(
+            view=view,
+            include_logit_lens=False,
+            include_j_lens=False,
+            include_r_lens=False,
+        )
+        if snapshot.get("saved"):
+            raise ValueError(
+                "ICA intervention is unavailable because this block has already executed"
+            )
+        layer = str(snapshot["layer"])
+        vector_name = "input" if view == "ica-residual-pre" else "output"
+        before_vector = self._ica_residual_vector(view, layer)
+        stop_details = {
+            "source": self.source_path,
+            "line": (
+                self._internal_source_lines()[self.mlp_step_index]
+                if self.inside_internal and self._internal_source_lines()
+                else self.source_lines[self.layer_index]
+            ),
+            "traceIndex": self.layer_index,
+            "state": self.state.layer.name,
+            "operation": self.state.layer.operation,
+            "insideInternalFunction": self.inside_internal,
+            "internalStepIndex": self.mlp_step_index if self.inside_internal else None,
+        }
+        self.execution.remove_ica_component(
+            self.token_index, layer, vector_name, component
+        )
+        current_layer = self.layer_index
+        self._load_token(self.token_index)
+        self.layer_index = current_layer
+        after_vector = self._ica_residual_vector(view, layer)
+        self.neuron_cache.clear()
+        getattr(self, "lens_snapshot_cache", {}).clear()
+        log_paths = self._write_ica_intervention_log(
+            view=view,
+            layer=layer,
+            vector_name=vector_name,
+            component=component,
+            stop_details=stop_details,
+            before=before_vector,
+            after=after_vector,
+        )
+        self.send_event(
+            "output",
+            {
+                "category": "console",
+                "output": f"llmdbg: ICA intervention log: {log_paths['note']}\n",
+            },
+        )
+        return {
+            "removed": True,
+            "view": view,
+            "component": component,
+            "tokenPosition": self.token_index,
+            "layer": layer,
+            "log": log_paths,
+        }
+
+    def _ica_residual_vector(
+        self, view: str, layer: str
+    ) -> tuple[float, ...]:
+        """Resolve the effective residual at an ICA intervention boundary."""
+        if self.execution is None:
+            raise ValueError("ICA intervention requires a loaded model")
+        state = next(
+            (candidate for candidate in self.trace if candidate.layer.name == layer),
+            None,
+        )
+        if state is None:
+            raise ValueError(f"residual state {layer} is unavailable")
+        if view != "ica-residual-pre":
+            return tuple(float(value) for value in state.output_vector)
+        active = sorted(
+            key
+            for key in self.execution.ica_interventions
+            if key[0] == self.token_index and key[1] == layer and key[2] == "input"
+        )
+        if active:
+            observation = self.execution.ica_observations.get(active[-1])
+            if observation is not None:
+                return observation[1]
+        return tuple(float(value) for value in state.input_vector)
+
+    def _write_ica_intervention_log(
+        self,
+        *,
+        view: str,
+        layer: str,
+        vector_name: str,
+        component: int,
+        stop_details: dict[str, Any],
+        before: tuple[float, ...],
+        after: tuple[float, ...],
+    ) -> dict[str, str]:
+        """Write a reproducible JSON record and readable experiment note."""
+        if self.execution is None:
+            raise ValueError("ICA intervention requires a loaded model")
+        def vector_record(values: tuple[float, ...]) -> dict[str, Any]:
+            encoded = json.dumps(values, separators=(",", ":")).encode("utf-8")
+            return {
+                "dimensions": len(values),
+                "norm": sum(value * value for value in values) ** 0.5,
+                "sha256": hashlib.sha256(encoded).hexdigest(),
+                "values": values,
+            }
+
+        def package_version(name: str) -> str:
+            try:
+                return importlib.metadata.version(name)
+            except importlib.metadata.PackageNotFoundError:
+                return "unknown"
+
+        transformer_layer = self._transformer_layer_index(layer)
+        from llmdbg.ica_lens import top_components
+
+        before_component = top_components(
+            self.model_name, int(transformer_layer), before,
+            is_delta=False, count=0, include_indices=(component,),
+        )[0]
+        after_component = top_components(
+            self.model_name, int(transformer_layer), after,
+            is_delta=False, count=0, include_indices=(component,),
+        )[0]
+        start = next(
+            (index for index, state in enumerate(self.trace) if state.layer.name == layer),
+            0,
+        )
+        downstream = []
+        for state in self.trace[start:]:
+            output = tuple(float(value) for value in state.output_vector)
+            delta_norm = None
+            if len(state.input_vector) == len(state.output_vector):
+                delta_norm = sum(
+                    (float(right) - float(left)) ** 2
+                    for left, right in zip(
+                        state.input_vector, state.output_vector, strict=True
+                    )
+                ) ** 0.5
+            downstream.append(
+                {
+                    "state": state.layer.name,
+                    "operation": state.layer.operation,
+                    "outputNorm": sum(value * value for value in output) ** 0.5,
+                    "deltaNorm": delta_norm,
+                    "outputSha256": hashlib.sha256(
+                        json.dumps(output, separators=(",", ":")).encode("utf-8")
+                    ).hexdigest(),
+                }
+            )
+        record = {
+            "schema": "llmdbg.ica-intervention.v1",
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+            "model": {
+                "id": self.model_name,
+                "revision": self.model_revision,
+                "requestedDevice": self.requested_device,
+                "actualDevice": self.execution.device,
+                "requestedDtype": self.requested_dtype,
+                "actualDtype": self.execution.dtype,
+            },
+            "environment": {
+                "python": platform.python_version(),
+                "torch": package_version("torch"),
+                "transformers": package_version("transformers"),
+                "llmdbg": package_version("llmdbg"),
+            },
+            "debugProgram": {
+                "path": self.source_path,
+                "source": (
+                    Path(self.source_path).read_text(encoding="utf-8")
+                    if self.source_path and Path(self.source_path).is_file()
+                    else self.source_content
+                ),
+            },
+            "prompt": self.prompt,
+            "tokens": list(self.tokens),
+            "stop": stop_details,
+            "intervention": {
+                "kind": "remove_ica_component",
+                "tokenPosition": self.token_index,
+                "token": self.tokens[self.token_index],
+                "view": view,
+                "stage": view.removeprefix("ica-residual-"),
+                "state": layer,
+                "transformerLayer": transformer_layer,
+                "basis": "resid_post",
+                "component": component,
+                "scoreBefore": before_component["score"],
+                "scoreAfter": after_component["score"],
+            },
+            "activeInterventions": [
+                {
+                    "tokenPosition": position,
+                    "state": active_layer,
+                    "vector": active_vector,
+                    "component": active_component,
+                    "transformerLayer": self._transformer_layer_index(active_layer),
+                    "basis": "resid_post",
+                }
+                for position, active_layer, active_vector, active_component
+                in sorted(self.execution.ica_interventions)
+            ],
+            "residualBefore": vector_record(before),
+            "residualAfter": vector_record(after),
+            "downstream": downstream,
+            "predictions": [
+                {
+                    "tokenId": prediction.token_id,
+                    "text": prediction.text,
+                    "logit": prediction.logit,
+                    "probability": prediction.probability,
+                }
+                for prediction in self.predictions
+            ],
+            "reproduce": {
+                "model": self.model_name,
+                "revision": self.model_revision,
+                "prompt": self.prompt,
+                "tokenPosition": self.token_index,
+                "layer": transformer_layer,
+                "stage": view.removeprefix("ica-residual-"),
+                "icaBasis": "resid_post",
+                "component": component,
+                "activeInterventions": [
+                    {
+                        "tokenPosition": position,
+                        "state": active_layer,
+                        "vector": active_vector,
+                        "component": active_component,
+                    }
+                    for position, active_layer, active_vector, active_component
+                    in sorted(self.execution.ica_interventions)
+                ],
+            },
+        }
+        project = Path(self.source_path).parent if self.source_path else Path.cwd()
+        log_dir = project / ".logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        stem = f"{timestamp}-ica-remove-t{self.token_index}-l{transformer_layer}-c{component}"
+        json_path = log_dir / f"{stem}.json"
+        note_path = log_dir / f"{stem}.md"
+        json_path.write_text(json.dumps(record, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        predictions = ", ".join(
+            f"{item['text']!r} ({item['logit']:+.4f})"
+            for item in record["predictions"][:10]
+        ) or "not available"
+        note_path.write_text(
+            "\n".join(
+                [
+                    "# llmdbg ICA intervention",
+                    "",
+                    f"- Time: `{record['createdAt']}`",
+                    f"- Model: `{self.model_name}` at `{self.model_revision}`",
+                    f"- Prompt: `{self.prompt}`",
+                    f"- Stop: token {self.token_index} {self.tokens[self.token_index]!r}, `{stop_details['state']}`, source line {stop_details['line']}",
+                    f"- Intervention: remove `L{transformer_layer}:C{component}` from Residual {view.removeprefix('ica-residual-').title()} using the resid-post ICA basis",
+                    f"- ICA score: {before_component['score']:+.8f} → {after_component['score']:+.8f}",
+                    f"- Residual norm: {record['residualBefore']['norm']:.8f} → {record['residualAfter']['norm']:.8f}",
+                    f"- Residual hashes: `{record['residualBefore']['sha256']}` → `{record['residualAfter']['sha256']}`",
+                    f"- Final predictions: {predictions}",
+                    "",
+                    f"Machine-readable record: `{json_path.name}`",
+                    "The JSON record contains the exact before/after residual vectors and downstream state hashes for standalone reproduction.",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return {"note": str(note_path), "json": str(json_path)}
+
+    def _remove_projected_component(
+        self, view: str, component: int
+    ) -> dict[str, Any]:
+        """Zero one MLP neuron or attention channel and replay the token."""
+        if self.execution is None:
+            raise ValueError("component intervention requires a loaded model")
+        if view not in {"neurons", "attention-neurons"}:
+            raise ValueError("component removal requires a neuron or channel view")
+        if component < 0:
+            raise ValueError("component must be non-negative")
+        snapshot = self._neuron_lens_snapshot(
+            view=view,
+            include_logit_lens=False,
+            include_j_lens=False,
+            include_r_lens=False,
+        )
+        if snapshot.get("saved"):
+            raise ValueError(
+                "component intervention is unavailable because this block has already executed"
+            )
+        selected = next(
+            (item for item in snapshot["neurons"] if item["index"] == component),
+            None,
+        )
+        if selected is None:
+            raise ValueError(f"component {component} is not available in this Lens")
+        layer = str(snapshot["layer"])
+        function_name = self._function_name_for_path(layer)
+        vector_name = (
+            "mlp_expansion"
+            if view == "neurons"
+            else {
+                "attention": "attention_mixing",
+                "full_attention": "full_attention_mixing",
+                "gated_linear_attention": "gated_delta_mixing",
+            }[function_name]
+        )
+        before_state = next(state for state in self.trace if state.layer.name == layer)
+        before_output = tuple(float(value) for value in before_state.output_vector)
+        before_predictions = tuple(self.predictions)
+        before_activation = float(before_state.details[vector_name][component])
+        stop_details = {
+            "source": self.source_path,
+            "line": (
+                self._internal_source_lines()[self.mlp_step_index]
+                if self.inside_internal and self._internal_source_lines()
+                else self.source_lines[self.layer_index]
+            ),
+            "traceIndex": self.layer_index,
+            "state": self.state.layer.name,
+            "operation": self.state.layer.operation,
+        }
+        self.execution.set_intervention(
+            self.token_index, layer, vector_name, component, 0.0
+        )
+        current_layer = self.layer_index
+        self._load_token(self.token_index)
+        self.layer_index = current_layer
+        after_state = next(state for state in self.trace if state.layer.name == layer)
+        after_output = tuple(float(value) for value in after_state.output_vector)
+        after_activation = float(after_state.details[vector_name][component])
+        self.neuron_cache.clear()
+        getattr(self, "lens_snapshot_cache", {}).clear()
+        log_paths = self._write_projected_component_log(
+            view=view,
+            layer=layer,
+            vector_name=vector_name,
+            component=component,
+            before_activation=before_activation,
+            after_activation=after_activation,
+            before_output=before_output,
+            after_output=after_output,
+            before_predictions=before_predictions,
+            stop_details=stop_details,
+        )
+        self.send_event(
+            "output",
+            {
+                "category": "console",
+                "output": f"llmdbg: component intervention log: {log_paths['note']}\n",
+            },
+        )
+        return {
+            "removed": True,
+            "view": view,
+            "component": component,
+            "tokenPosition": self.token_index,
+            "layer": layer,
+            "log": log_paths,
+        }
+
+    def _write_projected_component_log(
+        self,
+        *,
+        view: str,
+        layer: str,
+        vector_name: str,
+        component: int,
+        before_activation: float,
+        after_activation: float,
+        before_output: tuple[float, ...],
+        after_output: tuple[float, ...],
+        before_predictions: tuple[Any, ...],
+        stop_details: dict[str, Any],
+    ) -> dict[str, str]:
+        """Record a neuron/channel ablation and its downstream result."""
+        if self.execution is None:
+            raise ValueError("component intervention requires a loaded model")
+
+        def digest(values: tuple[float, ...]) -> str:
+            return hashlib.sha256(
+                json.dumps(values, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+
+        def predictions(items: tuple[Any, ...]) -> list[dict[str, Any]]:
+            return [
+                {
+                    "tokenId": item.token_id,
+                    "text": item.text,
+                    "logit": item.logit,
+                    "probability": item.probability,
+                }
+                for item in items
+            ]
+
+        transformer_layer = self._transformer_layer_index(layer)
+        kind = "attention_channel" if view == "attention-neurons" else "mlp_neuron"
+        operation = "channel-remove" if view == "attention-neurons" else "neuron-remove"
+        start = next(
+            (index for index, state in enumerate(self.trace) if state.layer.name == layer),
+            0,
+        )
+        downstream = [
+            {
+                "state": state.layer.name,
+                "operation": state.layer.operation,
+                "outputNorm": sum(float(value) ** 2 for value in state.output_vector) ** 0.5,
+                "outputSha256": digest(tuple(float(value) for value in state.output_vector)),
+            }
+            for state in self.trace[start:]
+        ]
+        record = {
+            "schema": "llmdbg.projected-component-intervention.v1",
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+            "model": {
+                "id": self.model_name,
+                "revision": self.model_revision,
+                "requestedDevice": self.requested_device,
+                "actualDevice": self.execution.device,
+                "requestedDtype": self.requested_dtype,
+                "actualDtype": self.execution.dtype,
+            },
+            "prompt": self.prompt,
+            "tokens": list(self.tokens),
+            "stop": stop_details,
+            "intervention": {
+                "kind": f"remove_{kind}",
+                "tokenPosition": self.token_index,
+                "token": self.tokens[self.token_index],
+                "state": layer,
+                "transformerLayer": transformer_layer,
+                "activationVector": vector_name,
+                "component": component,
+                "activationBefore": before_activation,
+                "activationAfter": after_activation,
+            },
+            "activeInterventions": [
+                {
+                    "tokenPosition": position,
+                    "state": active_layer,
+                    "vector": active_vector,
+                    "component": active_component,
+                    "value": value,
+                }
+                for (position, active_layer, active_vector, active_component), value
+                in sorted(self.execution.interventions.items())
+            ],
+            "moduleOutputBefore": {
+                "norm": sum(value * value for value in before_output) ** 0.5,
+                "sha256": digest(before_output),
+                "values": before_output,
+            },
+            "moduleOutputAfter": {
+                "norm": sum(value * value for value in after_output) ** 0.5,
+                "sha256": digest(after_output),
+                "values": after_output,
+            },
+            "baselinePredictions": predictions(before_predictions),
+            "intervenedPredictions": predictions(tuple(self.predictions)),
+            "downstream": downstream,
+            "reproduce": {
+                "model": self.model_name,
+                "revision": self.model_revision,
+                "prompt": self.prompt,
+                "tokenPosition": self.token_index,
+                "layer": transformer_layer,
+                "activationVector": vector_name,
+                "component": component,
+                "replacement": 0.0,
+            },
+        }
+        project = Path(self.source_path).parent if self.source_path else Path.cwd()
+        log_dir = project / ".logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        stem = f"{timestamp}-{operation}-t{self.token_index}-l{transformer_layer}-c{component}"
+        json_path = log_dir / f"{stem}.json"
+        note_path = log_dir / f"{stem}.md"
+        json_path.write_text(
+            json.dumps(record, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        baseline = predictions(before_predictions)
+        intervened = predictions(tuple(self.predictions))
+        note_path.write_text(
+            "\n".join(
+                [
+                    f"# llmdbg {kind.replace('_', ' ')} intervention",
+                    "",
+                    f"- Time: `{record['createdAt']}`",
+                    f"- Model: `{self.model_name}` at `{self.model_revision}`",
+                    f"- Prompt: `{self.prompt}`",
+                    f"- Stop: token {self.token_index} {self.tokens[self.token_index]!r}, `{stop_details['state']}`, source line {stop_details['line']}",
+                    f"- Intervention: set `{vector_name}[{component}]` to zero at layer {transformer_layer}",
+                    f"- Activation: {before_activation:+.8f} → {after_activation:+.8f}",
+                    f"- Module output norm: {record['moduleOutputBefore']['norm']:.8f} → {record['moduleOutputAfter']['norm']:.8f}",
+                    f"- Baseline top prediction: {baseline[0]['text']!r} ({baseline[0]['probability']:.2%})" if baseline else "- Baseline top prediction: unavailable",
+                    f"- Intervened top prediction: {intervened[0]['text']!r} ({intervened[0]['probability']:.2%})" if intervened else "- Intervened top prediction: unavailable",
+                    "",
+                    f"Machine-readable record: `{json_path.name}`",
+                    "The JSON record contains exact module output vectors, baseline/intervened predictions, active interventions, and downstream hashes.",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return {"note": str(note_path), "json": str(json_path)}
+
     def _top_neurons(
-        self, include_j_lens: bool = False, include_r_lens: bool = False
+        self,
+        include_logit_lens: bool = True,
+        include_j_lens: bool = False,
+        include_r_lens: bool = False,
     ) -> tuple[NeuronProjection, ...]:
         """Return cached direct vocabulary projections for the current MLP state."""
         inside_mlp = (
@@ -1540,18 +2171,32 @@ class LLMDebugAdapter:
         ):
             return ()
         layer_name = result_state.layer.name
-        key = (self.token_index, layer_name, include_j_lens, include_r_lens)
+        removed_indices = self._removed_projected_components(
+            layer_name, "mlp_expansion"
+        )
+        key = (
+            self.token_index, layer_name,
+            include_logit_lens, include_j_lens, include_r_lens,
+            removed_indices,
+        )
         if key not in self.neuron_cache:
             self.neuron_cache[key] = self.execution.top_mlp_neurons(
                 layer_name,
                 result_state.details["mlp_expansion"],
+                output=result_state.details.get("mlp_projection"),
+                residual=result_state.input_vector,
+                include_logit_lens=include_logit_lens,
                 include_j_lens=include_j_lens,
                 include_r_lens=include_r_lens,
+                include_indices=removed_indices,
             )
         return self.neuron_cache[key]
 
     def _top_attention_channels(
-        self, include_j_lens: bool = False, include_r_lens: bool = False
+        self,
+        include_logit_lens: bool = True,
+        include_j_lens: bool = False,
+        include_r_lens: bool = False,
     ) -> tuple[NeuronProjection, ...]:
         """Return the strongest mixed-attention channels and their W_O directions."""
         function_names = {"attention", "full_attention", "gated_linear_attention"}
@@ -1580,17 +2225,43 @@ class LLMDebugAdapter:
         if not mixing_complete or activation is None:
             return ()
         layer_name = result_state.layer.name
+        removed_indices = self._removed_projected_components(
+            layer_name, vector_name
+        )
         key = (
             self.token_index, "attention:" + layer_name,
-            include_j_lens, include_r_lens,
+            include_logit_lens, include_j_lens, include_r_lens,
+            removed_indices,
         )
         if key not in self.neuron_cache:
             self.neuron_cache[key] = self.execution.top_attention_channels(
                 layer_name, activation,
+                output=result_state.details.get("attention_projection"),
+                residual=result_state.input_vector,
+                include_logit_lens=include_logit_lens,
                 include_j_lens=include_j_lens,
                 include_r_lens=include_r_lens,
+                include_indices=removed_indices,
             )
         return self.neuron_cache[key]
+
+    def _removed_projected_components(
+        self, layer_name: str, vector_name: str
+    ) -> tuple[int, ...]:
+        if self.execution is None:
+            return ()
+        interventions = getattr(self.execution, "interventions", {})
+        return tuple(
+            sorted(
+                index
+                for (position, layer, vector, index), value
+                in interventions.items()
+                if position == self.token_index
+                and layer == layer_name
+                and vector == vector_name
+                and value == 0.0
+            )
+        )
 
     def _prior_operation_state(self, *function_names: str) -> LayerState | None:
         """Return the latest completed matching operation before the current line."""
@@ -1949,10 +2620,20 @@ class LLMDebugAdapter:
     def _neuron_lens_snapshot(
         self,
         view: str = "neurons",
+        include_logit_lens: bool = True,
         include_j_lens: bool = False,
         include_r_lens: bool = False,
     ) -> dict[str, Any]:
         """Describe top MLP neurons through direct and residual-transport lenses."""
+        requested_view = view
+        is_ica = view.startswith("ica-")
+        if is_ica:
+            view = view.removeprefix("ica-")
+            if view not in {
+                "residual-pre", "attention-output", "residual-mid",
+                "mlp-output", "residual-post",
+            }:
+                raise ValueError(f"unknown ICA lens view: {requested_view}")
         if view not in {
             "neurons", "attention-neurons", "attention-output",
             "mlp-output", "residual-pre", "residual-mid", "residual-post",
@@ -2037,6 +2718,7 @@ class LLMDebugAdapter:
             }
 
         residual_geometry_data = None
+        component_geometry_data = None
 
         if view == "neurons" and not inside_mlp:
             result_state = prior_operation("mlp")
@@ -2087,6 +2769,8 @@ class LLMDebugAdapter:
                     )
                 layer = result_state.layer.name
                 vector = result_state.input_vector
+                if is_ica:
+                    vector = self._ica_residual_vector(requested_view, layer)
                 label = "Residual Lens · Pre"
             elif view == "residual-mid":
                 inside_attention = (
@@ -2164,6 +2848,16 @@ class LLMDebugAdapter:
                 result_state = attention_state
                 layer = attention_state.layer.name
                 label = "Attention output"
+                function_name = self._function_name_for_path(layer)
+                activation_name = {
+                    "attention": "attention_mixing",
+                    "full_attention": "full_attention_mixing",
+                    "gated_linear_attention": "gated_delta_mixing",
+                }[function_name]
+                activation = attention_state.details.get(activation_name)
+                geometry = getattr(self.execution, "component_fan_geometry", None)
+                if activation is not None and callable(geometry):
+                    component_geometry_data = geometry(layer, activation, vector)
             else:
                 if not inside_mlp:
                     result_state = prior_operation("mlp")
@@ -2178,13 +2872,10 @@ class LLMDebugAdapter:
                 label = "MLP output"
                 if not projection_complete or vector is None:
                     raise ValueError("MLP Output Lens is available after down projection completes")
-            projection = self.execution.vector_lens(
-                layer,
-                vector,
-                include_j_lens=include_j_lens,
-                include_r_lens=include_r_lens,
-            )
-
+                activation = result_state.details.get("mlp_expansion")
+                geometry = getattr(self.execution, "component_fan_geometry", None)
+                if activation is not None and callable(geometry):
+                    component_geometry_data = geometry(layer, activation, vector)
             def tokens(items: Any) -> list[dict[str, Any]]:
                 return [
                     {
@@ -2194,8 +2885,69 @@ class LLMDebugAdapter:
                     for rank, token in enumerate(items, start=1)
                 ]
 
+            if is_ica:
+                intervention_vector = (
+                    "input" if view == "residual-pre" else "output"
+                )
+                removed_indices = tuple(
+                    component
+                    for position, intervention_layer, vector_name, component
+                    in self.execution.ica_interventions
+                    if position == self.token_index
+                    and intervention_layer == layer
+                    and vector_name == intervention_vector
+                ) if view.startswith("residual-") else ()
+                components = self.execution.ica_components(
+                    layer,
+                    vector,
+                    is_delta=view in {"attention-output", "mlp-output"},
+                    include_logit_lens=include_logit_lens,
+                    include_j_lens=include_j_lens,
+                    include_r_lens=include_r_lens,
+                    include_indices=removed_indices,
+                )
+                if not components:
+                    raise ValueError(
+                        f"ICA Lens is not available for {self.model_name}"
+                    )
+                return {
+                    "view": requested_view,
+                    "tokenPosition": self.token_index,
+                    "token": self.tokens[self.token_index],
+                    "layer": layer,
+                    "transformerLayer": self._transformer_layer_index(layer),
+                    "saved": self._lens_result_is_saved(view, layer),
+                    "vectorLabel": f"ICA {label}",
+                    "vectorNorm": sum(float(value) ** 2 for value in vector) ** 0.5,
+                    "jLensResolved": include_j_lens,
+                    "rLensResolved": include_r_lens,
+                    "icaBasis": "resid_post",
+                    "icaComponents": [
+                        {
+                            "rank": component.rank,
+                            "index": component.index,
+                            "score": component.score,
+                            "energy": component.energy,
+                            "removed": component.index in removed_indices,
+                            "componentNorm": component.projection.norm,
+                            "logitTokens": tokens(component.projection.vocabulary),
+                            "jLensTokens": tokens(component.projection.j_lens),
+                            "rLensTokens": tokens(component.projection.r_lens),
+                        }
+                        for component in components
+                    ],
+                }
+
+            projection = self.execution.vector_lens(
+                layer,
+                vector,
+                include_logit_lens=include_logit_lens,
+                include_j_lens=include_j_lens,
+                include_r_lens=include_r_lens,
+            )
+
             return {
-                "view": view,
+                "view": requested_view,
                 "tokenPosition": self.token_index,
                 "token": self.tokens[self.token_index],
                 "layer": layer,
@@ -2204,6 +2956,7 @@ class LLMDebugAdapter:
                 "vectorLabel": label,
                 "vectorNorm": projection.norm,
                 "residualGeometry": residual_geometry_data,
+                "componentGeometry": component_geometry_data,
                 "jLensResolved": include_j_lens,
                 "rLensResolved": include_r_lens,
                 "logitTokens": tokens(projection.vocabulary),
@@ -2212,6 +2965,7 @@ class LLMDebugAdapter:
             }
         if view == "attention-neurons":
             neurons = self._top_attention_channels(
+                include_logit_lens=include_logit_lens,
                 include_j_lens=include_j_lens, include_r_lens=include_r_lens
             )
             if not neurons:
@@ -2223,6 +2977,7 @@ class LLMDebugAdapter:
             )
         else:
             neurons = self._top_neurons(
+                include_logit_lens=include_logit_lens,
                 include_j_lens=include_j_lens, include_r_lens=include_r_lens
             )
             scale_record = mlp_activation_scale(getattr(self, "model_name", ""), layer)
@@ -2248,7 +3003,31 @@ class LLMDebugAdapter:
                     "rank": rank,
                     "index": neuron.index,
                     "activation": neuron.activation,
+                    "removed": neuron.index in self._removed_projected_components(
+                        layer,
+                        (
+                            {
+                                "attention": "attention_mixing",
+                                "full_attention": "full_attention_mixing",
+                                "gated_linear_attention": "gated_delta_mixing",
+                            }[self._function_name_for_path(layer)]
+                            if view == "attention-neurons"
+                            else "mlp_expansion"
+                        ),
+                    ),
                     "contributionMagnitude": abs(neuron.activation) * neuron.direction_norm,
+                    "outputProjection": neuron.output_projection,
+                    "componentGeometry": {
+                        "inputNorm": neuron.residual_norm,
+                        "deltaNorm": abs(neuron.activation) * neuron.direction_norm,
+                        "outputNorm": neuron.potential_norm,
+                        "deltaRatio": (
+                            abs(neuron.activation) * neuron.direction_norm
+                            / neuron.residual_norm
+                            if neuron.residual_norm > 0.0 else 0.0
+                        ),
+                        "cosine": neuron.residual_cosine,
+                    },
                     "relativeContribution": (
                         neuron.activation * neuron.direction_norm / scale
                         if scale is not None and scale > 0 else None
