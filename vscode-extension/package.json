@@ -2,8 +2,9 @@
   "name": "llmdbg",
   "displayName": "llmdbg",
   "description": "Step through LLM layers and inspect human-readable internal representations.",
-  "version": "0.0.117",
+  "version": "0.0.118",
   "publisher": "SidaLiu",
+  "icon": "assets/icon.png",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -22,6 +23,7 @@
   ],
   "files": [
     "extension.js",
+    "assets/icon.png",
     "bundled/**",
     "LICENSE",
     "README.md",

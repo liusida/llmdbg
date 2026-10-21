@@ -14,7 +14,10 @@ class ExtensionManifestTest(unittest.TestCase):
         debugger_types = {debugger["type"] for debugger in manifest["contributes"]["debuggers"]}
         self.assertIn("llmdbg", debugger_types)
         self.assertEqual(manifest["main"], "./extension.js")
+        self.assertEqual(manifest["icon"], "assets/icon.png")
+        self.assertTrue((root / "vscode-extension" / manifest["icon"]).is_file())
         self.assertIn("bundled/**", manifest["files"])
+        self.assertIn("assets/icon.png", manifest["files"])
         self.assertIn("stage-adapter", manifest["scripts"])
         self.assertEqual(manifest["contributes"]["languages"][0]["extensions"], [".llmdbg"])
         self.assertEqual(manifest["contributes"]["languages"][1]["extensions"], [".llmdbg.py"])
