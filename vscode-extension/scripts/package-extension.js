@@ -7,7 +7,9 @@ const { spawnSync } = require("child_process");
 const extensionRoot = path.resolve(__dirname, "..");
 const packageJson = require(path.join(extensionRoot, "package.json"));
 const outputDirectory = path.resolve(extensionRoot, "..", "build", "releases", "vsix");
-const output = path.join(outputDirectory, `llmdbg-${packageJson.version}.vsix`);
+const preRelease = process.argv.includes("--pre-release");
+const suffix = preRelease ? "-pre-release" : "";
+const output = path.join(outputDirectory, `llmdbg-${packageJson.version}${suffix}.vsix`);
 const executable = path.join(
   extensionRoot,
   "node_modules",
@@ -16,7 +18,10 @@ const executable = path.join(
 );
 
 fs.mkdirSync(outputDirectory, { recursive: true });
-const result = spawnSync(executable, ["package", "--no-dependencies", "--out", output], {
+const cliArguments = ["package", "--no-dependencies"];
+if (preRelease) cliArguments.push("--pre-release");
+cliArguments.push("--out", output);
+const result = spawnSync(executable, cliArguments, {
   cwd: extensionRoot,
   stdio: "inherit"
 });

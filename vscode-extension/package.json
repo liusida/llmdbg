@@ -214,7 +214,8 @@
   },
   "scripts": {
     "stage-adapter": "node ./scripts/stage-adapter.js",
-    "package": "npm run stage-adapter && node ./scripts/package-extension.js"
+    "package": "npm run stage-adapter && node ./scripts/package-extension.js",
+    "package:pre-release": "npm run stage-adapter && node ./scripts/package-extension.js --pre-release"
   },
   "devDependencies": {
     "@vscode/vsce": "^4.0.0"

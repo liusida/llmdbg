@@ -22,8 +22,11 @@ Build and install the extension:
 cd vscode-extension
 npm install
 npm run package
-code --install-extension llmdbg-0.0.1.vsix
+code --install-extension ../build/releases/vsix/llmdbg-0.0.117.vsix
 ```
+
+Marketplace publishing and pre-release instructions are in
+[`PUBLISHING.md`](PUBLISHING.md).
 
 The recommended format is now a real Python program named `gpt2.llmdbg.py`:
 

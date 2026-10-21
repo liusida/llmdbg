@@ -1,0 +1,50 @@
+name: Publish VS Code extension
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Marketplace channel
+        required: true
+        default: pre-release
+        type: choice
+        options:
+          - pre-release
+          - release
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: vscode-extension/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test Python adapter
+        run: PYTHONPATH=src python -m unittest discover -s tests -q
+      - name: Install extension tooling
+        working-directory: vscode-extension
+        run: npm ci
+      - name: Validate extension JavaScript
+        working-directory: vscode-extension
+        run: node --check extension.js
+      - name: Stage bundled adapter
+        working-directory: vscode-extension
+        run: npm run stage-adapter
+      - name: Publish pre-release
+        if: inputs.channel == 'pre-release'
+        working-directory: vscode-extension
+        run: npx vsce publish --oidc --pre-release --no-dependencies
+      - name: Publish release
+        if: inputs.channel == 'release'
+        working-directory: vscode-extension
+        run: npx vsce publish --oidc --no-dependencies
