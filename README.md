@@ -28,6 +28,34 @@ code --install-extension ../build/releases/vsix/llmdbg-0.0.117.vsix
 Marketplace publishing and pre-release instructions are in
 [`PUBLISHING.md`](PUBLISHING.md).
 
+## Fitting J++ lenses
+
+[`scripts/fit_jpp_lenses.py`](scripts/fit_jpp_lenses.py) is the reproducible,
+resumable fitting driver for GPT-2 and all supported Qwen3.5 sizes. It pins the
+reference J++ implementation, loads models through `gb10-load-llm`, fits every
+residual source layer, and evaluates on a held-out readout split. The Qwen3.5-9B
+recipe additionally compares the local refit with the published lens on the
+same readouts and writes exact paired significance statistics.
+
+```console
+uv pip install datasets pandas pyarrow scikit-learn tqdm
+uv pip install --no-deps \
+  "jpp-lens @ git+https://github.com/safety-research/jpp_lens@d7efc0de372e20589e899188c0cfe8434acc63ec"
+
+# Inspect the commands first, then run one model or the whole suite.
+uv run python scripts/fit_jpp_lenses.py --model all --num-shards 4 --dry-run \
+  --bootstrap-reference
+uv run python scripts/fit_jpp_lenses.py --model qwen9b --num-shards 4 \
+  --bootstrap-reference
+```
+
+Outputs live under `build/jpp_lens/<model>/`. For 9B,
+`official_comparison_pass_at_k.csv` contains the reference recall table and
+`official_comparison_paired.csv` contains local-vs-official recall differences
+and exact McNemar p-values. GPT-2 uses llmdbg's value-preserving LayerNorm/GELU
+RelP rules because upstream J++ does not currently provide GPT-2 rules; this is
+recorded explicitly in each fit manifest.
+
 The recommended format is now a real Python program named `gpt2.llmdbg.py`:
 
 For a new workspace, run **llmdbg: Create Starter Files** from the VS Code
@@ -216,12 +244,19 @@ percentile ribbons, and the packaged median scale as a marked guide line. Run
 `scripts/measure_attention_channel_activation_scales.py` with `--plot-output`
 to reproduce them from the calibration prompt.
 The toolbar's **Lens** view has a selector for **Logit Lens**, **J-Lens**,
-**R-Lens**, or **All lenses**. Logit Lens projects the neuron's down-projection
-direction directly through the unembedding. J-Lens first transports it through
-an averaged ordinary Jacobian. R-Lens uses the same transport construction
-with value-preserving RelP backward rules. Both transported views then apply
-the final norm and unembedding. A missing artifact is reported explicitly;
-the debugger never silently substitutes the direct projection.
+**R-Lens**, **J++ Lens**, or **All lenses**. Logit Lens projects the neuron's
+down-projection direction directly through the unembedding. J-Lens first
+transports it through an averaged ordinary Jacobian. R-Lens uses the same
+transport construction with value-preserving RelP backward rules. Both
+transported views then apply the final norm and unembedding. A missing artifact
+is reported explicitly; the debugger never silently substitutes the direct
+projection.
+J++ Lens is available for Qwen3.5 9B. It uses the authors' pinned official
+artifact, combines filtered expert LRP Jacobians into one transport map per
+layer, and excludes tokens without letters or digits from its ranking. The
+2.1 GB artifact is downloaded lazily from
+[`koayon/jpp-lenses`](https://huggingface.co/koayon/jpp-lenses) and cached by
+Hugging Face.
 
 Its block selector supports multiple checked sections. GPT-2 Small and
 Qwen3.5 2B/9B additionally expose ICA decompositions of residual Pre/Mid/Post
@@ -241,10 +276,13 @@ These implementations follow the methods introduced in:
   Layers](https://www.lesswrong.com/posts/nv8oedrnLXKRzNEL9/r-lens-making-j-lens-more-faithful-on-early-layers):
   retain the J-Lens construction while replacing ordinary backward behavior
   with the LN, identity, and half RelP rules for dense gated models.
+- [J++ Lens: Jacobian Filtering Enables More Faithful Workspace
+  Lenses](https://www.lesswrong.com/posts/nc9dHfcB22JdMzGbr/j-lens-jacobian-filtering-enables-more-faithful-workspace):
+  cluster source activations, fit expert R-Lens Jacobians, and learn a signed
+  combination that filters noisy experts before producing the fixed map.
 
-The current Neuron Lens UI applies these maps to individual MLP output
-directions. (The maps themselves also support residual-stream activations, but
-that readout is not yet exposed in this UI.) It displays the resulting
+The current Lens UI applies these maps to residual streams, module updates,
+attention channels, MLP neurons, and ICA components. It displays the resulting
 pre-softmax logits; their vocabulary ranking is the same as after softmax. The
 catalog currently covers Qwen3.5 0.8B, 2B, 9B, and 27B. The 9B and 27B entries
 use checkpoint-matched J-Lens and R-Lens maps from the R-Lens authors' pinned

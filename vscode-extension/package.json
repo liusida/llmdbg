@@ -2,7 +2,7 @@
   "name": "llmdbg",
   "displayName": "llmdbg",
   "description": "Step through LLM layers and inspect human-readable internal representations.",
-  "version": "0.0.147",
+  "version": "0.0.172",
   "publisher": "SidaLiu",
   "icon": "assets/icon.png",
   "license": "MIT",
@@ -241,6 +241,24 @@
           "type": "string",
           "default": "",
           "description": "Development-only source directory containing the llmdbg Python package. Published use defaults to the bundled adapter."
+        },
+        "llmdbg.jppLensPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional local J++ Lens .pt artifact. The artifact's embedded model ID must match the debugged model."
+        },
+        "llmdbg.lensTheme": {
+          "type": "string",
+          "enum": [
+            "dark",
+            "light"
+          ],
+          "enumDescriptions": [
+            "Show the Lens interface in the dark theme.",
+            "Show the Lens interface in the light theme."
+          ],
+          "default": "dark",
+          "description": "Theme for the Lens interface. Saved reports initially preserve this theme and include their own theme switch."
         },
         "llmdbg.autoReloadAfterUpdate": {
           "type": "boolean",

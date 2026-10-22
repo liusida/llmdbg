@@ -285,6 +285,48 @@ class ModelRuntimeCacheTest(unittest.TestCase):
         self.assertEqual(norm.calls, 1)
         self.assertTrue(all(len(item.vocabulary) == 1 for item in projected))
 
+    def test_jpp_lens_transports_and_filters_nonsemantic_tokens(self) -> None:
+        import torch
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        class Tokenizer:
+            values = ("!", " word", "42")
+
+            def __len__(self):
+                return len(self.values)
+
+            def decode(self, ids):
+                return self.values[ids[0]]
+
+        model = SimpleNamespace(
+            config=SimpleNamespace(model_type="gpt2", _name_or_path="Qwen/Qwen3.5-9B"),
+            transformer=SimpleNamespace(h=[object()], ln_f=torch.nn.Identity()),
+            get_output_embeddings=lambda: SimpleNamespace(
+                weight=torch.tensor([[10.0, 0.0], [2.0, 0.0], [1.0, 0.0]])
+            ),
+        )
+        execution = model_runtime.ModelExecution(
+            runtime=model_runtime.ModelRuntime(model=model, tokenizer=Tokenizer()),
+            input_ids=None,
+            tokens=("x",),
+            device="cpu",
+            progress=lambda _message: None,
+        )
+        with patch(
+            "llmdbg.jpp_lens.source_map",
+            return_value=(torch.eye(2), {"method": "jpp"}),
+        ):
+            projection = execution.vector_lens(
+                "transformer.h.0.mlp",
+                (1.0, 0.0),
+                token_count=2,
+                include_logit_lens=False,
+                include_jpp_lens=True,
+            )
+
+        self.assertEqual([item.text for item in projection.jpp_lens], [" word", "42"])
+
     def test_qwen_runtime_exposes_hybrid_layer_names(self) -> None:
         from types import SimpleNamespace
 

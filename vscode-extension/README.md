@@ -62,6 +62,7 @@ records the model, prompt, location, change, and result.
 | Qwen3.5 27B | ✓ | — |
 
 J-Lens and R-Lens are available when an artifact exists for the selected model.
+The official J++ Lens is available for Qwen3.5 9B.
 Lens files are downloaded on first use and cached locally.
 
 ## Methods
@@ -70,6 +71,8 @@ Lens files are downloaded on first use and cached locally.
   introduces J-Lens.
 - [R-Lens: Making J-Lens More Faithful on Early Layers](https://www.lesswrong.com/posts/nv8oedrnLXKRzNEL9/r-lens-making-j-lens-more-faithful-on-early-layers)
   introduces R-Lens.
+- [J++ Lens: Jacobian Filtering Enables More Faithful Workspace Lenses](https://www.lesswrong.com/posts/nc9dHfcB22JdMzGbr/j-lens-jacobian-filtering-enables-more-faithful-workspace)
+  introduces J++ Lens.
 - [ICA Lens](https://arxiv.org/abs/2606.11722) introduces ICA Lens.
 
 ICA bases:

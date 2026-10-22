@@ -158,6 +158,7 @@ class LLMDebugAdapter:
         self.breakpoints_by_source: dict[str, tuple[SourceBreakpoint, ...]] = {}
         self.neuron_cache: dict[tuple[Any, ...], tuple[NeuronProjection, ...]] = {}
         self.lens_snapshot_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
+        self.measurement_vectors: dict[str, tuple[str, tuple[float, ...]]] = {}
         self.inside_mlp = False
         self.mlp_step_index = 0
         self.mlp_source_content = ""
@@ -299,6 +300,7 @@ class LLMDebugAdapter:
 
     def stop(self, reason: str) -> None:
         getattr(self, "lens_snapshot_cache", {}).clear()
+        getattr(self, "measurement_vectors", {}).clear()
         self.send_event(
             "stopped",
             {
@@ -574,16 +576,30 @@ class LLMDebugAdapter:
                     include_logit_lens=mode in {"logit", "all"},
                     include_j_lens=mode in {"j-lens", "all"},
                     include_r_lens=mode in {"r-lens", "all"},
+                    include_jpp_lens=mode in {"jpp-lens", "all"},
                 )
                 self.lens_snapshot_cache[cache_key] = snapshot
             self.send_response(request, snapshot)
+        elif command == "llmdbg/measureCosine":
+            self.send_response(
+                request,
+                self._measure_cosine(
+                    str(arguments.get("vectorA", "")),
+                    str(arguments.get("vectorB", "")),
+                ),
+            )
         elif command == "llmdbg/icaSupport":
             from llmdbg.ica_lens import artifact_repository
+            from llmdbg.jpp_lens import configured_display_name
 
             repository = artifact_repository(str(self.model_name))
             self.send_response(
                 request,
-                {"supported": repository is not None, "repository": repository},
+                {
+                    "supported": repository is not None,
+                    "repository": repository,
+                    "jppLabel": configured_display_name(str(self.model_name)),
+                },
             )
         elif command == "llmdbg/removeIcaComponent":
             self.send_event(
@@ -1620,6 +1636,7 @@ class LLMDebugAdapter:
         self.layer_index = current_layer
         self.neuron_cache.clear()
         getattr(self, "lens_snapshot_cache", {}).clear()
+        getattr(self, "measurement_vectors", {}).clear()
         return value
 
     def _remove_ica_component(self, view: str, component: int) -> dict[str, Any]:
@@ -1667,6 +1684,7 @@ class LLMDebugAdapter:
         after_vector = self._ica_residual_vector(view, layer)
         self.neuron_cache.clear()
         getattr(self, "lens_snapshot_cache", {}).clear()
+        getattr(self, "measurement_vectors", {}).clear()
         log_paths = self._write_ica_intervention_log(
             view=view,
             layer=layer,
@@ -1968,6 +1986,7 @@ class LLMDebugAdapter:
         after_activation = float(after_state.details[vector_name][component])
         self.neuron_cache.clear()
         getattr(self, "lens_snapshot_cache", {}).clear()
+        getattr(self, "measurement_vectors", {}).clear()
         log_paths = self._write_projected_component_log(
             view=view,
             layer=layer,
@@ -2148,6 +2167,7 @@ class LLMDebugAdapter:
         include_logit_lens: bool = True,
         include_j_lens: bool = False,
         include_r_lens: bool = False,
+        include_jpp_lens: bool = False,
     ) -> tuple[NeuronProjection, ...]:
         """Return cached direct vocabulary projections for the current MLP state."""
         inside_mlp = (
@@ -2176,7 +2196,7 @@ class LLMDebugAdapter:
         )
         key = (
             self.token_index, layer_name,
-            include_logit_lens, include_j_lens, include_r_lens,
+            include_logit_lens, include_j_lens, include_r_lens, include_jpp_lens,
             removed_indices,
         )
         if key not in self.neuron_cache:
@@ -2188,6 +2208,7 @@ class LLMDebugAdapter:
                 include_logit_lens=include_logit_lens,
                 include_j_lens=include_j_lens,
                 include_r_lens=include_r_lens,
+                include_jpp_lens=include_jpp_lens,
                 include_indices=removed_indices,
             )
         return self.neuron_cache[key]
@@ -2197,6 +2218,7 @@ class LLMDebugAdapter:
         include_logit_lens: bool = True,
         include_j_lens: bool = False,
         include_r_lens: bool = False,
+        include_jpp_lens: bool = False,
     ) -> tuple[NeuronProjection, ...]:
         """Return the strongest mixed-attention channels and their W_O directions."""
         function_names = {"attention", "full_attention", "gated_linear_attention"}
@@ -2230,7 +2252,7 @@ class LLMDebugAdapter:
         )
         key = (
             self.token_index, "attention:" + layer_name,
-            include_logit_lens, include_j_lens, include_r_lens,
+            include_logit_lens, include_j_lens, include_r_lens, include_jpp_lens,
             removed_indices,
         )
         if key not in self.neuron_cache:
@@ -2241,6 +2263,7 @@ class LLMDebugAdapter:
                 include_logit_lens=include_logit_lens,
                 include_j_lens=include_j_lens,
                 include_r_lens=include_r_lens,
+                include_jpp_lens=include_jpp_lens,
                 include_indices=removed_indices,
             )
         return self.neuron_cache[key]
@@ -2617,14 +2640,62 @@ class LLMDebugAdapter:
             ),
         }
 
+    def _register_measurement_vector(
+        self, label: str, vector: tuple[float, ...]
+    ) -> str:
+        """Retain a full-width vector behind a compact webview-safe identifier."""
+        vectors = getattr(self, "measurement_vectors", None)
+        if vectors is None:
+            vectors = self.measurement_vectors = {}
+        vector_id = f"t{self.token_index}-s{self.layer_index}-v{len(vectors)}"
+        vectors[vector_id] = (
+            label,
+            tuple(float(value) for value in vector),
+        )
+        return vector_id
+
+    def _measure_cosine(self, vector_a: str, vector_b: str) -> dict[str, Any]:
+        """Measure the exact cosine and angle between two retained Lens vectors."""
+        if vector_a not in self.measurement_vectors or vector_b not in self.measurement_vectors:
+            raise ValueError("one or both selected vectors are no longer available")
+        label_a, a = self.measurement_vectors[vector_a]
+        label_b, b = self.measurement_vectors[vector_b]
+        if len(a) != len(b):
+            raise ValueError("selected vectors have different dimensions")
+        norm_a = sum(value * value for value in a) ** 0.5
+        norm_b = sum(value * value for value in b) ** 0.5
+        if norm_a == 0.0 or norm_b == 0.0:
+            raise ValueError("cosine is undefined for a zero-length vector")
+        cosine = max(
+            -1.0,
+            min(1.0, sum(x * y for x, y in zip(a, b, strict=True)) / (norm_a * norm_b)),
+        )
+        import math
+
+        return {
+            "labelA": label_a,
+            "labelB": label_b,
+            "cosine": cosine,
+            "angleDegrees": math.degrees(math.acos(cosine)),
+            "normA": norm_a,
+            "normB": norm_b,
+            "dimensions": len(a),
+        }
+
     def _neuron_lens_snapshot(
         self,
         view: str = "neurons",
         include_logit_lens: bool = True,
         include_j_lens: bool = False,
         include_r_lens: bool = False,
+        include_jpp_lens: bool = False,
     ) -> dict[str, Any]:
         """Describe top MLP neurons through direct and residual-transport lenses."""
+        jpp_lens_label = "J++ Lens"
+        if include_jpp_lens:
+            from llmdbg.jpp_lens import display_name
+
+            jpp_lens_label = display_name(str(self.model_name))
         requested_view = view
         is_ica = view.startswith("ica-")
         if is_ica:
@@ -2904,6 +2975,7 @@ class LLMDebugAdapter:
                     include_logit_lens=include_logit_lens,
                     include_j_lens=include_j_lens,
                     include_r_lens=include_r_lens,
+                    include_jpp_lens=include_jpp_lens,
                     include_indices=removed_indices,
                 )
                 if not components:
@@ -2921,11 +2993,17 @@ class LLMDebugAdapter:
                     "vectorNorm": sum(float(value) ** 2 for value in vector) ** 0.5,
                     "jLensResolved": include_j_lens,
                     "rLensResolved": include_r_lens,
+                    "jppLensResolved": include_jpp_lens,
+                    "jppLensLabel": jpp_lens_label,
                     "icaBasis": "resid_post",
                     "icaComponents": [
                         {
                             "rank": component.rank,
                             "index": component.index,
+                            "measurementId": self._register_measurement_vector(
+                                f"{label} ICA L{self._transformer_layer_index(layer)}:C{component.index}",
+                                component.vector,
+                            ),
                             "score": component.score,
                             "energy": component.energy,
                             "removed": component.index in removed_indices,
@@ -2933,6 +3011,9 @@ class LLMDebugAdapter:
                             "logitTokens": tokens(component.projection.vocabulary),
                             "jLensTokens": tokens(component.projection.j_lens),
                             "rLensTokens": tokens(component.projection.r_lens),
+                            "jppLensTokens": tokens(
+                                getattr(component.projection, "jpp_lens", ())
+                            ),
                         }
                         for component in components
                     ],
@@ -2944,6 +3025,7 @@ class LLMDebugAdapter:
                 include_logit_lens=include_logit_lens,
                 include_j_lens=include_j_lens,
                 include_r_lens=include_r_lens,
+                include_jpp_lens=include_jpp_lens,
             )
 
             return {
@@ -2955,18 +3037,26 @@ class LLMDebugAdapter:
                 "saved": self._lens_result_is_saved(view, layer),
                 "vectorLabel": label,
                 "vectorNorm": projection.norm,
+                "measurementId": self._register_measurement_vector(
+                    f"{label} [layer {self._transformer_layer_index(layer)}]",
+                    vector,
+                ),
                 "residualGeometry": residual_geometry_data,
                 "componentGeometry": component_geometry_data,
                 "jLensResolved": include_j_lens,
                 "rLensResolved": include_r_lens,
+                "jppLensResolved": include_jpp_lens,
+                "jppLensLabel": jpp_lens_label,
                 "logitTokens": tokens(projection.vocabulary),
                 "jLensTokens": tokens(projection.j_lens),
                 "rLensTokens": tokens(projection.r_lens),
+                "jppLensTokens": tokens(getattr(projection, "jpp_lens", ())),
             }
         if view == "attention-neurons":
             neurons = self._top_attention_channels(
                 include_logit_lens=include_logit_lens,
-                include_j_lens=include_j_lens, include_r_lens=include_r_lens
+                include_j_lens=include_j_lens, include_r_lens=include_r_lens,
+                include_jpp_lens=include_jpp_lens,
             )
             if not neurons:
                 raise ValueError(
@@ -2978,7 +3068,8 @@ class LLMDebugAdapter:
         else:
             neurons = self._top_neurons(
                 include_logit_lens=include_logit_lens,
-                include_j_lens=include_j_lens, include_r_lens=include_r_lens
+                include_j_lens=include_j_lens, include_r_lens=include_r_lens,
+                include_jpp_lens=include_jpp_lens,
             )
             scale_record = mlp_activation_scale(getattr(self, "model_name", ""), layer)
         if not neurons:
@@ -2998,10 +3089,20 @@ class LLMDebugAdapter:
             "saved": self._lens_result_is_saved(view, layer),
             "jLensResolved": include_j_lens,
             "rLensResolved": include_r_lens,
+            "jppLensResolved": include_jpp_lens,
+            "jppLensLabel": jpp_lens_label,
             "neurons": [
                 {
                     "rank": rank,
                     "index": neuron.index,
+                    "measurementId": self._register_measurement_vector(
+                        (
+                            f"Attention channel L{self._transformer_layer_index(layer)}:C{neuron.index}"
+                            if view == "attention-neurons"
+                            else f"MLP neuron L{self._transformer_layer_index(layer)}:N{neuron.index}"
+                        ),
+                        neuron.vector,
+                    ),
                     "activation": neuron.activation,
                     "removed": neuron.index in self._removed_projected_components(
                         layer,
@@ -3079,6 +3180,17 @@ class LLMDebugAdapter:
                             "logit": token.score,
                         }
                         for token_rank, token in enumerate(neuron.j_lens, start=1)
+                    ],
+                    "jppLensTokens": [
+                        {
+                            "rank": token_rank,
+                            "id": token.token_id,
+                            "text": token.text,
+                            "logit": token.score,
+                        }
+                        for token_rank, token in enumerate(
+                            getattr(neuron, "jpp_lens", ()), start=1
+                        )
                     ],
                 }
                 for rank, neuron in enumerate(neurons, start=1)

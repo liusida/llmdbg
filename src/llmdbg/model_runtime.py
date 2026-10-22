@@ -84,10 +84,12 @@ class NeuronProjection:
     contribution: tuple[TokenScore, ...]
     j_lens: tuple[TokenScore, ...] = ()
     r_lens: tuple[TokenScore, ...] = ()
+    jpp_lens: tuple[TokenScore, ...] = ()
     output_projection: float = 0.0
     residual_norm: float = 0.0
     residual_cosine: float | None = None
     potential_norm: float = 0.0
+    vector: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -98,6 +100,7 @@ class VectorProjection:
     vocabulary: tuple[TokenScore, ...]
     j_lens: tuple[TokenScore, ...] = ()
     r_lens: tuple[TokenScore, ...] = ()
+    jpp_lens: tuple[TokenScore, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -109,6 +112,7 @@ class ICAProjection:
     score: float
     energy: float
     projection: VectorProjection
+    vector: tuple[float, ...] = ()
 
 
 @dataclass
@@ -131,6 +135,28 @@ class ModelExecution:
     projection_norms: dict[tuple[int, tuple[int, ...]], Any] = field(
         default_factory=dict
     )
+    semantic_token_masks: dict[tuple[int, str], Any] = field(default_factory=dict)
+
+    def _semantic_token_mask(self, device: Any, vocabulary_size: int) -> Any:
+        """Return the J++ readout mask: decoded tokens containing a letter/digit."""
+        import torch
+
+        key = (vocabulary_size, str(device))
+        mask = self.semantic_token_masks.get(key)
+        if mask is None:
+            mask = torch.tensor(
+                [
+                    any(
+                        character.isalnum()
+                        for character in self.runtime.tokenizer.decode([token_id])
+                    )
+                    for token_id in range(vocabulary_size)
+                ],
+                dtype=torch.bool,
+                device=device,
+            )
+            self.semantic_token_masks[key] = mask
+        return mask
 
     @property
     def token_count(self) -> int:
@@ -247,6 +273,7 @@ class ModelExecution:
         include_logit_lens: bool = True,
         include_j_lens: bool = False,
         include_r_lens: bool = False,
+        include_jpp_lens: bool = False,
         include_indices: tuple[int, ...] = (),
     ) -> tuple[NeuronProjection, ...]:
         """Project active MLP neurons through direct, J-Lens, and R-Lens readouts."""
@@ -271,6 +298,7 @@ class ModelExecution:
             component_count=neuron_count, token_count=token_count,
             include_logit_lens=include_logit_lens,
             include_j_lens=include_j_lens, include_r_lens=include_r_lens,
+            include_jpp_lens=include_jpp_lens,
             include_indices=include_indices,
         )
 
@@ -286,6 +314,7 @@ class ModelExecution:
         include_logit_lens: bool = True,
         include_j_lens: bool = False,
         include_r_lens: bool = False,
+        include_jpp_lens: bool = False,
         include_indices: tuple[int, ...] = (),
     ) -> tuple[NeuronProjection, ...]:
         """Project active attention channels through W_O and vocabulary readouts."""
@@ -320,6 +349,7 @@ class ModelExecution:
             component_count=channel_count, token_count=token_count,
             include_logit_lens=include_logit_lens,
             include_j_lens=include_j_lens, include_r_lens=include_r_lens,
+            include_jpp_lens=include_jpp_lens,
             include_indices=include_indices,
         )
 
@@ -440,6 +470,7 @@ class ModelExecution:
         include_logit_lens: bool,
         include_j_lens: bool,
         include_r_lens: bool,
+        include_jpp_lens: bool = False,
         output: tuple[float, ...] | None = None,
         residual: tuple[float, ...] | None = None,
         include_indices: tuple[int, ...] = (),
@@ -449,6 +480,7 @@ class ModelExecution:
 
         unembedding = self.runtime.model.get_output_embeddings().weight
         from llmdbg.j_lens import source_map as j_lens_map
+        from llmdbg.jpp_lens import source_map as jpp_lens_map
         from llmdbg.r_lens import source_map as r_lens_map
 
         model_id = str(getattr(self.runtime.model.config, "_name_or_path", ""))
@@ -460,6 +492,11 @@ class ModelExecution:
         r_lens_source = (
             r_lens_map(model_id, layer_index, hidden_size)
             if include_r_lens
+            else None
+        )
+        jpp_lens_source = (
+            jpp_lens_map(model_id, layer_index, hidden_size)
+            if include_jpp_lens
             else None
         )
         with _runtime_lock, torch.inference_mode():
@@ -550,7 +587,9 @@ class ModelExecution:
                             dots, component_norms, strict=True
                         )
                     ]
-            def transported_scores(source: Any) -> tuple[Any, Any]:
+            def transported_scores(
+                source: Any, *, semantic_only: bool = False
+            ) -> tuple[Any, Any]:
                 if source is None:
                     return None, None
                 mapping, _ = source
@@ -560,6 +599,13 @@ class ModelExecution:
                     mapped.to(dtype=projection.dtype)[:, None, :]
                 )[:, 0]
                 scores = (normalized @ unembedding.T).float()
+                if semantic_only:
+                    scores.masked_fill_(
+                        ~self._semantic_token_mask(
+                            scores.device, scores.shape[-1]
+                        ).unsqueeze(0),
+                        float("-inf"),
+                    )
                 values, ids = torch.topk(
                     scores, min(token_count, scores.shape[1]), dim=1
                 )
@@ -567,6 +613,9 @@ class ModelExecution:
 
             j_lens_values, j_lens_ids = transported_scores(j_lens_source)
             r_lens_values, r_lens_ids = transported_scores(r_lens_source)
+            jpp_lens_values, jpp_lens_ids = transported_scores(
+                jpp_lens_source, semantic_only=True
+            )
 
         def token_scores(ids: Any, values: Any) -> tuple[TokenScore, ...]:
             return tuple(
@@ -603,10 +652,16 @@ class ModelExecution:
                     if r_lens_ids is not None and r_lens_values is not None
                     else ()
                 ),
+                jpp_lens=(
+                    token_scores(jpp_lens_ids[rank], jpp_lens_values[rank])
+                    if jpp_lens_ids is not None and jpp_lens_values is not None
+                    else ()
+                ),
                 output_projection=float(output_projections[rank]),
                 residual_norm=residual_norm,
                 residual_cosine=residual_cosines[rank],
                 potential_norm=float(potential_norms[rank]),
+                vector=tuple(float(value) for value in component_vectors[rank].tolist()),
             )
             for rank in range(active_indices.shape[0])
         )
@@ -620,6 +675,7 @@ class ModelExecution:
         include_logit_lens: bool = True,
         include_j_lens: bool = False,
         include_r_lens: bool = False,
+        include_jpp_lens: bool = False,
     ) -> VectorProjection:
         """Read one MLP/residual vector directly and through J/R transport maps."""
         return self._vectors_lens(
@@ -629,6 +685,7 @@ class ModelExecution:
             include_logit_lens=include_logit_lens,
             include_j_lens=include_j_lens,
             include_r_lens=include_r_lens,
+            include_jpp_lens=include_jpp_lens,
         )[0]
 
     def _vectors_lens(
@@ -640,6 +697,7 @@ class ModelExecution:
         include_logit_lens: bool,
         include_j_lens: bool,
         include_r_lens: bool,
+        include_jpp_lens: bool = False,
     ) -> tuple[VectorProjection, ...]:
         """Batch model-width vectors through selected vocabulary readouts."""
         import re
@@ -653,6 +711,7 @@ class ModelExecution:
             return ()
         hidden_size = len(vectors[0])
         from llmdbg.j_lens import source_map as j_lens_map
+        from llmdbg.jpp_lens import source_map as jpp_lens_map
         from llmdbg.r_lens import source_map as r_lens_map
 
         j_source = (
@@ -663,15 +722,28 @@ class ModelExecution:
             r_lens_map(model_id, layer_index, hidden_size)
             if include_r_lens and layer_index is not None else None
         )
+        jpp_source = (
+            jpp_lens_map(model_id, layer_index, hidden_size)
+            if include_jpp_lens and layer_index is not None else None
+        )
         with _runtime_lock, torch.inference_mode():
             unembedding = self.runtime.model.get_output_embeddings().weight
             directions = torch.tensor(
                 vectors, device=unembedding.device, dtype=unembedding.dtype
             )
 
-            def readout(values_to_read: Any) -> tuple[tuple[TokenScore, ...], ...]:
+            def readout(
+                values_to_read: Any, *, semantic_only: bool = False
+            ) -> tuple[tuple[TokenScore, ...], ...]:
                 normalized = self.runtime.final_norm(values_to_read[:, None, :])[:, 0]
                 logits = (normalized @ unembedding.T).float()
+                if semantic_only:
+                    logits.masked_fill_(
+                        ~self._semantic_token_mask(
+                            logits.device, logits.shape[-1]
+                        ).unsqueeze(0),
+                        float("-inf"),
+                    )
                 values, ids = torch.topk(
                     logits, min(token_count, logits.shape[1]), dim=1
                 )
@@ -689,14 +761,18 @@ class ModelExecution:
                     for row_ids, row_values in zip(ids, values, strict=True)
                 )
 
-            def transported(source: Any) -> tuple[tuple[TokenScore, ...], ...]:
+            def transported(
+                source: Any, *, semantic_only: bool = False
+            ) -> tuple[tuple[TokenScore, ...], ...]:
                 if source is None:
                     return tuple(() for _ in vectors)
                 mapping, _ = source
                 mapped = directions.float() @ mapping.to(
                     device=directions.device, dtype=torch.float32
                 ).T
-                return readout(mapped.to(dtype=directions.dtype))
+                return readout(
+                    mapped.to(dtype=directions.dtype), semantic_only=semantic_only
+                )
 
             direct = (
                 readout(directions)
@@ -705,6 +781,7 @@ class ModelExecution:
             )
             j_readouts = transported(j_source)
             r_readouts = transported(r_source)
+            jpp_readouts = transported(jpp_source, semantic_only=True)
             norms = torch.linalg.vector_norm(directions.float(), dim=1).tolist()
             return tuple(
                 VectorProjection(
@@ -712,6 +789,7 @@ class ModelExecution:
                     vocabulary=direct[index],
                     j_lens=j_readouts[index],
                     r_lens=r_readouts[index],
+                    jpp_lens=jpp_readouts[index],
                 )
                 for index in range(len(vectors))
             )
@@ -727,6 +805,7 @@ class ModelExecution:
         include_logit_lens: bool = True,
         include_j_lens: bool = False,
         include_r_lens: bool = False,
+        include_jpp_lens: bool = False,
         include_indices: tuple[int, ...] = (),
     ) -> tuple[ICAProjection, ...]:
         """Project a vector through the published resid-post ICA basis."""
@@ -753,6 +832,7 @@ class ModelExecution:
             include_logit_lens=include_logit_lens,
             include_j_lens=include_j_lens,
             include_r_lens=include_r_lens,
+            include_jpp_lens=include_jpp_lens,
         )
         return tuple(
             ICAProjection(
@@ -761,6 +841,7 @@ class ModelExecution:
                 score=component["score"],
                 energy=component["energy"],
                 projection=projection,
+                vector=tuple(float(value) for value in component["vector"]),
             )
             for component, projection in zip(components, projections, strict=True)
         )

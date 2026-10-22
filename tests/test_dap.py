@@ -1278,6 +1278,22 @@ class DAPIntegrationTest(unittest.TestCase):
         self.assertEqual(adapter.source_path, str(config))
         self.assertEqual(adapter.source_lines, (2, 3))
 
+    def test_measure_cosine_uses_full_retained_vectors(self) -> None:
+        adapter = object.__new__(LLMDebugAdapter)
+        adapter.token_index = 4
+        adapter.layer_index = 7
+        adapter.measurement_vectors = {}
+        vector_a = adapter._register_measurement_vector("Residual A", (1.0, 0.0, 0.0))
+        vector_b = adapter._register_measurement_vector("Residual B", (1.0, 1.0, 0.0))
+
+        result = adapter._measure_cosine(vector_a, vector_b)
+
+        self.assertEqual(result["labelA"], "Residual A")
+        self.assertEqual(result["labelB"], "Residual B")
+        self.assertEqual(result["dimensions"], 3)
+        self.assertAlmostEqual(result["cosine"], 2 ** -0.5)
+        self.assertAlmostEqual(result["angleDegrees"], 45.0)
+
 
 if __name__ == "__main__":
     unittest.main()
