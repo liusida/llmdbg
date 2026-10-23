@@ -53,34 +53,58 @@ _artifact_cache: dict[str, dict[str, Any]] = {}
 
 def load_jpp_lens(model_id: str) -> dict[str, Any] | None:
     """Load an explicit local artifact, else the pinned official 9B artifact."""
-    if model_id in _artifact_cache:
-        return _artifact_cache[model_id]
+    from llmdbg.residual_vocabulary_lenses import active_lens, source_file
+
+    configured = active_lens("jpp")
+    configured_id = str(configured.get("id", "default")) if configured else "default"
+    cache_key = f"{configured_id}:{model_id}"
+    if cache_key in _artifact_cache:
+        return _artifact_cache[cache_key]
     override = os.environ.get("LLMDBG_JPP_LENS_PATH")
     if override:
         path = Path(override).expanduser()
     else:
-        if model_id.lower() != SUPPORTED_MODEL.lower():
+        models = configured.get("models") if configured else [SUPPORTED_MODEL]
+        if isinstance(models, list) and not any(
+            str(candidate).lower() in {model_id.lower(), "*"} for candidate in models
+        ):
             return None
-        from huggingface_hub import hf_hub_download
-
-        path = Path(
-            hf_hub_download(
-                repo_id=REPOSITORY,
-                revision=REVISION,
-                filename=FILENAME,
-                library_name="llmdbg",
-            )
+        configured_source = str(configured.get("source", "")) if configured else ""
+        is_local_source = bool(configured_source) and not configured_source.startswith("hf://")
+        if configured and not configured.get("path") and not is_local_source:
+            return None
+        filename = (
+            str(configured.get("path") or "lens.pt")
+            if configured
+            else FILENAME
         )
-        if path.stat().st_size != SIZE:
+        source = configured or {
+            "source": f"hf://models/{REPOSITORY}",
+            "revision": REVISION,
+        }
+        path = source_file(source, filename)
+        expected_size = configured.get("size") if configured else SIZE
+        if expected_size and path.stat().st_size != int(expected_size):
             raise ValueError(
-                f"J++ Lens size mismatch for {path}: {path.stat().st_size} != {SIZE}"
+                f"J++ Lens size mismatch for {path}: {path.stat().st_size} != {expected_size}"
             )
-        digest = _sha256(path)
-        if digest != SHA256:
-            raise ValueError(f"J++ Lens checksum mismatch for {path}: {digest} != {SHA256}")
+        expected_sha = configured.get("sha256") if configured else SHA256
+        if expected_sha:
+            digest = _sha256(path)
+            if digest != expected_sha:
+                raise ValueError(f"J++ Lens checksum mismatch for {path}: {digest} != {expected_sha}")
     artifact = _load(path, model_id)
-    artifact["_artifact_kind"] = "local" if override else "official"
-    _artifact_cache[model_id] = artifact
+    artifact["_artifact_kind"] = (
+        "local" if override or (configured_source and not configured_source.startswith("hf://"))
+        else "official"
+    )
+    artifact["_configured_id"] = configured_id
+    artifact["_configured_label"] = (
+        "Local J++ Lens"
+        if override
+        else str(configured.get("label", "J++ Lens")) if configured else "Official J++ Lens"
+    )
+    _artifact_cache[cache_key] = artifact
     return artifact
 
 
@@ -98,13 +122,18 @@ def display_name(model_id: str) -> str:
         return "J++ Lens"
     if artifact.get("_artifact_kind") == "official":
         return "Official J++ Lens"
-    return "Local J++ Lens"
+    return str(artifact.get("_configured_label") or "Local J++ Lens")
 
 
 def configured_display_name(model_id: str) -> str:
     """Return the expected label without loading or downloading the artifact."""
+    from llmdbg.residual_vocabulary_lenses import active_lens
+
     if os.environ.get("LLMDBG_JPP_LENS_PATH"):
         return "Local J++ Lens"
+    configured = active_lens("jpp")
+    if configured is not None:
+        return str(configured.get("label") or "J++ Lens")
     if model_id.lower() == SUPPORTED_MODEL.lower():
         return "Official J++ Lens"
     return "J++ Lens"

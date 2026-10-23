@@ -171,6 +171,8 @@ class LLMDebugAdapter:
         self.model_revision = "main"
         self.requested_device = "auto"
         self.requested_dtype = "auto"
+        self.max_new_tokens = 0
+        self.generated_tokens = 0
 
     @property
     def internal_steps(self) -> tuple[tuple[str, str, str], ...]:
@@ -300,7 +302,6 @@ class LLMDebugAdapter:
 
     def stop(self, reason: str) -> None:
         getattr(self, "lens_snapshot_cache", {}).clear()
-        getattr(self, "measurement_vectors", {}).clear()
         self.send_event(
             "stopped",
             {
@@ -349,6 +350,8 @@ class LLMDebugAdapter:
             self.model_revision = str(arguments.get("revision", "main"))
             self.requested_device = str(arguments.get("device", "auto"))
             self.requested_dtype = str(arguments.get("dtype", "auto"))
+            self.max_new_tokens = max(0, int(arguments.get("maxNewTokens", 0)))
+            self.generated_tokens = 0
             if model:
                 self.send_event(
                     "output",
@@ -357,13 +360,18 @@ class LLMDebugAdapter:
                 self.execution = prepare_model_execution(
                     str(model),
                     revision=str(arguments.get("revision", "main")),
-                    prompt=self.prompt,
+                    prompt=self.prompt or None,
+                    messages=arguments.get("messages"),
+                    add_generation_prompt=bool(
+                        arguments.get("addGenerationPrompt", True)
+                    ),
                     device=str(arguments.get("device", "auto")),
                     dtype=str(arguments.get("dtype", "auto")),
                     progress=lambda output: self.send_event(
                         "output", {"category": "console", "output": f"llmdbg: {output}"}
                     ),
                 )
+                self.prompt = self.execution.rendered_prompt
                 self.tokens = self.execution.tokens
                 self._configure_model_source(arguments)
                 loaded_model = self.execution.runtime.model
@@ -549,6 +557,15 @@ class LLMDebugAdapter:
             self.send_event("invalidated", {"areas": ["variables", "watch"]})
         elif command == "llmdbg/vector":
             self.send_response(request, self._vector_snapshot())
+        elif command == "llmdbg/promptTokens":
+            self.send_response(
+                request,
+                {
+                    "prompt": self.prompt,
+                    "tokens": list(self.tokens),
+                    "currentToken": self.token_index,
+                },
+            )
         elif command == "llmdbg/plot":
             self.send_response(
                 request,
@@ -559,6 +576,20 @@ class LLMDebugAdapter:
             )
         elif command == "llmdbg/neuronLens":
             mode = str(arguments.get("mode", "logit"))
+            from llmdbg.residual_vocabulary_lenses import activate, available_lenses, lens
+
+            selected_lens = lens(mode.removeprefix("lens:")) if mode.startswith("lens:") else None
+            method = str(selected_lens.get("method")) if selected_lens else None
+            available = available_lenses(str(self.model_name))
+            available_methods = {item["method"] for item in available}
+            active_selection: str | dict[str, str] | None = (
+                str(selected_lens["id"]) if selected_lens else None
+            )
+            if mode == "all":
+                by_method: dict[str, str] = {}
+                for item in available:
+                    by_method.setdefault(item["method"], item["id"])
+                active_selection = by_method
             view = str(arguments.get("view", "neurons"))
             cache_key = (
                 self.token_index,
@@ -571,13 +602,22 @@ class LLMDebugAdapter:
             )
             snapshot = self.lens_snapshot_cache.get(cache_key)
             if snapshot is None:
-                snapshot = self._neuron_lens_snapshot(
-                    view=view,
-                    include_logit_lens=mode in {"logit", "all"},
-                    include_j_lens=mode in {"j-lens", "all"},
-                    include_r_lens=mode in {"r-lens", "all"},
-                    include_jpp_lens=mode in {"jpp-lens", "all"},
-                )
+                with activate(active_selection):
+                    snapshot = self._neuron_lens_snapshot(
+                        view=view,
+                        include_logit_lens=mode in {"logit", "all"},
+                        include_j_lens=mode == "j-lens" or method == "j" or (mode == "all" and "j" in available_methods),
+                        include_r_lens=mode == "r-lens" or method == "r" or (mode == "all" and "r" in available_methods),
+                        include_jpp_lens=mode == "jpp-lens" or method == "jpp" or (mode == "all" and "jpp" in available_methods),
+                    )
+                if selected_lens:
+                    active_metadata = {
+                        "id": selected_lens["id"], "label": selected_lens["label"],
+                        "method": selected_lens["method"],
+                    }
+                    snapshot["activeResidualVocabularyLens"] = active_metadata
+                    for child in snapshot.get("icaComponents", snapshot.get("neurons", [])):
+                        child["activeResidualVocabularyLens"] = active_metadata
                 self.lens_snapshot_cache[cache_key] = snapshot
             self.send_response(request, snapshot)
         elif command == "llmdbg/measureCosine":
@@ -587,6 +627,100 @@ class LLMDebugAdapter:
                     str(arguments.get("vectorA", "")),
                     str(arguments.get("vectorB", "")),
                 ),
+            )
+        elif command == "llmdbg/measureCosineAll":
+            reference = str(arguments.get("reference", ""))
+            reference_vector = arguments.get("referenceVector")
+            if isinstance(reference_vector, list):
+                reference = self._register_measurement_vector(
+                    str(arguments.get("referenceLabel", "Pinned reference")),
+                    tuple(float(value) for value in reference_vector),
+                )
+            targets = arguments.get("targets", [])
+            if not isinstance(targets, list):
+                raise ValueError("cosine comparison targets must be a list")
+            available = [
+                str(target)
+                for target in targets
+                if str(target) in self.measurement_vectors
+            ]
+            self.send_response(
+                request,
+                {
+                    "reference": reference,
+                    "results": [
+                        {
+                            "target": target,
+                            **self._measure_cosine(reference, target),
+                        }
+                        for target in available
+                    ],
+                    "unavailable": len(targets) - len(available),
+                },
+            )
+        elif command == "llmdbg/getMeasurementVector":
+            vector_id = str(arguments.get("vector", ""))
+            if vector_id not in self.measurement_vectors:
+                raise ValueError("the selected vector is no longer available")
+            label, vector = self.measurement_vectors[vector_id]
+            norm = sum(value * value for value in vector) ** 0.5
+            match = re.match(r"^t(\d+)-", vector_id)
+            token_position = int(match.group(1)) if match is not None else self.token_index
+            self.send_response(
+                request,
+                {
+                    "label": label,
+                    "vector": list(vector),
+                    "dimensions": len(vector),
+                    "norm": norm,
+                    "tokenPosition": token_position,
+                },
+            )
+        elif command == "llmdbg/patchVector":
+            self.send_event("llmdbg/computationStarted", {"command": command})
+            result = self._patch_vector(
+                str(arguments.get("view", "")),
+                tuple(float(value) for value in arguments.get("vector", [])),
+                str(arguments.get("sourceLabel", "Copied vector")),
+            )
+            self.send_response(request, result)
+            self.send_event("invalidated", {"areas": ["variables", "watch"]})
+            self.send_event(
+                "llmdbg/vectorChanged",
+                {"tokenPosition": self.token_index, "layer": self.state.layer.name},
+            )
+        elif command == "llmdbg/getTokenReferenceVectors":
+            vectors: dict[str, dict[str, Any]] = {}
+            attention_names = {"attention", "full_attention", "gated_linear_attention"}
+            for state in self.trace:
+                layer_index = self._transformer_layer_index(state.layer.name)
+                if layer_index is None:
+                    continue
+                function_name = self._function_name_for_path(state.layer.name)
+                candidates: tuple[tuple[str, Any, str], ...] = ()
+                if function_name in attention_names:
+                    candidates = (
+                        ("residual-pre", state.input_vector, "Residual Lens · Pre"),
+                        ("attention-output", state.details.get("attention_projection"), "Attention output"),
+                        ("residual-mid", state.output_vector, "Residual Lens · Mid"),
+                    )
+                elif function_name == "mlp":
+                    candidates = (
+                        ("mlp-output", state.details.get("mlp_projection"), "MLP output"),
+                        ("residual-post", state.output_vector, "Residual Lens · Post"),
+                    )
+                for view, vector, label in candidates:
+                    if vector is None:
+                        continue
+                    values = tuple(float(value) for value in vector)
+                    vectors[f"{view}|{layer_index}"] = {
+                        "label": f"{label} [layer {layer_index}]",
+                        "vector": list(values),
+                        "norm": sum(value * value for value in values) ** 0.5,
+                    }
+            self.send_response(
+                request,
+                {"tokenPosition": self.token_index, "vectors": vectors},
             )
         elif command == "llmdbg/icaSupport":
             from llmdbg.ica_lens import artifact_repository
@@ -600,6 +734,13 @@ class LLMDebugAdapter:
                     "repository": repository,
                     "jppLabel": configured_display_name(str(self.model_name)),
                 },
+            )
+        elif command == "llmdbg/residualToVocabularyLensSupport":
+            from llmdbg.residual_vocabulary_lenses import available_lenses
+
+            self.send_response(
+                request,
+                {"lenses": list(available_lenses(str(self.model_name)))},
             )
         elif command == "llmdbg/removeIcaComponent":
             self.send_event(
@@ -727,15 +868,21 @@ class LLMDebugAdapter:
                     if (
                         token_position is not None
                         and token_operator == "=="
-                        and token_position >= len(self.tokens)
+                        and token_position >= len(self.tokens) + self.max_new_tokens
                     ):
+                        maximum = len(self.tokens) + self.max_new_tokens - 1
+                        range_kind = (
+                            "prompt and generation"
+                            if self.max_new_tokens
+                            else "prompt"
+                        )
                         breakpoint.update(
                             {
                                 "verified": False,
                                 "line": resolved_line,
                                 "message": (
-                                    f"Token position {token_position} is outside the prompt "
-                                    f"range 0..{len(self.tokens) - 1}"
+                                    f"Token position {token_position} is outside the configured "
+                                    f"{range_kind} range 0..{maximum}"
                                 ),
                             }
                         )
@@ -932,8 +1079,41 @@ class LLMDebugAdapter:
             self._load_token(self.token_index + 1)
             self.layer_index = 0
             self.stop("step")
+        elif self._append_next_generated_token():
+            self._load_token(self.token_index + 1)
+            self.layer_index = 0
+            self.stop("step")
         else:
             self.terminate()
+
+    def _append_next_generated_token(self) -> bool:
+        """Greedily extend a chat run after its current final token."""
+        if (
+            self.execution is None
+            or self.generated_tokens >= self.max_new_tokens
+            or not self.predictions
+        ):
+            return False
+        prediction = self.predictions[0]
+        eos = getattr(self.execution.runtime.tokenizer, "eos_token_id", None)
+        eos_ids = set(eos if isinstance(eos, (list, tuple, set)) else [eos])
+        if prediction.token_id in eos_ids:
+            self.send_event(
+                "output",
+                {"category": "console", "output": "llmdbg: generation reached EOS\n"},
+            )
+            return False
+        text = self.execution.append_generated_token(prediction.token_id)
+        self.generated_tokens += 1
+        self.tokens = self.execution.tokens
+        self.send_event(
+            "output",
+            {
+                "category": "stdout",
+                "output": text,
+            },
+        )
+        return True
 
     def _load_token(self, position: int) -> None:
         """Execute one prompt token and select the authored model steps."""
@@ -1195,6 +1375,17 @@ class LLMDebugAdapter:
                         self.mlp_step_index = internal_index or 0
                         self.stop("breakpoint")
                         return
+        if self.token_index + 1 < len(self.tokens):
+            self._load_token(len(self.tokens) - 1)
+            self.layer_index = len(self.trace) - 1
+        if self._append_next_generated_token():
+            self._load_token(self.token_index + 1)
+            self.layer_index = 0
+            self.inside_mlp = False
+            self.inside_attention = False
+            self.mlp_step_index = 0
+            self._continue_to_breakpoint(include_current=True, before_start=False)
+            return
         self.terminate()
 
     def _stop_at_internal_breakpoint(self) -> bool:
@@ -1709,6 +1900,138 @@ class LLMDebugAdapter:
             "layer": layer,
             "log": log_paths,
         }
+
+    def _patch_vector(
+        self, view: str, replacement: tuple[float, ...], source_label: str
+    ) -> dict[str, Any]:
+        """Replace an active model-width vector and replay the current token."""
+        if self.execution is None:
+            raise ValueError("vector patch requires a loaded model")
+        normalized_view = view.removeprefix("ica-")
+        targets = {
+            "residual-pre": "input",
+            "residual-mid": "output",
+            "residual-post": "output",
+            "attention-output": "attention_projection",
+            "mlp-output": "mlp_projection",
+        }
+        vector_name = targets.get(normalized_view)
+        if vector_name is None:
+            raise ValueError(f"Patch: Paste to replace is unavailable for {view!r}")
+        snapshot = self._neuron_lens_snapshot(
+            view=normalized_view,
+            include_logit_lens=False,
+            include_j_lens=False,
+            include_r_lens=False,
+            include_jpp_lens=False,
+        )
+        if snapshot.get("saved"):
+            raise ValueError(
+                "vector patch is unavailable because this block has already executed"
+            )
+        measurement_id = str(snapshot.get("measurementId", ""))
+        if measurement_id not in self.measurement_vectors:
+            raise ValueError("target vector is unavailable")
+        _label, before = self.measurement_vectors[measurement_id]
+        if len(replacement) != len(before):
+            raise ValueError(
+                f"copied vector has {len(replacement)} dimensions but target has {len(before)}"
+            )
+        layer = str(snapshot["layer"])
+        baseline_predictions = tuple(self.predictions)
+        self.execution.patch_vector(
+            self.token_index, layer, vector_name, replacement
+        )
+        current_layer = self.layer_index
+        self._load_token(self.token_index)
+        self.layer_index = current_layer
+        self.neuron_cache.clear()
+        getattr(self, "lens_snapshot_cache", {}).clear()
+        getattr(self, "measurement_vectors", {}).clear()
+        log_paths = self._write_vector_patch_log(
+            view=normalized_view,
+            layer=layer,
+            vector_name=vector_name,
+            source_label=source_label,
+            before=before,
+            replacement=replacement,
+            baseline_predictions=baseline_predictions,
+        )
+        self.send_event(
+            "output",
+            {"category": "console", "output": f"llmdbg: vector patch log: {log_paths['note']}\n"},
+        )
+        return {
+            "patched": True,
+            "view": normalized_view,
+            "layer": layer,
+            "tokenPosition": self.token_index,
+            "log": log_paths,
+        }
+
+    def _write_vector_patch_log(
+        self,
+        *,
+        view: str,
+        layer: str,
+        vector_name: str,
+        source_label: str,
+        before: tuple[float, ...],
+        replacement: tuple[float, ...],
+        baseline_predictions: tuple[Any, ...],
+    ) -> dict[str, str]:
+        """Write a reproducible record for a full-vector patch intervention."""
+        def digest(values: tuple[float, ...]) -> str:
+            return hashlib.sha256(
+                json.dumps(values, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+
+        def predictions(items: tuple[Any, ...]) -> list[dict[str, Any]]:
+            return [
+                {"tokenId": item.token_id, "text": item.text, "logit": item.logit,
+                 "probability": item.probability}
+                for item in items
+            ]
+
+        transformer_layer = self._transformer_layer_index(layer)
+        record = {
+            "schema": "llmdbg.vector-patch-intervention.v1",
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+            "model": {"id": self.model_name, "revision": self.model_revision,
+                      "device": self.execution.device if self.execution else None,
+                      "dtype": self.execution.dtype if self.execution else None},
+            "prompt": self.prompt,
+            "tokens": list(self.tokens),
+            "intervention": {"kind": "patch_vector", "tokenPosition": self.token_index,
+                             "token": self.tokens[self.token_index], "view": view,
+                             "state": layer, "transformerLayer": transformer_layer,
+                             "vector": vector_name, "sourceLabel": source_label},
+            "targetBefore": {"norm": sum(value * value for value in before) ** 0.5,
+                             "sha256": digest(before), "values": before},
+            "replacement": {"norm": sum(value * value for value in replacement) ** 0.5,
+                            "sha256": digest(replacement), "values": replacement},
+            "baselinePredictions": predictions(baseline_predictions),
+            "intervenedPredictions": predictions(tuple(self.predictions)),
+        }
+        project = Path(self.source_path).parent if self.source_path else Path.cwd()
+        log_dir = project / ".logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        stem = f"{timestamp}-vector-patch-t{self.token_index}-l{transformer_layer}"
+        json_path = log_dir / f"{stem}.json"
+        note_path = log_dir / f"{stem}.md"
+        json_path.write_text(json.dumps(record, indent=2, ensure_ascii=False) + "\n")
+        note_path.write_text("\n".join([
+            "# llmdbg vector patch intervention", "",
+            f"- Time: `{record['createdAt']}`",
+            f"- Model: `{self.model_name}` at `{self.model_revision}`",
+            f"- Prompt: `{self.prompt}`",
+            f"- Target: token {self.token_index}, `{view}`, `{layer}.{vector_name}`",
+            f"- Source: `{source_label}`",
+            f"- Norm: {record['targetBefore']['norm']:.8f} → {record['replacement']['norm']:.8f}",
+            "", f"Machine-readable record: `{json_path.name}`", "",
+        ]), encoding="utf-8")
+        return {"note": str(note_path), "json": str(json_path)}
 
     def _ica_residual_vector(
         self, view: str, layer: str
@@ -2693,9 +3016,12 @@ class LLMDebugAdapter:
         """Describe top MLP neurons through direct and residual-transport lenses."""
         jpp_lens_label = "J++ Lens"
         if include_jpp_lens:
-            from llmdbg.jpp_lens import display_name
+            from llmdbg.jpp_lens import configured_display_name
 
-            jpp_lens_label = display_name(str(self.model_name))
+            # Naming a configured v2 Lens must not load it through the legacy
+            # single-file J++ artifact path. The actual site-aware artifact is
+            # resolved below by ModelExecution._workspace_lens_source.
+            jpp_lens_label = configured_display_name(str(self.model_name))
         requested_view = view
         is_ica = view.startswith("ica-")
         if is_ica:
@@ -2956,6 +3282,23 @@ class LLMDebugAdapter:
                     for rank, token in enumerate(items, start=1)
                 ]
 
+            from llmdbg.workspace_lens import resolve_view_site
+
+            transformer_layer = self._transformer_layer_index(layer)
+            if transformer_layer is None:
+                raise ValueError(f"cannot resolve transformer layer for {layer!r}")
+            source_site, source_layer = resolve_view_site(view, transformer_layer)
+
+            def missing_message(method: str, values: Any) -> str | None:
+                if values:
+                    return None
+                location = (
+                    "embedding output"
+                    if source_site == "embed"
+                    else f"{source_site.title()} layer {source_layer}"
+                )
+                return f"No {method} {location} map is available."
+
             if is_ica:
                 intervention_vector = (
                     "input" if view == "residual-pre" else "output"
@@ -2968,15 +3311,34 @@ class LLMDebugAdapter:
                     and intervention_layer == layer
                     and vector_name == intervention_vector
                 ) if view.startswith("residual-") else ()
+                removed_vectors = {}
+                for removed_index in removed_indices:
+                    observation = self.execution.ica_observations.get(
+                        (
+                            self.token_index,
+                            layer,
+                            intervention_vector,
+                            removed_index,
+                        )
+                    )
+                    if observation is not None:
+                        before, after = observation
+                        removed_vectors[removed_index] = tuple(
+                            float(left) - float(right)
+                            for left, right in zip(before, after, strict=True)
+                        )
                 components = self.execution.ica_components(
                     layer,
                     vector,
                     is_delta=view in {"attention-output", "mlp-output"},
+                    source_site=source_site,
+                    source_layer=source_layer,
                     include_logit_lens=include_logit_lens,
                     include_j_lens=include_j_lens,
                     include_r_lens=include_r_lens,
                     include_jpp_lens=include_jpp_lens,
                     include_indices=removed_indices,
+                    vector_overrides=removed_vectors,
                 )
                 if not components:
                     raise ValueError(
@@ -3014,6 +3376,15 @@ class LLMDebugAdapter:
                             "jppLensTokens": tokens(
                                 getattr(component.projection, "jpp_lens", ())
                             ),
+                            "jLensUnavailable": missing_message(
+                                "J-Lens", component.projection.j_lens
+                            ) if include_j_lens else None,
+                            "rLensUnavailable": missing_message(
+                                "R-Lens", component.projection.r_lens
+                            ) if include_r_lens else None,
+                            "jppLensUnavailable": missing_message(
+                                "J++ Lens", component.projection.jpp_lens
+                            ) if include_jpp_lens else None,
                         }
                         for component in components
                     ],
@@ -3022,6 +3393,8 @@ class LLMDebugAdapter:
             projection = self.execution.vector_lens(
                 layer,
                 vector,
+                source_site=source_site,
+                source_layer=source_layer,
                 include_logit_lens=include_logit_lens,
                 include_j_lens=include_j_lens,
                 include_r_lens=include_r_lens,
@@ -3051,6 +3424,15 @@ class LLMDebugAdapter:
                 "jLensTokens": tokens(projection.j_lens),
                 "rLensTokens": tokens(projection.r_lens),
                 "jppLensTokens": tokens(getattr(projection, "jpp_lens", ())),
+                "jLensUnavailable": missing_message(
+                    "J-Lens", projection.j_lens
+                ) if include_j_lens else None,
+                "rLensUnavailable": missing_message(
+                    "R-Lens", projection.r_lens
+                ) if include_r_lens else None,
+                "jppLensUnavailable": missing_message(
+                    "J++ Lens", projection.jpp_lens
+                ) if include_jpp_lens else None,
             }
         if view == "attention-neurons":
             neurons = self._top_attention_channels(
@@ -3077,6 +3459,17 @@ class LLMDebugAdapter:
                 "MLP Neuron Lens is available after an MLP activation has completed"
             )
         scale = float(scale_record["scale"]) if scale_record is not None else None
+        from llmdbg.workspace_lens import resolve_view_site
+
+        component_layer = self._transformer_layer_index(layer)
+        if component_layer is None:
+            raise ValueError(f"cannot resolve transformer layer for {layer!r}")
+        component_site, component_source_layer = resolve_view_site(view, component_layer)
+        component_location = (
+            "embedding output"
+            if component_site == "embed"
+            else f"{component_site.title()} layer {component_source_layer}"
+        )
         return {
             "view": view,
             "componentLabel": (
@@ -3192,6 +3585,18 @@ class LLMDebugAdapter:
                             getattr(neuron, "jpp_lens", ()), start=1
                         )
                     ],
+                    "jLensUnavailable": (
+                        f"No J-Lens {component_location} map is available."
+                        if include_j_lens and not neuron.j_lens else None
+                    ),
+                    "rLensUnavailable": (
+                        f"No R-Lens {component_location} map is available."
+                        if include_r_lens and not neuron.r_lens else None
+                    ),
+                    "jppLensUnavailable": (
+                        f"No J++ Lens {component_location} map is available."
+                        if include_jpp_lens and not neuron.jpp_lens else None
+                    ),
                 }
                 for rank, neuron in enumerate(neurons, start=1)
             ],

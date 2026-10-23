@@ -281,6 +281,40 @@ class DAPIntegrationTest(unittest.TestCase):
         self.assertIsNone(LLMDebugAdapter._parse_token_condition("token.position == 1"))
         self.assertIsNone(LLMDebugAdapter._parse_token_condition("token.text == 'x'"))
 
+    def test_patch_vector_replays_active_target_with_full_replacement(self) -> None:
+        adapter = object.__new__(LLMDebugAdapter)
+        patches = []
+        adapter.execution = SimpleNamespace(
+            patch_vector=lambda *args: patches.append(args),
+            device="cpu",
+            dtype="float32",
+        )
+        adapter.token_index = 3
+        adapter.layer_index = 7
+        adapter.tokens = ("a", "b", "c", "d")
+        adapter.predictions = ()
+        adapter.neuron_cache = {}
+        adapter.lens_snapshot_cache = {}
+        adapter.measurement_vectors = {"target": ("target", (1.0, 2.0))}
+        adapter._neuron_lens_snapshot = lambda **_kwargs: {
+            "saved": False,
+            "measurementId": "target",
+            "layer": "model.layers.2.full_attention",
+        }
+        adapter._load_token = lambda _position: None
+        adapter._write_vector_patch_log = lambda **_kwargs: {
+            "note": "/tmp/note.md", "json": "/tmp/note.json"
+        }
+        adapter.send_event = lambda *_args, **_kwargs: None
+
+        result = adapter._patch_vector("residual-pre", (4.0, 5.0), "source")
+
+        self.assertEqual(
+            patches,
+            [(3, "model.layers.2.full_attention", "input", (4.0, 5.0))],
+        )
+        self.assertTrue(result["patched"])
+
     def test_breakpoint_condition_parser_supports_layer_and_combinations(self) -> None:
         parse = LLMDebugAdapter._parse_breakpoint_condition
         self.assertEqual(parse("layer=6"), (None, ("==", 6)))
@@ -1113,6 +1147,38 @@ class DAPIntegrationTest(unittest.TestCase):
             (SourceBreakpoint(26),),
         )
 
+    def test_generated_token_breakpoint_is_verified_within_generation_budget(self) -> None:
+        adapter = object.__new__(LLMDebugAdapter)
+        adapter.sequence = 1
+        responses: list[dict[str, object]] = []
+        adapter.stream = SimpleNamespace(write=responses.append)
+        adapter.source_path = "/workspace/chat.llmdbg.py"
+        adapter.source_lines = (52,)
+        adapter.function_source_lines = {}
+        adapter.default_token = None
+        adapter.tokens = tuple(f"token-{index}" for index in range(20))
+        adapter.max_new_tokens = 20
+        adapter.breakpoints = ()
+        adapter.breakpoints_by_source = {}
+
+        adapter.handle({
+            "seq": 1,
+            "type": "request",
+            "command": "setBreakpoints",
+            "arguments": {
+                "source": {"path": adapter.source_path},
+                "breakpoints": [
+                    {"line": 52, "condition": "token=33"},
+                    {"line": 52, "condition": "token=40"},
+                ],
+            },
+        })
+
+        breakpoints = responses[-1]["body"]["breakpoints"]
+        self.assertTrue(breakpoints[0]["verified"])
+        self.assertFalse(breakpoints[1]["verified"])
+        self.assertIn("range 0..39", breakpoints[1]["message"])
+
     def test_continue_from_internal_breakpoint_reaches_later_internal_line(self) -> None:
         adapter = object.__new__(LLMDebugAdapter)
         adapter.tokens = ("a",)
@@ -1135,6 +1201,47 @@ class DAPIntegrationTest(unittest.TestCase):
         self.assertEqual(stops, ["breakpoint"])
         self.assertTrue(adapter.inside_mlp)
         self.assertEqual(adapter.mlp_step_index, 4)
+
+    def test_continue_after_generation_does_not_rescan_previous_tokens(self) -> None:
+        adapter = object.__new__(LLMDebugAdapter)
+        adapter.tokens = ("old",)
+        adapter.source_lines = (20,)
+        adapter.step_paths = ("model.layers.0.mlp",)
+        adapter.mlp_source_lines = ()
+        adapter.attention_source_lines = ()
+        adapter.breakpoints = (SourceBreakpoint(20),)
+        adapter.token_index = 0
+        adapter.layer_index = 0
+        adapter.trace = (object(),)
+        adapter.inside_mlp = False
+        adapter.inside_attention = False
+        adapter.mlp_step_index = 0
+        loaded: list[int] = []
+
+        def load_token(position: int) -> None:
+            loaded.append(position)
+            adapter.token_index = position
+
+        generated = False
+
+        def append_generated_token() -> bool:
+            nonlocal generated
+            if generated:
+                return False
+            generated = True
+            adapter.tokens = ("old", "new")
+            return True
+
+        adapter._load_token = load_token
+        adapter._append_next_generated_token = append_generated_token
+        stops: list[str] = []
+        adapter.stop = stops.append
+
+        adapter._continue_to_breakpoint(include_current=False)
+
+        self.assertEqual(stops, ["breakpoint"])
+        self.assertEqual(adapter.token_index, 1)
+        self.assertNotIn(0, loaded)
 
     def test_step_over_outer_call_honors_internal_breakpoint(self) -> None:
         adapter = object.__new__(LLMDebugAdapter)
@@ -1226,7 +1333,8 @@ class DAPIntegrationTest(unittest.TestCase):
             {"seq": 5, "type": "request", "command": "evaluate", "arguments": {"expression": "prompt"}},
             {"seq": 6, "type": "request", "command": "evaluate", "arguments": {"expression": "token_pos"}},
             {"seq": 7, "type": "request", "command": "evaluate", "arguments": {"expression": "layer"}},
-            {"seq": 8, "type": "request", "command": "disconnect", "arguments": {}},
+            {"seq": 8, "type": "request", "command": "llmdbg/promptTokens", "arguments": {}},
+            {"seq": 9, "type": "request", "command": "disconnect", "arguments": {}},
         ]
         process = subprocess.run(
             [sys.executable, "-m", "llmdbg.dap"],
@@ -1248,6 +1356,9 @@ class DAPIntegrationTest(unittest.TestCase):
         self.assertEqual(responses[5]["body"]["result"], "Hello model")
         self.assertEqual(responses[6]["body"]["result"], "0")
         self.assertTrue(responses[7]["body"]["result"])
+        self.assertEqual(responses[8]["body"]["prompt"], "Hello model")
+        self.assertEqual(responses[8]["body"]["tokens"], ["demo"])
+        self.assertEqual(responses[8]["body"]["currentToken"], 0)
 
     def test_config_file_is_used_as_the_debug_source(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1293,6 +1404,25 @@ class DAPIntegrationTest(unittest.TestCase):
         self.assertEqual(result["dimensions"], 3)
         self.assertAlmostEqual(result["cosine"], 2 ** -0.5)
         self.assertAlmostEqual(result["angleDegrees"], 45.0)
+
+    def test_stop_keeps_measurement_vectors_for_saved_lens_cards(self) -> None:
+        adapter = object.__new__(LLMDebugAdapter)
+        adapter.lens_snapshot_cache = {("old",): {"view": "residual-post"}}
+        adapter.measurement_vectors = {"old-vector": ("Residual", (1.0, 0.0))}
+        adapter.sequence = 1
+        adapter.token_index = 0
+        adapter.layer_index = 0
+        adapter.inside_mlp = False
+        adapter.inside_attention = False
+        adapter.trace = (
+            SimpleNamespace(layer=SimpleNamespace(name="model.layers.0.mlp")),
+        )
+        adapter.stream = SimpleNamespace(write=lambda _message: None)
+
+        adapter.stop("step")
+
+        self.assertEqual(adapter.lens_snapshot_cache, {})
+        self.assertIn("old-vector", adapter.measurement_vectors)
 
 
 if __name__ == "__main__":

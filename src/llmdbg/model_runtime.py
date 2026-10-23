@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from threading import RLock
 from typing import Any
 
@@ -125,10 +126,14 @@ class ModelExecution:
     device: str
     progress: Callable[[str], None]
     dtype: str = "float32"
+    rendered_prompt: str = ""
     past_key_values: Any = None
     cached_through: int = -1
     interventions: dict[tuple[int, str, str, int], float] = field(default_factory=dict)
     ica_interventions: set[tuple[int, str, str, int]] = field(default_factory=set)
+    vector_patches: dict[tuple[int, str, str], tuple[float, ...]] = field(
+        default_factory=dict
+    )
     ica_observations: dict[
         tuple[int, str, str, int], tuple[tuple[float, ...], tuple[float, ...]]
     ] = field(default_factory=dict)
@@ -186,10 +191,23 @@ class ModelExecution:
                 interventions=self.interventions,
                 ica_interventions=self.ica_interventions,
                 ica_observations=self.ica_observations,
+                vector_patches=self.vector_patches,
             )
             self.past_key_values = next_cache
             self.cached_through = position
             return ModelTrace(trace.states, self.tokens)
+
+    def append_generated_token(self, token_id: int) -> str:
+        """Append one greedy next token while preserving the sequential KV cache."""
+        import torch
+
+        token = torch.tensor(
+            [[int(token_id)]], dtype=self.input_ids.dtype, device=self.input_ids.device
+        )
+        self.input_ids = torch.cat((self.input_ids, token), dim=1)
+        text = self.runtime.tokenizer.decode([int(token_id)])
+        self.tokens = (*self.tokens, text)
+        return text
 
     def vocabulary_projection(
         self, hidden: tuple[float, ...], *, count: int = 10
@@ -238,6 +256,16 @@ class ModelExecution:
         self.ica_interventions.add(
             (token_position, layer_name, vector_name, component)
         )
+
+    def patch_vector(
+        self,
+        token_position: int,
+        layer_name: str,
+        vector_name: str,
+        vector: tuple[float, ...],
+    ) -> None:
+        """Replace one model-width vector at a computation boundary on replay."""
+        self.vector_patches[(token_position, layer_name, vector_name)] = vector
 
     def _prefill(self, position: int) -> None:
         """Run uncaptured prompt tokens into the cache before a target token."""
@@ -293,6 +321,7 @@ class ModelExecution:
         )
         return self._top_projected_components(
             layer_index, activation, down_projection,
+            source_site="post",
             output=output,
             residual=residual,
             component_count=neuron_count, token_count=token_count,
@@ -344,6 +373,7 @@ class ModelExecution:
             )
         return self._top_projected_components(
             layer_index, activation, projection,
+            source_site="mid",
             output=output,
             residual=residual,
             component_count=channel_count, token_count=token_count,
@@ -465,6 +495,7 @@ class ModelExecution:
         activation: tuple[float, ...],
         projection: Any,
         *,
+        source_site: str = "post",
         component_count: int,
         token_count: int,
         include_logit_lens: bool,
@@ -479,23 +510,20 @@ class ModelExecution:
         import torch
 
         unembedding = self.runtime.model.get_output_embeddings().weight
-        from llmdbg.j_lens import source_map as j_lens_map
-        from llmdbg.jpp_lens import source_map as jpp_lens_map
-        from llmdbg.r_lens import source_map as r_lens_map
-
         model_id = str(getattr(self.runtime.model.config, "_name_or_path", ""))
         hidden_size = int(projection.shape[1])
         j_lens_source = (
-            j_lens_map(model_id, layer_index, hidden_size) if include_j_lens else None
+            self._workspace_lens_source("j", model_id, source_site, layer_index, hidden_size)
+            if include_j_lens else None
         )
 
         r_lens_source = (
-            r_lens_map(model_id, layer_index, hidden_size)
+            self._workspace_lens_source("r", model_id, source_site, layer_index, hidden_size)
             if include_r_lens
             else None
         )
         jpp_lens_source = (
-            jpp_lens_map(model_id, layer_index, hidden_size)
+            self._workspace_lens_source("jpp", model_id, source_site, layer_index, hidden_size)
             if include_jpp_lens
             else None
         )
@@ -671,6 +699,8 @@ class ModelExecution:
         layer_name: str,
         vector: tuple[float, ...],
         *,
+        source_site: str = "post",
+        source_layer: int | None = None,
         token_count: int = 10,
         include_logit_lens: bool = True,
         include_j_lens: bool = False,
@@ -681,6 +711,8 @@ class ModelExecution:
         return self._vectors_lens(
             layer_name,
             (vector,),
+            source_site=source_site,
+            source_layer=source_layer,
             token_count=token_count,
             include_logit_lens=include_logit_lens,
             include_j_lens=include_j_lens,
@@ -693,6 +725,8 @@ class ModelExecution:
         layer_name: str,
         vectors: tuple[tuple[float, ...], ...],
         *,
+        source_site: str = "post",
+        source_layer: int | None = None,
         token_count: int,
         include_logit_lens: bool,
         include_j_lens: bool,
@@ -706,25 +740,23 @@ class ModelExecution:
 
         match = re.match(r"(?:transformer\.h|model\.layers)\.(\d+)(?:\.|$)", layer_name)
         layer_index = int(match.group(1)) if match is not None else None
+        if source_layer is None and source_site != "embed":
+            source_layer = layer_index
         model_id = str(getattr(self.runtime.model.config, "_name_or_path", ""))
         if not vectors:
             return ()
         hidden_size = len(vectors[0])
-        from llmdbg.j_lens import source_map as j_lens_map
-        from llmdbg.jpp_lens import source_map as jpp_lens_map
-        from llmdbg.r_lens import source_map as r_lens_map
-
         j_source = (
-            j_lens_map(model_id, layer_index, hidden_size)
-            if include_j_lens and layer_index is not None else None
+            self._workspace_lens_source("j", model_id, source_site, source_layer, hidden_size)
+            if include_j_lens else None
         )
         r_source = (
-            r_lens_map(model_id, layer_index, hidden_size)
-            if include_r_lens and layer_index is not None else None
+            self._workspace_lens_source("r", model_id, source_site, source_layer, hidden_size)
+            if include_r_lens else None
         )
         jpp_source = (
-            jpp_lens_map(model_id, layer_index, hidden_size)
-            if include_jpp_lens and layer_index is not None else None
+            self._workspace_lens_source("jpp", model_id, source_site, source_layer, hidden_size)
+            if include_jpp_lens else None
         )
         with _runtime_lock, torch.inference_mode():
             unembedding = self.runtime.model.get_output_embeddings().weight
@@ -794,12 +826,68 @@ class ModelExecution:
                 for index in range(len(vectors))
             )
 
+    def _workspace_lens_source(
+        self,
+        method: str,
+        model_id: str,
+        site: str,
+        layer: int | None,
+        hidden_size: int,
+    ) -> tuple[Any, dict[str, Any]] | None:
+        """Resolve v2 site-aware maps, then an explicitly Post-only legacy map."""
+        from llmdbg.workspace_lens import source_map as v2_source_map
+
+        model_revision = getattr(self.runtime.model.config, "_commit_hash", None)
+        tokenizer_revision = getattr(self.runtime.tokenizer, "_commit_hash", None)
+        if tokenizer_revision is None:
+            tokenizer_revision = getattr(self.runtime.tokenizer, "init_kwargs", {}).get(
+                "_commit_hash"
+            )
+        source = v2_source_map(
+            method, model_id, site, layer, hidden_size,
+            layer_count=len(self.runtime.layers),
+            model_revision=model_revision,
+            tokenizer_revision=tokenizer_revision,
+        )
+        if source is not None:
+            return source.matrix, source.metadata
+        # A repository-shaped local source is explicitly the site-aware v2
+        # protocol (index.json -> manifest.json -> safetensors). If the exact
+        # method/site is absent, report it as unavailable instead of treating
+        # the repository root as a legacy directory containing lens.pt.
+        from llmdbg.residual_vocabulary_lenses import active_lens
+
+        configured = active_lens(method)
+        if configured is not None:
+            configured_source = str(configured.get("source", "")).strip()
+            if configured_source.startswith("file://"):
+                configured_source = configured_source.removeprefix("file://")
+            if configured_source and not configured_source.startswith("hf://"):
+                configured_root = Path(configured_source).expanduser()
+                if (configured_root / "index.json").is_file():
+                    return None
+        if site != "post" or layer is None:
+            return None
+        if method == "j":
+            from llmdbg.j_lens import source_map as legacy_source_map
+        elif method == "r":
+            from llmdbg.r_lens import source_map as legacy_source_map
+        else:
+            from llmdbg.jpp_lens import source_map as legacy_source_map
+        legacy = legacy_source_map(model_id, layer, hidden_size)
+        if legacy is None:
+            return None
+        matrix, metadata = legacy
+        return matrix, {**metadata, "format_version": 1, "site": "post", "legacy": True}
+
     def ica_components(
         self,
         layer_name: str,
         vector: tuple[float, ...],
         *,
         is_delta: bool,
+        source_site: str = "post",
+        source_layer: int | None = None,
         component_count: int = 3,
         token_count: int = 10,
         include_logit_lens: bool = True,
@@ -807,6 +895,7 @@ class ModelExecution:
         include_r_lens: bool = False,
         include_jpp_lens: bool = False,
         include_indices: tuple[int, ...] = (),
+        vector_overrides: dict[int, tuple[float, ...]] | None = None,
     ) -> tuple[ICAProjection, ...]:
         """Project a vector through the published resid-post ICA basis."""
         import re
@@ -825,9 +914,16 @@ class ModelExecution:
             count=component_count,
             include_indices=include_indices,
         )
+        vector_overrides = vector_overrides or {}
+        lens_vectors = tuple(
+            vector_overrides.get(component["index"], component["vector"])
+            for component in components
+        )
         projections = self._vectors_lens(
             layer_name,
-            tuple(component["vector"] for component in components),
+            lens_vectors,
+            source_site=source_site,
+            source_layer=source_layer,
             token_count=token_count,
             include_logit_lens=include_logit_lens,
             include_j_lens=include_j_lens,
@@ -838,12 +934,14 @@ class ModelExecution:
             ICAProjection(
                 index=component["index"],
                 rank=component["rank"],
-                score=component["score"],
-                energy=component["energy"],
+                score=0.0 if component["index"] in vector_overrides else component["score"],
+                energy=0.0 if component["index"] in vector_overrides else component["energy"],
                 projection=projection,
-                vector=tuple(float(value) for value in component["vector"]),
+                vector=tuple(float(value) for value in lens_vector),
             )
-            for component, projection in zip(components, projections, strict=True)
+            for component, projection, lens_vector in zip(
+                components, projections, lens_vectors, strict=True
+            )
         )
 
 _runtime_lock = RLock()
@@ -1000,7 +1098,9 @@ def prepare_model_execution(
     model_name_or_path: str,
     *,
     revision: str = "main",
-    prompt: str,
+    prompt: str | None = None,
+    messages: list[dict[str, str]] | None = None,
+    add_generation_prompt: bool = True,
     device: str = "auto",
     dtype: str = "auto",
     progress: Callable[[str], None] | None = None,
@@ -1016,8 +1116,8 @@ def prepare_model_execution(
             "Reinstall the VS Code extension or install gb10-load-llm into its runtime."
         ) from error
 
-    if not prompt:
-        raise ValueError("prompt must not be empty")
+    if not prompt and not messages:
+        raise ValueError("prompt or chat messages must not be empty")
     report = progress or (lambda _message: None)
     requested_device, requested_dtype = device, dtype
     device, dtype = _resolve_device_and_dtype(device, dtype)
@@ -1038,13 +1138,50 @@ def prepare_model_execution(
                 "llmdbg supports GPT-2 and Qwen3.5 models, "
                 f"got {runtime.model.config.model_type!r}"
             )
-        encoded = runtime.tokenizer(prompt, return_tensors="pt")
-        input_ids = encoded["input_ids"]
+        if messages:
+            rendered_prompt = runtime.tokenizer.apply_chat_template(
+                messages, add_generation_prompt=add_generation_prompt, tokenize=False
+            )
+            input_ids = runtime.tokenizer.apply_chat_template(
+                messages,
+                add_generation_prompt=add_generation_prompt,
+                tokenize=True,
+                return_tensors="pt",
+            )
+        else:
+            rendered_prompt = str(prompt)
+            encoded = runtime.tokenizer(rendered_prompt, return_tensors="pt")
+            input_ids = encoded["input_ids"]
+        input_ids = _normalize_input_ids(input_ids, torch)
         tokens = tuple(
             runtime.tokenizer.decode([token_id]) for token_id in input_ids[0].tolist()
         )
     report(f"Prepared {len(tokens)} prompt tokens; forward execution is deferred.\n")
-    return ModelExecution(runtime, input_ids, tokens, device, report, dtype=dtype)
+    return ModelExecution(
+        runtime, input_ids, tokens, device, report,
+        dtype=dtype, rendered_prompt=rendered_prompt,
+    )
+
+
+def _normalize_input_ids(value: Any, torch: Any) -> Any:
+    """Normalize tokenizer/chat-template outputs to a batched integer tensor."""
+    if isinstance(value, dict):
+        value = value["input_ids"]
+    elif hasattr(value, "input_ids"):
+        value = value.input_ids
+    elif hasattr(value, "ids"):
+        value = value.ids
+    if not torch.is_tensor(value):
+        value = torch.tensor(value, dtype=torch.long)
+    else:
+        value = value.to(dtype=torch.long)
+    if value.ndim == 1:
+        value = value.unsqueeze(0)
+    if value.ndim != 2:
+        raise ValueError(
+            f"Tokenizer returned input IDs with shape {tuple(value.shape)}; expected one sequence"
+        )
+    return value
 
 
 def _capture_gpt2_token_trace(
@@ -1061,6 +1198,7 @@ def _capture_gpt2_token_trace(
     ica_observations: dict[
         tuple[int, str, str, int], tuple[tuple[float, ...], tuple[float, ...]]
     ],
+    vector_patches: dict[tuple[int, str, str], tuple[float, ...]],
 ) -> tuple[ModelTrace, Any]:
     """Capture all layer states for one token using an existing KV cache."""
     import torch
@@ -1070,6 +1208,20 @@ def _capture_gpt2_token_trace(
     captured: list[tuple[str, str, str, Any, bool]] = []
     detailed: dict[str, dict[str, Any]] = {}
     handles = []
+
+    def apply_vector_patch(tensor: Any, state_name: str, vector_name: str) -> Any:
+        replacement = vector_patches.get((token_position, state_name, vector_name))
+        if replacement is None:
+            return tensor
+        if len(replacement) != tensor.shape[-1]:
+            raise ValueError(
+                f"patch width {len(replacement)} does not match {state_name}.{vector_name} "
+                f"width {tensor.shape[-1]}"
+            )
+        tensor[..., -1, :].copy_(
+            torch.tensor(replacement, dtype=tensor.dtype, device=tensor.device)
+        )
+        return tensor
 
     def apply_interventions(tensor: Any, state_name: str, vector_name: str) -> Any:
         for (position, layer, vector, index), value in interventions.items():
@@ -1102,6 +1254,7 @@ def _capture_gpt2_token_trace(
     def capture(name: str, operation: str, meaning: str, apply_final_norm: bool):
         def hook(_module, _inputs, output) -> None:
             tensor = _tensor_from_output(output)
+            apply_vector_patch(tensor, name, "output")
             apply_interventions(tensor, name, "output")
             apply_ica_interventions(tensor, name, "output")
             captured.append((name, operation, meaning, tensor.detach(), apply_final_norm))
@@ -1111,6 +1264,7 @@ def _capture_gpt2_token_trace(
     def capture_input(name: str, operation: str, meaning: str):
         def hook(_module, inputs) -> None:
             hidden = inputs[0]
+            apply_vector_patch(hidden, name, "output")
             apply_interventions(hidden, name, "output")
             apply_ica_interventions(hidden, name, "output")
             captured.append((name, operation, meaning, hidden.detach(), True))
@@ -1120,6 +1274,7 @@ def _capture_gpt2_token_trace(
     def capture_detail(state_name: str, detail_name: str):
         def hook(_module, _inputs, output) -> None:
             tensor = _tensor_from_output(output)
+            apply_vector_patch(tensor, state_name, detail_name)
             apply_interventions(tensor, state_name, detail_name)
             detailed.setdefault(state_name, {})[detail_name] = tensor.detach()
 
@@ -1128,6 +1283,7 @@ def _capture_gpt2_token_trace(
     def capture_detail_input(state_name: str, detail_name: str):
         def hook(_module, inputs) -> None:
             tensor = inputs[0]
+            apply_vector_patch(tensor, state_name, detail_name)
             apply_interventions(tensor, state_name, detail_name)
             detailed.setdefault(state_name, {})[detail_name] = tensor.detach()
 
@@ -1147,6 +1303,7 @@ def _capture_gpt2_token_trace(
         attention_name = f"transformer.h.{index}.attention"
         mlp_name = f"transformer.h.{index}.mlp"
         def intervene_block_input(_module, inputs, name=attention_name):
+            apply_vector_patch(inputs[0], name, "input")
             apply_ica_interventions(inputs[0], name, "input")
         handles.append(block.register_forward_pre_hook(intervene_block_input))
         handles.append(
@@ -1281,6 +1438,7 @@ def _capture_qwen35_token_trace(
     ica_observations: dict[
         tuple[int, str, str, int], tuple[tuple[float, ...], tuple[float, ...]]
     ],
+    vector_patches: dict[tuple[int, str, str], tuple[float, ...]],
 ) -> tuple[ModelTrace, Any]:
     """Capture Qwen3.5 residual, hybrid-attention, and gated-MLP states."""
     import torch
@@ -1289,6 +1447,20 @@ def _capture_qwen35_token_trace(
     captured: list[tuple[str, str, str, Any, bool]] = []
     detailed: dict[str, dict[str, Any]] = {}
     handles = []
+
+    def apply_vector_patch(tensor: Any, state_name: str, vector_name: str) -> Any:
+        replacement = vector_patches.get((token_position, state_name, vector_name))
+        if replacement is None:
+            return tensor
+        if len(replacement) != tensor.shape[-1]:
+            raise ValueError(
+                f"patch width {len(replacement)} does not match {state_name}.{vector_name} "
+                f"width {tensor.shape[-1]}"
+            )
+        tensor[..., -1, :].copy_(
+            torch.tensor(replacement, dtype=tensor.dtype, device=tensor.device)
+        )
+        return tensor
 
     def apply_interventions(tensor: Any, state_name: str, vector_name: str) -> Any:
         for (position, layer, vector, index), value in interventions.items():
@@ -1321,6 +1493,7 @@ def _capture_qwen35_token_trace(
     def capture(name: str, operation: str, meaning: str, apply_final_norm: bool):
         def hook(_module, _inputs, output) -> None:
             tensor = _tensor_from_output(output)
+            apply_vector_patch(tensor, name, "output")
             apply_interventions(tensor, name, "output")
             apply_ica_interventions(tensor, name, "output")
             captured.append((name, operation, meaning, tensor.detach(), apply_final_norm))
@@ -1329,6 +1502,7 @@ def _capture_qwen35_token_trace(
     def capture_input(name: str, operation: str, meaning: str):
         def hook(_module, inputs) -> None:
             tensor = inputs[0]
+            apply_vector_patch(tensor, name, "output")
             apply_interventions(tensor, name, "output")
             apply_ica_interventions(tensor, name, "output")
             captured.append((name, operation, meaning, tensor.detach(), True))
@@ -1337,6 +1511,7 @@ def _capture_qwen35_token_trace(
     def capture_detail(state_name: str, detail_name: str):
         def hook(_module, _inputs, output) -> None:
             tensor = _tensor_from_output(output)
+            apply_vector_patch(tensor, state_name, detail_name)
             apply_interventions(tensor, state_name, detail_name)
             detailed.setdefault(state_name, {})[detail_name] = tensor.detach()
         return hook
@@ -1344,6 +1519,7 @@ def _capture_qwen35_token_trace(
     def capture_detail_input(state_name: str, detail_name: str):
         def hook(_module, inputs) -> None:
             tensor = inputs[0]
+            apply_vector_patch(tensor, state_name, detail_name)
             apply_interventions(tensor, state_name, detail_name)
             detailed.setdefault(state_name, {})[detail_name] = tensor.detach()
         return hook
@@ -1373,6 +1549,7 @@ def _capture_qwen35_token_trace(
         attention_name = runtime.state_name(index, attention_kind)
         mlp_name = runtime.state_name(index, "mlp")
         def intervene_block_input(_module, inputs, name=attention_name):
+            apply_vector_patch(inputs[0], name, "input")
             apply_ica_interventions(inputs[0], name, "input")
         handles.append(block.register_forward_pre_hook(intervene_block_input))
         handles.append(

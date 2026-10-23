@@ -6,6 +6,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+
+import torch
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "fit_jpp_lenses.py"
@@ -32,11 +35,12 @@ class FitJppLensesTest(unittest.TestCase):
                 "openai-community/gpt2",
                 "Qwen/Qwen3.5-0.8B",
                 "Qwen/Qwen3.5-2B",
+                "Qwen/Qwen3.5-2B-Base",
                 "Qwen/Qwen3.5-9B",
-                "Qwen/Qwen3.5-27B",
             },
         )
         self.assertTrue(self.module.PROFILES["gpt2"].gpt2_relp)
+        self.assertTrue(self.module.PROFILES["qwen9b"].official_only)
         self.assertTrue(
             all(
                 not profile.gpt2_relp
@@ -61,6 +65,28 @@ class FitJppLensesTest(unittest.TestCase):
         self.assertEqual(payload["target_layer"], 3)
         self.assertEqual(payload["lrp"]["mode"], "external-gpt2-relp")
         self.assertIn("not upstream", payload["lrp"]["note"])
+        self.assertEqual(payload["artifact_format"], 2)
+        self.assertIn("mid.L/post.L", payload["site_layout"])
+
+    def test_virtual_layer_indices_cover_embed_mid_and_post(self) -> None:
+        blocks = [
+            SimpleNamespace(post_attention_layernorm=torch.nn.Identity())
+            for _ in range(2)
+        ]
+        wrapped = SimpleNamespace(
+            _hf_model=SimpleNamespace(config=SimpleNamespace(model_type="qwen3_5")),
+            _embed_tokens=torch.nn.Identity(),
+            layers=blocks,
+            n_layers=2,
+        )
+
+        result, keys = self.module.make_site_aware(wrapped)
+
+        self.assertEqual(result.n_layers, 5)
+        self.assertEqual(
+            keys,
+            {0: "embed", 1: "mid.0", 2: "post.0", 3: "mid.1", 4: "post.1"},
+        )
 
 
 if __name__ == "__main__":

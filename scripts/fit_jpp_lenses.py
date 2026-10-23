@@ -55,15 +55,49 @@ class ModelProfile:
     model_id: str
     slug: str
     gpt2_relp: bool = False
+    official_only: bool = False
 
 
 PROFILES = {
     "gpt2": ModelProfile("openai-community/gpt2", "gpt2", True),
     "qwen0.8b": ModelProfile("Qwen/Qwen3.5-0.8B", "qwen3.5-0.8b"),
     "qwen2b": ModelProfile("Qwen/Qwen3.5-2B", "qwen3.5-2b"),
-    "qwen9b": ModelProfile("Qwen/Qwen3.5-9B", "qwen3.5-9b"),
-    "qwen27b": ModelProfile("Qwen/Qwen3.5-27B", "qwen3.5-27b"),
+    "qwen2b-base": ModelProfile("Qwen/Qwen3.5-2B-Base", "qwen3.5-2b-base"),
+    "qwen9b": ModelProfile("Qwen/Qwen3.5-9B", "qwen3.5-9b", official_only=True),
 }
+
+
+class _TappedNorm(torch.nn.Module):
+    """Expose the pre-norm Mid residual without changing forward values."""
+
+    def __init__(self, norm: torch.nn.Module) -> None:
+        super().__init__()
+        self.tap = torch.nn.Identity()
+        self.norm = norm
+
+    def forward(self, values: torch.Tensor) -> torch.Tensor:
+        return self.norm(self.tap(values))
+
+
+def make_site_aware(model: Any) -> tuple[Any, dict[int, str]]:
+    """Adapt a reference LensModel to ordered embed/Mid/Post virtual layers."""
+    architecture = str(getattr(model._hf_model.config, "model_type", ""))
+    site_modules: list[torch.nn.Module] = [model._embed_tokens]
+    site_keys = {0: "embed"}
+    for layer, block in enumerate(model.layers):
+        norm_name = "ln_2" if architecture == "gpt2" else "post_attention_layernorm"
+        wrapped = _TappedNorm(getattr(block, norm_name))
+        setattr(block, norm_name, wrapped)
+        mid_index = len(site_modules)
+        site_modules.append(wrapped.tap)
+        site_keys[mid_index] = f"mid.{layer}"
+        post_index = len(site_modules)
+        site_modules.append(block)
+        site_keys[post_index] = f"post.{layer}"
+    model.layers = site_modules
+    model.n_layers = len(site_modules)
+    model.site_keys = site_keys
+    return model, site_keys
 
 
 class _IdentityActivation(torch.autograd.Function):
@@ -146,7 +180,8 @@ def load_lens_model(model_id: str, *, gpt2_relp: bool) -> Any:
         if not torch.allclose(ordinary, patched, atol=1e-5, rtol=1e-4):
             delta = float((ordinary - patched).abs().max())
             raise RuntimeError(f"GPT-2 RelP rules changed forward values (max delta {delta:.3e})")
-    return jlens.from_hf(model, tokenizer)
+    wrapped = jlens.from_hf(model, tokenizer)
+    return make_site_aware(wrapped)[0]
 
 
 def load_reference_cli(root: Path) -> Any:
@@ -215,7 +250,8 @@ def model_layers(model_id: str) -> list[int]:
     count = int(getattr(text_config, "num_hidden_layers", getattr(text_config, "n_layer", 0)))
     if count < 2:
         raise RuntimeError(f"cannot determine transformer layer count for {model_id}")
-    return list(range(count - 1))
+    # embed + (Mid, Post) for every block; final Post is the transport target.
+    return list(range(2 * count))
 
 
 def fit_router_in_layer_batches(args: argparse.Namespace) -> int:
@@ -329,12 +365,15 @@ def write_manifest(path: Path, profile: ModelProfile, args: argparse.Namespace, 
         "profile": profile.slug,
         "source_layers": layers,
         "target_layer": max(layers) + 1,
+        "site_layout": "embed, then mid.L/post.L pairs; final post is target",
+        "artifact_format": 2,
         "reference_repo": REFERENCE_REPO,
         "reference_commit": REFERENCE_COMMIT,
         "router": {"clusters": args.num_clusters, "projection_dim": args.projection_dim},
         "fit": {
             "router_prompts": args.router_prompts,
             "expert_prompts": args.expert_prompts,
+            "skip_first_n_positions": args.skip_first,
             "fit_fraction": args.fit_fraction,
             "split_seed": args.seed,
         },
@@ -383,6 +422,7 @@ def orchestrate(profile: ModelProfile, args: argparse.Namespace) -> None:
                 "--projection-dim", str(args.projection_dim),
                 "--seed", str(args.seed),
                 "--layer-batch-size", str(args.router_layer_batch),
+                "--skip-first-n-positions", str(args.skip_first),
                 "--out", str(router),
             ],
             dry_run=args.dry_run,
@@ -400,6 +440,7 @@ def orchestrate(profile: ModelProfile, args: argparse.Namespace) -> None:
                     "--shard-idx", str(shard),
                     "--num-shards", str(args.num_shards),
                     "--num-prompts", str(args.expert_prompts),
+                    "--skip-first-n-positions", str(args.skip_first),
                     "--lrp-mode", "none" if profile.gpt2_relp else "rlens",
                     "--artifacts-base-dir", str(checkpoints_base),
                     "--checkpoint-name", checkpoint_name,
@@ -534,6 +575,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bootstrap-reference", action="store_true")
     parser.add_argument("--router-prompts", type=int, default=1000)
     parser.add_argument("--expert-prompts", type=int, default=64)
+    parser.add_argument("--skip-first", type=int, default=4)
     parser.add_argument("--num-clusters", type=int, default=8)
     parser.add_argument("--projection-dim", type=int, default=64)
     parser.add_argument("--router-layer-batch", type=int, default=2)
@@ -565,7 +607,7 @@ def internal_parser() -> argparse.ArgumentParser:
     router.add_argument("--projection-dim", type=int, default=64)
     router.add_argument("--seed", type=int, default=0)
     router.add_argument("--layer-batch-size", type=int, default=2)
-    router.add_argument("--skip-first-n-positions", type=int, default=16)
+    router.add_argument("--skip-first-n-positions", type=int, default=4)
     router.add_argument("--max-seq-len", type=int, default=128)
     router.add_argument("--out", type=Path, required=True)
     return parser
@@ -588,9 +630,14 @@ def main() -> int:
     if head != REFERENCE_COMMIT:
         raise SystemExit(f"reference checkout is {head}, expected pinned {REFERENCE_COMMIT}")
     selected = list(PROFILES.values()) if args.model == "all" else [PROFILES[args.model]]
-    if args.stage == "compare" and args.model != "qwen9b":
-        raise SystemExit("--stage compare requires --model qwen9b")
     for profile in selected:
+        if profile.official_only:
+            print(
+                f"Skipping {profile.model_id}: use the pinned official Post-only J++ artifact; "
+                "Mid and Embed remain unavailable.",
+                flush=True,
+            )
+            continue
         orchestrate(profile, args)
     return 0
 

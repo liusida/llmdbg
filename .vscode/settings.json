@@ -1,6 +1,5 @@
 {
   "files.exclude": {},
-  "llmdbg.jppLensPath": "${workspaceFolder}/build/jpp_lens/qwen3.5-2b/lens.pt",
   "search.exclude": {
     "**/__pycache__": true,
     ".pytest_cache": true,

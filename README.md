@@ -63,6 +63,15 @@ Command Palette. It creates examples for GPT-2 and every supported Qwen3.5
 size (0.8B, 2B, 9B, and 27B), plus matching `.vscode/launch.json` entries,
 while leaving any existing files untouched.
 
+Qwen3.5 2B has separate Base and Chat starters. The Base starter tokenizes raw
+text. The Chat starter passes literal `messages` through the checkpoint's own
+chat template with `model.chat(messages, add_generation_prompt=True)` and pins
+the model revision used by its UltraChat ICA artifact.
+Set `max_new_tokens` on `model.chat(...)` to continue greedily generating after
+the prompt. Each generated token enters the same token-by-token, layer-by-layer
+debug loop, so stepping proceeds through its complete forward pass before the
+next token is selected. Generation stops at EOS or at the configured limit.
+
 The compound suffix is intentional: VS Code recognizes it as **llmdbg Python**,
 so F5 starts llmdbg rather than the ordinary Python debugger, while the editor
 still uses Python syntax highlighting.
@@ -259,11 +268,15 @@ layer, and excludes tokens without letters or digits from its ranking. The
 Hugging Face.
 
 Its block selector supports multiple checked sections. GPT-2 Small and
-Qwen3.5 2B/9B additionally expose ICA decompositions of residual Pre/Mid/Post
+Qwen3.5 2B Base, 2B Chat, and 9B additionally expose ICA decompositions of residual Pre/Mid/Post
 and the attention/MLP updates. They show the top three absolute component
 scores and reuse the selected Logit/J/R readout. These projections use the
 published per-layer `resid_post` bases; module updates omit the fitted center
 because they are displacement vectors.
+The 2B Base checkpoint uses the Pile-fitted base ICA artifact, while the 2B
+Chat checkpoint uses the UltraChat-fitted instruct artifact. J-Lens and R-Lens
+may continue to use their explicitly validated base-to-instruct transfer until
+chat-specific artifacts are fitted.
 
 These implementations follow the methods introduced in:
 

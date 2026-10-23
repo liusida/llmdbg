@@ -7,6 +7,38 @@ import llmdbg.model_runtime as model_runtime
 
 
 class ModelRuntimeCacheTest(unittest.TestCase):
+    def test_tokenizers_encoding_ids_are_normalized_to_batched_tensor(self) -> None:
+        import torch
+
+        class Encoding:
+            ids = [10, 11, 12]
+
+        input_ids = model_runtime._normalize_input_ids(Encoding(), torch)
+
+        self.assertEqual(input_ids.dtype, torch.long)
+        self.assertEqual(input_ids.tolist(), [[10, 11, 12]])
+
+    def test_append_generated_token_extends_debug_sequence(self) -> None:
+        import torch
+        from types import SimpleNamespace
+
+        execution = model_runtime.ModelExecution(
+            runtime=model_runtime.ModelRuntime(
+                model=SimpleNamespace(),
+                tokenizer=SimpleNamespace(decode=lambda ids: f"token-{ids[0]}"),
+            ),
+            input_ids=torch.tensor([[10, 11]], dtype=torch.long),
+            tokens=("a", "b"),
+            device="cpu",
+            progress=lambda _message: None,
+        )
+
+        text = execution.append_generated_token(12)
+
+        self.assertEqual(text, "token-12")
+        self.assertEqual(execution.input_ids.tolist(), [[10, 11, 12]])
+        self.assertEqual(execution.tokens, ("a", "b", "token-12"))
+
     def test_auto_device_prefers_cuda_and_selects_supported_dtype(self) -> None:
         import torch
 
@@ -103,6 +135,45 @@ class ModelRuntimeCacheTest(unittest.TestCase):
         )
         self.assertEqual([item.index for item in result], [0, 1])
         self.assertEqual(result[1].activation, 0.0)
+
+    def test_removed_ica_component_uses_frozen_vector_for_readout(self) -> None:
+        from types import SimpleNamespace
+
+        execution = model_runtime.ModelExecution(
+            runtime=model_runtime.ModelRuntime(
+                model=SimpleNamespace(config=SimpleNamespace(_name_or_path="fake/model")),
+                tokenizer=None,
+            ),
+            input_ids=None,
+            tokens=("x",),
+            device="cpu",
+            progress=lambda _message: None,
+        )
+        seen_vectors = []
+        execution._vectors_lens = lambda _layer, vectors, **_kwargs: (
+            seen_vectors.extend(vectors)
+            or tuple(
+                model_runtime.VectorProjection(norm=1.0, vocabulary=())
+                for _vector in vectors
+            )
+        )
+        current = {
+            "index": 7, "rank": 4, "score": 1e-6, "energy": 1e-12,
+            "vector": (1e-6, 0.0),
+        }
+        with mock.patch("llmdbg.ica_lens.top_components", return_value=(current,)):
+            result = execution.ica_components(
+                "model.layers.2.full_attention",
+                (1.0, 2.0),
+                is_delta=False,
+                include_indices=(7,),
+                vector_overrides={7: (3.0, 4.0)},
+            )
+
+        self.assertEqual(seen_vectors, [(3.0, 4.0)])
+        self.assertEqual(result[0].vector, (3.0, 4.0))
+        self.assertEqual(result[0].score, 0.0)
+        self.assertEqual(result[0].energy, 0.0)
 
     def test_component_fan_uses_top_component_as_unit_and_projects_full_output(self) -> None:
         import torch

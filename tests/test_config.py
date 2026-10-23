@@ -8,6 +8,34 @@ from llmdbg.config import load_debug_config
 
 
 class DebugConfigTest(unittest.TestCase):
+    def test_loads_qwen35_chat_program(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "Qwen35-2B-Chat.llmdbg.py"
+            source.write_text(
+                '''from llmdbg import debug, qwen35
+model = qwen35("Qwen/Qwen3.5-2B", revision="pinned")
+messages = [
+    {"role": "system", "content": "Be concise."},
+    {"role": "user", "content": "Hello"},
+]
+tokens = model.chat(messages, add_generation_prompt=True, max_new_tokens=12)
+with debug(model, tokens):
+    x = model.token_embedding(tokens)
+''',
+                encoding="utf-8",
+            )
+            config = load_debug_config(str(source))
+
+        self.assertEqual(config["model"], "Qwen/Qwen3.5-2B")
+        self.assertEqual(config["revision"], "pinned")
+        self.assertEqual(config["messages"], [
+            {"role": "system", "content": "Be concise."},
+            {"role": "user", "content": "Hello"},
+        ])
+        self.assertTrue(config["addGenerationPrompt"])
+        self.assertEqual(config["maxNewTokens"], 12)
+        self.assertEqual(config["prompt"], "")
+
     def test_loads_qwen35_hybrid_python_program(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "Qwen35-0.8B.llmdbg.py"

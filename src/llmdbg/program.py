@@ -14,6 +14,13 @@ class Prompt:
     text: str
 
 
+@dataclass(frozen=True)
+class ChatPrompt:
+    messages: tuple[dict[str, str], ...]
+    add_generation_prompt: bool = True
+    max_new_tokens: int = 20
+
+
 class TensorHandle(Sequence[float]):
     """A list-like handle to a vector owned by the model runtime."""
 
@@ -124,6 +131,19 @@ class RemoteModel:
     def tokenize(self, prompt: str) -> Prompt:
         return Prompt(prompt)
 
+    def chat(
+        self,
+        messages: Sequence[dict[str, str]],
+        *,
+        add_generation_prompt: bool = True,
+        max_new_tokens: int = 20,
+    ) -> ChatPrompt:
+        return ChatPrompt(
+            tuple(dict(message) for message in messages),
+            add_generation_prompt,
+            max_new_tokens,
+        )
+
     @property
     def layers(self) -> tuple[LayerHandle, ...]:
         session = self._require_session()
@@ -151,7 +171,7 @@ class RemoteModel:
 
 
 class DebugSession:
-    def __init__(self, model: RemoteModel, tokens: Prompt, token: int | None):
+    def __init__(self, model: RemoteModel, tokens: Prompt | ChatPrompt, token: int | None):
         self.model, self.prompt = model, tokens
         self.token = 0 if token is None else token
         self.execution: ModelExecution | None = None
@@ -159,7 +179,11 @@ class DebugSession:
 
     def __enter__(self) -> "DebugSession":
         self.execution = prepare_model_execution(
-            self.model.model, revision=self.model.revision, prompt=self.prompt.text,
+            self.model.model,
+            revision=self.model.revision,
+            prompt=self.prompt.text if isinstance(self.prompt, Prompt) else None,
+            messages=(list(self.prompt.messages) if isinstance(self.prompt, ChatPrompt) else None),
+            add_generation_prompt=(self.prompt.add_generation_prompt if isinstance(self.prompt, ChatPrompt) else True),
             device=self.model.device, dtype=self.model.dtype,
         )
         self.model._session = self
@@ -253,7 +277,7 @@ def qwen35(
 
 
 def debug(
-    model: RemoteModel, tokens: Prompt, *, token: int | None = None
+    model: RemoteModel, tokens: Prompt | ChatPrompt, *, token: int | None = None
 ) -> DebugSession:
     return DebugSession(model, tokens, token)
 

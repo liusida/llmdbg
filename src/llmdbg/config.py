@@ -208,6 +208,9 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     model_call: ast.Call | None = None
     prompt: str | None = None
+    messages: list[dict[str, str]] | None = None
+    add_generation_prompt = True
+    max_new_tokens = 0
     token: int | None = None
     stop_on_entry = False
     functions: dict[str, dict[str, int]] = {}
@@ -221,7 +224,7 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
             if isinstance(target, ast.Name):
                 if target.id == "model" and isinstance(statement.value, ast.Call):
                     model_call = statement.value
-                elif target.id in {"prompt", "token", "stop_on_entry"}:
+                elif target.id in {"prompt", "messages", "token", "stop_on_entry"}:
                     globals_[target.id] = _literal(statement.value, target.id)
         elif isinstance(statement, ast.FunctionDef) and statement.name in _FUNCTION_OPERATIONS:
             operations: dict[str, int] = {}
@@ -290,6 +293,35 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
                         if "prompt" in globals_
                         else _literal(value, "prompt")
                     )
+                elif node.func.attr == "chat" and node.args:
+                    value = (
+                        globals_[node.args[0].id]
+                        if isinstance(node.args[0], ast.Name) and node.args[0].id in globals_
+                        else _literal(node.args[0], "messages")
+                    )
+                    if not isinstance(value, list) or not value:
+                        raise ValueError("messages must be a non-empty list")
+                    for message in value:
+                        if (
+                            not isinstance(message, dict)
+                            or message.get("role") not in {"system", "user", "assistant"}
+                            or not isinstance(message.get("content"), str)
+                        ):
+                            raise ValueError(
+                                "each message must contain a supported role and string content"
+                            )
+                    messages = value
+                    for keyword in node.keywords:
+                        if keyword.arg == "add_generation_prompt":
+                            add_generation_prompt = bool(
+                                _literal(keyword.value, "add_generation_prompt")
+                            )
+                        elif keyword.arg == "max_new_tokens":
+                            max_new_tokens = int(
+                                _literal(keyword.value, "max_new_tokens")
+                            )
+                            if max_new_tokens < 0:
+                                raise ValueError("max_new_tokens must be non-negative")
                 elif node.func.attr in {
                     "token_embedding", "final_layernorm", "vocabulary_projection",
                     "top_tokens",
@@ -308,10 +340,10 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
     keywords = {keyword.arg: _literal(keyword.value, keyword.arg or "argument") for keyword in model_call.keywords}
     if not isinstance(model, str) or not model:
         raise ValueError("gpt2 model id must be a non-empty string")
-    if prompt is None:
+    if prompt is None and messages is None:
         prompt = globals_.get("prompt")
-    if not isinstance(prompt, str) or not prompt:
-        raise ValueError("Python llmdbg program must tokenize a non-empty prompt")
+    if messages is None and (not isinstance(prompt, str) or not prompt):
+        raise ValueError("Python llmdbg program must tokenize a prompt or chat messages")
     for name, variants in _FUNCTION_VARIANTS.items():
         if name in functions and tuple(functions[name]) not in variants:
             expected = " or ".join(", ".join(variant) for variant in variants)
@@ -325,7 +357,10 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
         "configPath": str(path), "model": model,
         "revision": keywords.get("revision", "main"),
         "device": keywords.get("device", "auto"), "dtype": keywords.get("dtype", "auto"),
-        "prompt": prompt, "defaultToken": token if token is not None else globals_.get("token"),
+        "prompt": prompt or "", "messages": messages,
+        "addGenerationPrompt": add_generation_prompt,
+        "maxNewTokens": max_new_tokens,
+        "defaultToken": token if token is not None else globals_.get("token"),
         "stopOnEntry": globals_.get("stop_on_entry", stop_on_entry),
         "pythonProgram": True, "callLines": call_lines, "functions": functions,
         "functionBindings": function_bindings, "modelKind": model_kind,

@@ -73,20 +73,21 @@ def _hub_entry(index: dict[str, Any], model_id: str) -> dict[str, Any] | None:
 
 
 def _download_from_hub(model_id: str) -> dict[str, Any] | None:
-    from huggingface_hub import hf_hub_download
     from safetensors.torch import load_file
 
-    download = {
-        "repo_id": HUB_REPO_ID,
-        "repo_type": HUB_REPO_TYPE,
-        "library_name": "llmdbg",
-    }
-    index_path = Path(hf_hub_download(filename="index.json", **download))
-    entry = _hub_entry(json.loads(index_path.read_text()), model_id)
+    from llmdbg.residual_vocabulary_lenses import active_lens, source_file
+
+    configured = active_lens("r")
+    source = configured or {"source": f"hf://{HUB_REPO_TYPE}s/{HUB_REPO_ID}"}
+    index_path = source_file(source, "index.json")
+    index = json.loads(index_path.read_text())
+    section = str(configured.get("indexSection", "r_lenses")) if configured else "r_lenses"
+    entry = next((item for item in index.get(section, []) if model_id == item.get("model_id") or model_id in item.get("compatible_models", [])), None)
     if entry is None:
         return None
     if entry.get("source_repo_id"):
         import torch
+        from huggingface_hub import hf_hub_download
 
         lens_path = Path(
             hf_hub_download(
@@ -126,9 +127,7 @@ def _download_from_hub(model_id: str) -> dict[str, Any] | None:
         artifact["_transfer"] = transfer
         return artifact
     directory = str(entry["path"]).strip("/")
-    manifest_path = Path(
-        hf_hub_download(filename=f"{directory}/manifest.json", **download)
-    )
+    manifest_path = source_file(source, f"{directory}/manifest.json")
     manifest = json.loads(manifest_path.read_text())
     source_model = str(manifest.get("model_id", ""))
     compatible, transfer = _compatible(source_model, model_id)
@@ -138,9 +137,7 @@ def _download_from_hub(model_id: str) -> dict[str, Any] | None:
         raise ValueError(
             f"R-Lens manifest model {source_model!r} is incompatible with {model_id!r}"
         )
-    lens_path = Path(
-        hf_hub_download(filename=f"{directory}/{manifest['artifact']}", **download)
-    )
+    lens_path = source_file(source, f"{directory}/{manifest['artifact']}")
     digest = _sha256(lens_path)
     if digest != manifest.get("sha256"):
         raise ValueError(
@@ -167,12 +164,21 @@ _artifact_cache: dict[str, dict[str, Any]] = {}
 
 def load_r_lens(model_id: str) -> dict[str, Any] | None:
     """Load a compatible artifact, caching successes but retrying prior misses."""
-    if model_id in _artifact_cache:
-        return _artifact_cache[model_id]
-    for path in _local_candidates(model_id):
+    from llmdbg.residual_vocabulary_lenses import active_lens
+
+    configured = active_lens("r")
+    cache_key = f"{configured.get('id', 'default') if configured else 'default'}:{model_id}"
+    if cache_key in _artifact_cache:
+        return _artifact_cache[cache_key]
+    local_candidates = (
+        _local_candidates(model_id)
+        if configured is None or configured.get("id") == "r"
+        else ()
+    )
+    for path in local_candidates:
         if path.is_file():
             artifact = _load_local(path, model_id)
-            _artifact_cache[model_id] = artifact
+            _artifact_cache[cache_key] = artifact
             return artifact
     try:
         artifact = _download_from_hub(model_id)
@@ -180,7 +186,7 @@ def load_r_lens(model_id: str) -> dict[str, Any] | None:
         # This exception is not cached, so Refresh can retry a transient failure.
         raise RuntimeError(f"Could not download R-Lens data from the Hub: {error}") from error
     if artifact is not None:
-        _artifact_cache[model_id] = artifact
+        _artifact_cache[cache_key] = artifact
     return artifact
 
 

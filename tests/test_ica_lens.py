@@ -12,6 +12,10 @@ class ICALensTest(unittest.TestCase):
     def test_supported_model_aliases_resolve_to_published_artifacts(self) -> None:
         self.assertEqual(
             ica_lens.artifact_repository("Qwen/Qwen3.5-2B"),
+            "sida/icalens-qwen3.5-2b-ultrachat-1m",
+        )
+        self.assertEqual(
+            ica_lens.artifact_repository("Qwen/Qwen3.5-2B-Base"),
             "sida/icalens-qwen3.5-2b-base-pile10k",
         )
         self.assertEqual(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -38,6 +39,18 @@ class JppLensArtifactTest(unittest.TestCase):
             self.assertEqual(configured_display_name("Qwen/Qwen3.5-2B"), "Local J++ Lens")
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(configured_display_name("Qwen/Qwen3.5-9B"), "Official J++ Lens")
+
+    def test_site_aware_repository_uses_configured_label_without_lens_pt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "index.json").write_text('{"workspace_lenses": []}')
+            configured = [{
+                "id": "jpp", "label": "J++ Lens", "method": "jpp",
+                "source": directory, "indexSection": "workspace_lenses",
+            }]
+            with patch.dict(os.environ, {
+                "LLMDBG_RESIDUAL_TO_VOCABULARY_LENSES": json.dumps(configured),
+            }, clear=True):
+                self.assertEqual(configured_display_name("Qwen/Test"), "J++ Lens")
 
     def test_loads_model_matched_local_2b_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

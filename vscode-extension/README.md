@@ -57,13 +57,28 @@ records the model, prompt, location, change, and result.
 | --- | :---: | :---: |
 | GPT-2 Small | ✓ | ✓ |
 | Qwen3.5 0.8B | ✓ | — |
-| Qwen3.5 2B | ✓ | ✓ |
+| Qwen3.5 2B Base | ✓ | ✓ |
+| Qwen3.5 2B Chat | ✓ | ✓ |
 | Qwen3.5 9B | ✓ | ✓ |
 | Qwen3.5 27B | ✓ | — |
 
 J-Lens and R-Lens are available when an artifact exists for the selected model.
 The official J++ Lens is available for Qwen3.5 9B.
 Lens files are downloaded on first use and cached locally.
+
+## Residual-to-Vocabulary Lens sources
+
+The `llmdbg.jLensSource`, `llmdbg.rLensSource`, and `llmdbg.jppLensSource`
+settings expose the standard J-Lens, R-Lens, and J++ Lens artifact repositories
+as ordinary editable text fields. Each source may be a Hugging Face repository
+URL or a local folder containing the same `index.json`, manifests, and artifact
+layout.
+Run **llmdbg: Manage Custom Residual-to-Vocabulary Lenses** to add, edit,
+enable, disable, or remove other compatible lenses. Official J++ is included
+as a custom Lens by default, so it can be managed in exactly the same way as
+any user-added Lens. The Lens selector only shows entries available for the
+active model. Logit Lens is built in, and ICA Lens remains separately
+configured and displayed.
 
 ## Methods
 
@@ -78,7 +93,8 @@ Lens files are downloaded on first use and cached locally.
 ICA bases:
 
 - [GPT-2 Small](https://huggingface.co/sida/icalens-gpt2-small-pile10k)
-- [Qwen3.5 2B](https://huggingface.co/sida/icalens-qwen3.5-2b-base-pile10k)
+- [Qwen3.5 2B Base](https://huggingface.co/sida/icalens-qwen3.5-2b-base-pile10k)
+- [Qwen3.5 2B Chat](https://huggingface.co/sida/icalens-qwen3.5-2b-ultrachat-1m)
 - [Qwen3.5 9B](https://huggingface.co/sida/icalens-qwen3.5-9b-base-pile10k)
 
 ## Links

@@ -2,7 +2,7 @@
   "name": "llmdbg",
   "displayName": "llmdbg",
   "description": "Step through LLM layers and inspect human-readable internal representations.",
-  "version": "0.0.172",
+  "version": "0.0.208",
   "publisher": "SidaLiu",
   "icon": "assets/icon.png",
   "license": "MIT",
@@ -28,6 +28,7 @@
     "LICENSE",
     "README.md",
     "package.json",
+    "language-configuration/**",
     "syntaxes/**"
   ],
   "contributes": {
@@ -64,6 +65,14 @@
         }
       },
       {
+        "command": "llmdbg.showPromptTokens",
+        "title": "Prompt and Tokens",
+        "icon": {
+          "light": "assets/prompt-light.svg",
+          "dark": "assets/prompt-dark.svg"
+        }
+      },
+      {
         "command": "llmdbg.unloadModel",
         "title": "llmdbg: Unload Model",
         "icon": "$(trash)"
@@ -72,6 +81,11 @@
         "command": "llmdbg.showModelStatus",
         "title": "llmdbg: Show Model Status",
         "icon": "$(info)"
+      },
+      {
+        "command": "llmdbg.manageResidualToVocabularyLenses",
+        "title": "llmdbg: Manage Custom Residual-to-Vocabulary Lenses",
+        "icon": "$(settings-gear)"
       }
     ],
     "menus": {
@@ -85,6 +99,11 @@
           "command": "llmdbg.plotCurrentVector",
           "when": "debugType == llmdbg",
           "group": "llmdbg@2"
+        },
+        {
+          "command": "llmdbg.showPromptTokens",
+          "when": "debugType == llmdbg",
+          "group": "llmdbg@3"
         }
       ]
     },
@@ -107,7 +126,8 @@
         ],
         "extensions": [
           ".llmdbg.py"
-        ]
+        ],
+        "configuration": "./language-configuration/llmdbg-python.json"
       }
     ],
     "grammars": [
@@ -212,9 +232,10 @@
         ]
       }
     ],
-    "configuration": {
-      "title": "llmdbg",
-      "properties": {
+    "configuration": [
+      {
+        "title": "llmdbg: General",
+        "properties": {
         "llmdbg.bootstrapPythonPath": {
           "type": "string",
           "default": "",
@@ -241,12 +262,54 @@
           "type": "string",
           "default": "",
           "description": "Development-only source directory containing the llmdbg Python package. Published use defaults to the bundled adapter."
-        },
-        "llmdbg.jppLensPath": {
+        }
+        }
+      },
+      {
+        "title": "llmdbg: Lens URLs",
+        "properties": {
+        "llmdbg.jLensSource": {
           "type": "string",
-          "default": "",
-          "description": "Optional local J++ Lens .pt artifact. The artifact's embedded model ID must match the debugged model."
+          "default": "hf://datasets/sida/llmdbg",
+          "markdownDescription": "Artifact repository for the built-in **J-Lens** entry. Use a local repository folder, `hf://datasets/owner/repository`, or `hf://models/owner/repository`. Clear this field to disable J-Lens."
         },
+        "llmdbg.rLensSource": {
+          "type": "string",
+          "default": "hf://datasets/sida/llmdbg",
+          "markdownDescription": "Artifact repository for the built-in **R-Lens** entry. Use a local repository folder, `hf://datasets/owner/repository`, or `hf://models/owner/repository`. Clear this field to disable R-Lens."
+        },
+        "llmdbg.jppLensSource": {
+          "type": "string",
+          "default": "hf://datasets/sida/llmdbg",
+          "markdownDescription": "Artifact repository for the standard **J++ Lens** entry. Use a local repository folder, `hf://datasets/owner/repository`, or `hf://models/owner/repository`. Clear this field to disable this J++ source."
+        },
+        "llmdbg.customResidualToVocabularyLenses": {
+          "type": "array",
+          "markdownDescription": "Additional **Residual-to-Vocabulary Lenses**, separate from the standard J, R, and J++ sources above. Use the command [Manage Custom Residual-to-Vocabulary Lenses](command:llmdbg.manageResidualToVocabularyLenses) to add, edit, enable, disable, or remove entries. Official J++ is included here for Qwen3.5 9B because llmdbg does not fit that artifact locally.",
+          "default": [
+            { "id": "jpp-official", "label": "Official J++ Lens", "method": "jpp", "source": "hf://models/koayon/jpp-lenses", "revision": "237dab6ea0e611d964bf407f13ba1655f1a6ae43", "path": "qwen3.5-9b/lens.pt", "models": ["Qwen/Qwen3.5-9B"], "enabled": true }
+          ],
+          "items": {
+            "type": "object",
+            "required": ["id", "label", "method", "source"],
+            "properties": {
+              "id": { "type": "string", "description": "Unique selector and cache ID." },
+              "label": { "type": "string", "description": "Label shown in the Lens selector." },
+              "method": { "type": "string", "enum": ["j", "r", "jpp"], "description": "Artifact/readout implementation." },
+              "source": { "type": "string", "description": "Local repository folder or Hugging Face source such as hf://datasets/sida/llmdbg." },
+              "indexSection": { "type": "string", "description": "Index section for an indexed repository." },
+              "revision": { "type": "string", "description": "Optional pinned repository revision." },
+              "path": { "type": "string", "description": "Optional artifact path inside the repository." },
+              "models": { "type": "array", "items": { "type": "string" }, "description": "Optional compatible model IDs. Use * for all models; artifacts are still validated." },
+              "enabled": { "type": "boolean", "default": true }
+            }
+          }
+        }
+        }
+      },
+      {
+        "title": "llmdbg: Interface",
+        "properties": {
         "llmdbg.lensTheme": {
           "type": "string",
           "enum": [
@@ -265,8 +328,9 @@
           "default": true,
           "description": "Automatically reload the VS Code window when a newly installed llmdbg extension version is detected."
         }
+        }
       }
-    }
+    ]
   },
   "scripts": {
     "stage-adapter": "node ./scripts/stage-adapter.js",

@@ -9,7 +9,7 @@ from typing import Any
 _ARTIFACTS = {
     "openai-community/gpt2": "sida/icalens-gpt2-small-pile10k",
     "gpt2": "sida/icalens-gpt2-small-pile10k",
-    "qwen/qwen3.5-2b": "sida/icalens-qwen3.5-2b-base-pile10k",
+    "qwen/qwen3.5-2b": "sida/icalens-qwen3.5-2b-ultrachat-1m",
     "qwen/qwen3.5-2b-base": "sida/icalens-qwen3.5-2b-base-pile10k",
     "qwen/qwen3.5-9b": "sida/icalens-qwen3.5-9b-base-pile10k",
     "qwen/qwen3.5-9b-base": "sida/icalens-qwen3.5-9b-base-pile10k",
