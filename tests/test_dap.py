@@ -33,6 +33,12 @@ def parse_frames(data: bytes) -> list[dict[str, object]]:
 
 
 class DAPIntegrationTest(unittest.TestCase):
+    def test_lens_before_first_breakpoint_has_a_clear_error(self) -> None:
+        adapter = object.__new__(LLMDebugAdapter)
+        adapter.trace = ()
+        with self.assertRaisesRegex(ValueError, "first breakpoint"):
+            adapter._neuron_lens_snapshot("residual-pre")
+
     def test_repeatable_nops_are_inserted_in_authored_execution_order(self) -> None:
         adapter = object.__new__(LLMDebugAdapter)
         adapter.execution = SimpleNamespace(

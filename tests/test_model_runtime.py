@@ -44,12 +44,37 @@ class ModelRuntimeCacheTest(unittest.TestCase):
 
         with (
             mock.patch.object(torch.cuda, "is_available", return_value=True),
-            mock.patch.object(torch.cuda, "is_bf16_supported", return_value=False),
+            mock.patch.object(torch.cuda, "is_bf16_supported", return_value=True),
+            mock.patch.object(torch.cuda, "get_device_capability", return_value=(6, 1)),
         ):
             self.assertEqual(
                 model_runtime._resolve_device_and_dtype("auto", "auto"),
                 ("cuda", "float16"),
             )
+
+    def test_auto_dtype_uses_bfloat16_only_on_ampere_or_newer(self) -> None:
+        import torch
+
+        with (
+            mock.patch.object(torch.cuda, "is_available", return_value=True),
+            mock.patch.object(torch.cuda, "is_bf16_supported", return_value=True),
+            mock.patch.object(torch.cuda, "get_device_capability", return_value=(8, 0)),
+        ):
+            self.assertEqual(
+                model_runtime._resolve_device_and_dtype("auto", "auto"),
+                ("cuda", "bfloat16"),
+            )
+
+    def test_explicit_bfloat16_rejects_pascal_gpu(self) -> None:
+        import torch
+
+        with (
+            mock.patch.object(torch.cuda, "is_available", return_value=True),
+            mock.patch.object(torch.cuda, "is_bf16_supported", return_value=True),
+            mock.patch.object(torch.cuda, "get_device_capability", return_value=(6, 1)),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "compute capability 6.1"):
+                model_runtime._resolve_device_and_dtype("cuda", "bfloat16")
 
     def test_auto_device_uses_mps_then_cpu(self) -> None:
         import torch

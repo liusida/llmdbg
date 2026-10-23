@@ -149,6 +149,9 @@ class ModelExecution:
         key = (vocabulary_size, str(device))
         mask = self.semantic_token_masks.get(key)
         if mask is None:
+            self.progress(
+                f"Building the J++ semantic filter for {vocabulary_size} vocabulary tokens...\n"
+            )
             mask = torch.tensor(
                 [
                     any(
@@ -161,6 +164,7 @@ class ModelExecution:
                 device=device,
             )
             self.semantic_token_masks[key] = mask
+            self.progress("Built the J++ semantic vocabulary filter.\n")
         return mask
 
     @property
@@ -173,7 +177,11 @@ class ModelExecution:
             raise ValueError(
                 f"token position {position} is outside the prompt range 0..{self.token_count - 1}"
             )
+        self.progress(
+            f"Preparing token {position}; waiting for exclusive access to the resident model.\n"
+        )
         with _runtime_lock:
+            self.progress(f"Resident model lock acquired for token {position}.\n")
             if position <= self.cached_through:
                 self.progress(f"Resetting KV cache before token {position}.\n")
                 self.past_key_values = None
@@ -848,6 +856,7 @@ class ModelExecution:
             layer_count=len(self.runtime.layers),
             model_revision=model_revision,
             tokenizer_revision=tokenizer_revision,
+            progress=self.progress,
         )
         if source is not None:
             return source.matrix, source.metadata
@@ -874,10 +883,18 @@ class ModelExecution:
             from llmdbg.r_lens import source_map as legacy_source_map
         else:
             from llmdbg.jpp_lens import source_map as legacy_source_map
+        self.progress(
+            f"Resolving legacy Post-only {method.upper()} Lens for layer {layer}; "
+            "uncached files may be downloaded and loaded.\n"
+        )
         legacy = legacy_source_map(model_id, layer, hidden_size)
         if legacy is None:
+            self.progress(
+                f"Legacy Post-only {method.upper()} Lens is unavailable for layer {layer}.\n"
+            )
             return None
         matrix, metadata = legacy
+        self.progress(f"Loaded legacy Post-only {method.upper()} Lens for layer {layer}.\n")
         return matrix, {**metadata, "format_version": 1, "site": "post", "legacy": True}
 
     def ica_components(
@@ -913,6 +930,7 @@ class ModelExecution:
             is_delta=is_delta,
             count=component_count,
             include_indices=include_indices,
+            progress=self.progress,
         )
         vector_overrides = vector_overrides or {}
         lens_vectors = tuple(
@@ -977,13 +995,26 @@ def _resolve_device_and_dtype(device: str, dtype: str) -> tuple[str, str]:
             "MPS was requested, but this PyTorch runtime cannot use Apple Metal. "
             "Run 'llmdbg: Show Runtime Diagnostics' for details."
         )
+    native_cuda_bfloat16 = False
+    if device == "cuda":
+        capability = torch.cuda.get_device_capability()
+        native_cuda_bfloat16 = (
+            capability[0] >= 8 and torch.cuda.is_bf16_supported()
+        )
     if dtype == "auto":
         if device == "cuda":
-            dtype = "bfloat16" if torch.cuda.is_bf16_supported() else "float16"
+            dtype = "bfloat16" if native_cuda_bfloat16 else "float16"
         elif device == "mps":
             dtype = "float16"
         else:
             dtype = "float32"
+    elif device == "cuda" and dtype == "bfloat16" and not native_cuda_bfloat16:
+        capability = torch.cuda.get_device_capability()
+        raise RuntimeError(
+            "bfloat16 was requested, but this GPU does not provide native BF16 "
+            f"execution (CUDA compute capability {capability[0]}.{capability[1]}). "
+            "Use dtype='float16' or dtype='auto'."
+        )
     return device, dtype
 
 
@@ -1018,9 +1049,15 @@ def _get_model_runtime(
         "float16": torch.float16,
         "float32": torch.float32,
     }[dtype]
-    progress(f"Downloading tokenizer for {model_name_or_path}...\n")
+    progress(
+        f"Resolving tokenizer for {model_name_or_path}; "
+        "uncached files may be downloaded.\n"
+    )
     tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, revision=revision)
-    progress(f"Loading {model_name_or_path} tensors on {device} through gb10-load-llm...\n")
+    progress(
+        f"Loading {model_name_or_path} tensors on {device} through gb10-load-llm; "
+        "uncached checkpoint shards may be downloaded.\n"
+    )
     model = from_pretrained_to_cuda(
         AutoModelForCausalLM,
         model_name_or_path,
@@ -1030,6 +1067,10 @@ def _get_model_runtime(
         touch="auto",
     )
     model.eval()
+    progress(
+        f"Loaded {model_name_or_path} on {device} with {dtype} tensors; "
+        "the model is ready.\n"
+    )
     runtime = ModelRuntime(model=model, tokenizer=tokenizer)
     _runtime = runtime
     _runtime_key = key
@@ -1125,6 +1166,15 @@ def prepare_model_execution(
         f"Runtime selection: device={device}, dtype={dtype} "
         f"(requested device={requested_device}, dtype={requested_dtype}).\n"
     )
+    if device == "cuda":
+        gpu_index = torch.cuda.current_device()
+        properties = torch.cuda.get_device_properties(gpu_index)
+        capability = torch.cuda.get_device_capability(gpu_index)
+        report(
+            f"CUDA device {gpu_index}: {properties.name}; compute capability "
+            f"{capability[0]}.{capability[1]}; "
+            f"{properties.total_memory / (1024 ** 3):.1f} GiB VRAM.\n"
+        )
     with _runtime_lock:
         runtime = _get_model_runtime(
             model_name_or_path,
@@ -1246,6 +1296,7 @@ def _capture_gpt2_token_trace(
                     layer_index,
                     tensor,
                     component,
+                    progress=progress,
                 )
                 after = tuple(float(value) for value in tensor[..., -1, :].float().cpu().tolist()[0])
                 ica_observations[(position, layer, vector, component)] = (before, after)
@@ -1485,6 +1536,7 @@ def _capture_qwen35_token_trace(
                     layer_index,
                     tensor,
                     component,
+                    progress=progress,
                 )
                 after = tuple(float(value) for value in tensor[..., -1, :].float().cpu().tolist()[0])
                 ica_observations[(position, layer, vector, component)] = (before, after)

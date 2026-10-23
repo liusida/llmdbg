@@ -14,15 +14,16 @@ pip install --pre llmdbg
 llmdbg --version
 ```
 
-## VS Code prototype
+## VS Code extension
 
-Build and install the extension:
+Install `SidaLiu.llmdbg` from the VS Code Marketplace. To build and install a
+local copy instead:
 
 ```console
 cd vscode-extension
 npm install
 npm run package
-code --install-extension ../build/releases/vsix/llmdbg-0.0.117.vsix
+code --install-extension ../build/releases/vsix/llmdbg-0.1.0.vsix
 ```
 
 Marketplace publishing and pre-release instructions are in
@@ -60,7 +61,8 @@ The recommended format is now a real Python program named `gpt2.llmdbg.py`:
 
 For a new workspace, run **llmdbg: Create Starter Files** from the VS Code
 Command Palette. It creates examples for GPT-2 and every supported Qwen3.5
-size (0.8B, 2B, 9B, and 27B), plus matching `.vscode/launch.json` entries,
+size (0.8B, 2B, 9B, and 27B), plus a `.vscode/launch.json` entry that runs
+the currently active `.llmdbg.py` file,
 while leaving any existing files untouched.
 
 Qwen3.5 2B has separate Base and Chat starters. The Base starter tokenizes raw

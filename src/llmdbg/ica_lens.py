@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from functools import lru_cache
-from typing import Any
+from collections import OrderedDict
+from typing import Any, Callable
 
 
 _ARTIFACTS = {
@@ -22,8 +22,10 @@ def artifact_repository(model_id: str) -> str | None:
     return _ARTIFACTS.get(normalized)
 
 
-@lru_cache(maxsize=2)
-def _layer_artifact(repository: str, layer: int) -> tuple[Any, Any, Any]:
+_artifact_cache: OrderedDict[tuple[str, int], tuple[Any, Any, Any]] = OrderedDict()
+
+
+def _download_layer_artifact(repository: str, layer: int) -> tuple[Any, Any, Any]:
     """Download and cache one layer's center/read/write matrices as NumPy arrays."""
     from huggingface_hub import hf_hub_download
     from safetensors import safe_open
@@ -40,6 +42,36 @@ def _layer_artifact(repository: str, layer: int) -> tuple[Any, Any, Any]:
         )
 
 
+def _layer_artifact(
+    repository: str,
+    layer: int,
+    progress: Callable[[str], None] | None = None,
+) -> tuple[Any, Any, Any]:
+    """Load an ICA layer while announcing a cache miss before slow I/O."""
+    report = progress or (lambda _message: None)
+    key = (repository, layer)
+    cached = _artifact_cache.get(key)
+    if cached is not None:
+        _artifact_cache.move_to_end(key)
+        return cached
+    report(
+        f"Resolving ICA basis for layer {layer} from {repository}; "
+        "uncached files may be downloaded.\n"
+    )
+    artifact = _download_layer_artifact(repository, layer)
+    _artifact_cache[key] = artifact
+    _artifact_cache.move_to_end(key)
+    while len(_artifact_cache) > 2:
+        _artifact_cache.popitem(last=False)
+    size_mib = sum(array.nbytes for array in artifact) / (1024 * 1024)
+    report(f"Loaded ICA basis for layer {layer} ({size_mib:.1f} MiB).\n")
+    return artifact
+
+
+def clear_cache() -> None:
+    _artifact_cache.clear()
+
+
 def top_components(
     model_id: str,
     layer: int,
@@ -48,6 +80,7 @@ def top_components(
     is_delta: bool,
     count: int = 3,
     include_indices: tuple[int, ...] = (),
+    progress: Callable[[str], None] | None = None,
 ) -> tuple[dict[str, Any], ...]:
     """Decompose a residual state or update in a layer's resid-post ICA basis.
 
@@ -59,7 +92,7 @@ def top_components(
     repository = artifact_repository(model_id)
     if repository is None:
         return ()
-    center, reading, writing = _layer_artifact(repository, layer)
+    center, reading, writing = _layer_artifact(repository, layer, progress)
     values = np.asarray(vector, dtype=np.float32)
     if values.shape != center.shape:
         raise ValueError(
@@ -93,14 +126,21 @@ def top_components(
     return tuple(results)
 
 
-def remove_component(model_id: str, layer: int, tensor: Any, component: int) -> Any:
+def remove_component(
+    model_id: str,
+    layer: int,
+    tensor: Any,
+    component: int,
+    *,
+    progress: Callable[[str], None] | None = None,
+) -> Any:
     """Zero one ICA score and reconstruct a residual tensor in place."""
     import torch
 
     repository = artifact_repository(model_id)
     if repository is None:
         raise ValueError(f"ICA intervention is not available for {model_id}")
-    center, reading, writing = _layer_artifact(repository, layer)
+    center, reading, writing = _layer_artifact(repository, layer, progress)
     if component < 0 or component >= reading.shape[0]:
         raise ValueError(
             f"ICA component {component} is outside range 0..{reading.shape[0] - 1}"

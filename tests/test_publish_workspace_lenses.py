@@ -17,6 +17,22 @@ SPEC.loader.exec_module(publish)
 
 
 class PublishWorkspaceLensesTest(unittest.TestCase):
+    def test_update_index_preserves_unrelated_legacy_sections(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            stage = Path(directory)
+            legacy = {"format_version": 1, "j_lenses": [{"model_id": "legacy"}]}
+            (stage / "index.json").write_text(json.dumps(legacy))
+            entry = {
+                "model_id": "test/model", "method": "j", "format_version": 2,
+                "path": "workspace-lenses/v2/test--model/j",
+            }
+
+            index = json.loads(publish.update_index(stage, [entry]).read_text())
+
+            self.assertEqual(index["format_version"], 1)
+            self.assertEqual(index["j_lenses"], legacy["j_lenses"])
+            self.assertEqual(index["workspace_lenses"], [entry])
+
     def test_stage_validate_and_index(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

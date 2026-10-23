@@ -120,14 +120,14 @@ const STARTER_FILES = [
   ["Qwen35-9B.llmdbg.py", qwen35StarterSource("Qwen/Qwen3.5-9B")],
   ["Qwen35-27B.llmdbg.py", qwen35StarterSource("Qwen/Qwen3.5-27B")]
 ];
-const GPT2_LAUNCH_SOURCE = `${JSON.stringify({
+const ACTIVE_FILE_LAUNCH_SOURCE = `${JSON.stringify({
   version: "0.2.0",
-  configurations: STARTER_FILES.map(([file]) => ({
+  configurations: [{
     type: "llmdbg",
     request: "launch",
-    name: `llmdbg: ${file.replace(".llmdbg.py", "")}`,
-    config: `\${workspaceFolder}/${file}`
-  }))
+    name: "llmdbg: Active file",
+    config: "${file}"
+  }]
 }, null, 2)}\n`;
 
 function residualToVocabularyLensSettings() {
@@ -300,6 +300,22 @@ async function detectedCudaVersion() {
   }
 }
 
+async function detectedCudaComputeCapability() {
+  if (!["win32", "linux"].includes(process.platform)) return undefined;
+  try {
+    const { stdout } = await execFile(
+      "nvidia-smi",
+      ["--query-gpu=compute_cap", "--format=csv,noheader,nounits"],
+      { timeout: 10000, maxBuffer: 1024 * 1024 }
+    );
+    const first = stdout.trim().split(/\r?\n/, 1)[0];
+    const capability = Number.parseFloat(first);
+    return Number.isFinite(capability) ? capability : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function runtimeRecipe() {
   const configured = configuredTorchBackend();
   if (process.platform === "darwin" && process.arch !== "arm64") {
@@ -313,8 +329,13 @@ async function runtimeRecipe() {
     if (process.platform === "darwin") {
       backend = "native";
     } else {
-      const cuda = await detectedCudaVersion();
-      if (cuda >= 12.8) backend = "cu128";
+      const [cuda, capability] = await Promise.all([
+        detectedCudaVersion(), detectedCudaComputeCapability()
+      ]);
+      // PyTorch's CUDA 12.8 binaries omit Maxwell and Pascal kernels. CUDA
+      // 12.6 is the newest official wheel that supports those architectures.
+      if (capability !== undefined && capability < 7.0 && cuda >= 12.6) backend = "cu126";
+      else if (cuda >= 12.8) backend = "cu128";
       else if (cuda >= 12.6) backend = "cu126";
       else if (cuda >= 11.8) backend = "cu118";
       else backend = "cpu";
@@ -429,7 +450,7 @@ async function initializeProject() {
     skipped.push(".vscode/launch.json");
   } catch {
     await vscode.workspace.fs.createDirectory(vscodeUri);
-    await vscode.workspace.fs.writeFile(launchUri, Buffer.from(GPT2_LAUNCH_SOURCE, "utf8"));
+    await vscode.workspace.fs.writeFile(launchUri, Buffer.from(ACTIVE_FILE_LAUNCH_SOURCE, "utf8"));
     created.push(".vscode/launch.json");
   }
 
@@ -708,6 +729,7 @@ function activate(context) {
   ];
   let neuronLensIcaInitialized = false;
   let neuronLensRevision = 0;
+  let neuronLensExecutionReady = false;
   const neuronLensItemCache = new Map();
   let residentModel;
   const modelStatus = vscode.window.createStatusBarItem(
@@ -930,6 +952,7 @@ function activate(context) {
   async function refreshNeuronLens(mode = neuronLensMode, views = neuronLensViews, force = false) {
     if (!neuronLensPanel) return;
     await neuronLensPanel.webview.postMessage({ type: "busy", busy: true });
+    if (!neuronLensExecutionReady) return;
     const active = vscode.debug.activeDebugSession;
     if (!active || active.type !== "llmdbg") {
       await neuronLensPanel.webview.postMessage({ type: "error", message: "Start and pause an llmdbg session first." });
@@ -998,7 +1021,10 @@ function activate(context) {
     }
   }
 
-  async function showNeuronLens(session = vscode.debug.activeDebugSession) {
+  async function showNeuronLens(
+    session = vscode.debug.activeDebugSession,
+    refreshImmediately = true
+  ) {
     if (!session || session.type !== "llmdbg") {
       vscode.window.showErrorMessage("Start and pause an llmdbg session before opening Lens.");
       return;
@@ -1228,7 +1254,7 @@ function activate(context) {
     } else {
       neuronLensPanel.reveal(vscode.ViewColumn.Beside, true);
     }
-    await refreshNeuronLens();
+    if (refreshImmediately) await refreshNeuronLens();
   }
 
   async function ensureRuntime() {
@@ -1266,6 +1292,8 @@ function activate(context) {
       output.appendLine(`Resolved backend: ${recipe.id} (torch ${recipe.torch})`);
       const cuda = await detectedCudaVersion();
       output.appendLine(`NVIDIA driver maximum CUDA: ${cuda ?? "not detected"}`);
+      const capability = await detectedCudaComputeCapability();
+      output.appendLine(`NVIDIA compute capability: ${capability ?? "not detected"}`);
       const python = await ensureRuntime();
       const { stdout } = await execFile(python, ["-c", RUNTIME_PROBE], { maxBuffer: 1024 * 1024 });
       const probe = JSON.parse(stdout.trim());
@@ -1427,6 +1455,7 @@ function activate(context) {
       } else if (event.event === "llmdbg/computationStarted") {
         if (neuronLensPanel) neuronLensPanel.webview.postMessage({ type: "busy", busy: true });
       } else if (event.event === "llmdbg/vectorChanged") {
+        neuronLensExecutionReady = true;
         neuronLensRevision += 1;
         neuronLensItemCache.clear();
         refreshNeuronLens();
@@ -1435,15 +1464,18 @@ function activate(context) {
     }),
     vscode.debug.onDidStartDebugSession((session) => {
       if (session.type !== "llmdbg") return;
+      neuronLensExecutionReady = false;
       neuronLensRevision += 1;
       neuronLensItemCache.clear();
       if (neuronLensPanel) neuronLensPanel.webview.postMessage({ type: "reset" });
-      void showNeuronLens(session);
+      // The adapter has loaded the model, but no token trace exists yet. The
+      // first stopped/vectorChanged event refreshes the panel with valid data.
+      void showNeuronLens(session, false);
     }),
     vscode.debug.onDidTerminateDebugSession((session) => {
-      if (session.type === "llmdbg" && neuronLensPanel) {
-        neuronLensPanel.webview.postMessage({ type: "busy", busy: false });
-      }
+      if (session.type !== "llmdbg") return;
+      neuronLensExecutionReady = false;
+      if (neuronLensPanel) neuronLensPanel.webview.postMessage({ type: "busy", busy: false });
     }),
     modelStatus
   );

@@ -134,6 +134,23 @@ def update_index(stage: Path, additions: list[dict[str, Any]]) -> Path:
     return index_path
 
 
+def seed_index_from_hub(stage: Path) -> Path:
+    """Start an upload from the live index so unrelated entries survive."""
+    from huggingface_hub import hf_hub_download
+
+    remote = Path(hf_hub_download(
+        repo_id=HUB_REPO,
+        repo_type="dataset",
+        filename="index.json",
+        force_download=True,
+    ))
+    index = json.loads(remote.read_text())
+    index_path = stage / "index.json"
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    index_path.write_text(json.dumps(index, indent=2) + "\n")
+    return index_path
+
+
 def upload(stage: Path, entries: list[dict[str, Any]], index_path: Path) -> None:
     from huggingface_hub import HfApi
 
@@ -154,6 +171,8 @@ def main() -> int:
     args = arguments()
     entries = stage_artifacts(args.artifacts, args.stage)
     clean_cache_test(args.stage, entries)
+    if args.upload:
+        seed_index_from_hub(args.stage)
     index_path = update_index(args.stage, entries)
     if args.upload:
         upload(args.stage, entries, index_path)

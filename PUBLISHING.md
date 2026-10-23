@@ -30,6 +30,13 @@ one-time setup.
 Users can then find `llmdbg` in VS Code, open its extension page, and choose
 **Switch to Pre-Release Version**.
 
+After the stable `0.1.0` release, development builds should use fresh patch
+versions (`0.1.1`, `0.1.2`, and so on) published with the pre-release flag.
+Marketplace versions accept only `major.minor.patch`, so do not add `-beta` or
+`-pre` to the manifest version. Stable users remain on `0.1.0` while opted-in
+users receive those pre-release builds. Publish the next stable build under a
+newer unused patch version.
+
 The same numeric version cannot later be uploaded as a regular release. After
 publishing `0.0.117` as a pre-release, use at least `0.0.118` for the regular
 release.

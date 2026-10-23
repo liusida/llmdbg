@@ -88,3 +88,28 @@ class WorkspaceLensTest(unittest.TestCase):
                 {"LLMDBG_RESIDUAL_TO_VOCABULARY_LENSES": json.dumps(configured)},
             ):
                 self.assertIsNone(workspace_lens.load_v2("Qwen/Test", "jpp"))
+
+    def test_v2_load_reports_slow_work_before_and_after_tensor_loading(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact = root / "Qwen--Exact" / "j"
+            artifact.mkdir(parents=True)
+            save_file({"embed": torch.eye(2)}, artifact / "lens.safetensors")
+            manifest = {
+                "format_version": 2,
+                "artifact": "lens.safetensors",
+                "model_id": "Qwen/Exact",
+                "method": "j",
+            }
+            (artifact / "manifest.json").write_text(json.dumps(manifest))
+            messages: list[str] = []
+            with mock.patch.dict(
+                "os.environ", {"LLMDBG_WORKSPACE_LENS_PATH": str(root)}
+            ):
+                workspace_lens.load_v2("Qwen/Exact", "j", progress=messages.append)
+                workspace_lens.load_v2("Qwen/Exact", "j", progress=messages.append)
+
+        self.assertIn("Resolving J Lens artifact", messages[0])
+        self.assertIn("Loading J Lens tensors", messages[1])
+        self.assertIn("Loaded J Lens with 1 site maps", messages[2])
+        self.assertEqual(len(messages), 3, "cache hits should not repeat progress messages")

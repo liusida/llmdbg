@@ -7,7 +7,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 Method = Literal["j", "r", "jpp"]
 Site = Literal["embed", "mid", "post"]
@@ -55,7 +55,12 @@ def tensor_key(site: Site, layer: int | None) -> str:
     return f"{site}.{layer}"
 
 
-def _load_v2_directory(path: Path, model_id: str, method: Method) -> dict[str, Any]:
+def _load_v2_directory(
+    path: Path,
+    model_id: str,
+    method: Method,
+    progress: Callable[[str], None],
+) -> dict[str, Any]:
     from safetensors.torch import load_file
 
     manifest_path = path / "manifest.json"
@@ -75,13 +80,25 @@ def _load_v2_directory(path: Path, model_id: str, method: Method) -> dict[str, A
     expected = manifest.get("sha256")
     if expected and _sha256(tensor_path) != expected:
         raise ValueError(f"Workspace Lens checksum mismatch for {tensor_path}")
-    return {"manifest": manifest, "tensors": load_file(tensor_path, device="cpu")}
+    size_mib = tensor_path.stat().st_size / (1024 * 1024)
+    progress(
+        f"Loading {method.upper()} Lens tensors from {tensor_path} "
+        f"({size_mib:.1f} MiB)...\n"
+    )
+    tensors = load_file(tensor_path, device="cpu")
+    progress(f"Loaded {method.upper()} Lens with {len(tensors)} site maps.\n")
+    return {"manifest": manifest, "tensors": tensors}
 
 
 _cache: dict[tuple[str, str, str], dict[str, Any] | None] = {}
 
 
-def load_v2(model_id: str, method: Method) -> dict[str, Any] | None:
+def load_v2(
+    model_id: str,
+    method: Method,
+    *,
+    progress: Callable[[str], None] | None = None,
+) -> dict[str, Any] | None:
     """Load an exact-checkpoint v2 artifact from an override or the Hub index."""
     from llmdbg.residual_vocabulary_lenses import active_lens, source_file
 
@@ -90,6 +107,11 @@ def load_v2(model_id: str, method: Method) -> dict[str, Any] | None:
     key = (model_id.lower(), method, configured_id)
     if key in _cache:
         return _cache[key]
+    report = progress or (lambda _message: None)
+    report(
+        f"Resolving {method.upper()} Lens artifact for {model_id}; "
+        "uncached files may be downloaded.\n"
+    )
     override = os.environ.get("LLMDBG_WORKSPACE_LENS_PATH")
     if override:
         root = Path(override).expanduser()
@@ -100,7 +122,7 @@ def load_v2(model_id: str, method: Method) -> dict[str, Any] | None:
         )
         for candidate in candidates:
             if (candidate / "manifest.json").is_file():
-                loaded = _load_v2_directory(candidate, model_id, method)
+                loaded = _load_v2_directory(candidate, model_id, method, report)
                 _cache[key] = loaded
                 return loaded
     try:
@@ -125,18 +147,21 @@ def load_v2(model_id: str, method: Method) -> dict[str, Any] | None:
             None,
         )
         if entry is None:
+            report(f"No compatible site-aware {method.upper()} Lens artifact was found.\n")
+            _cache[key] = None
             return None
         directory = str(entry["path"]).strip("/")
         manifest_path = source_file(source, f"{directory}/manifest.json")
         manifest = json.loads(manifest_path.read_text())
         tensor_path = source_file(source, f"{directory}/{manifest['artifact']}")
-        loaded = _load_v2_directory(tensor_path.parent, model_id, method)
+        loaded = _load_v2_directory(tensor_path.parent, model_id, method, report)
         _cache[key] = loaded
         return loaded
     except OSError as error:
         configured_source = str(configured.get("source", "")) if configured else ""
         if configured_source and not configured_source.startswith("hf://"):
             _cache[key] = None
+            report(f"No compatible site-aware {method.upper()} Lens artifact was found.\n")
             return None
         raise RuntimeError(f"Could not download Workspace Lens data: {error}") from error
 
@@ -151,6 +176,7 @@ def source_map(
     layer_count: int,
     model_revision: str | None = None,
     tokenizer_revision: str | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> LensSource | None:
     """Resolve a v2 map; the final Post site is exactly the identity transport."""
     if site == "post" and layer == layer_count - 1:
@@ -167,7 +193,7 @@ def source_map(
                 "artifact_kind": "identity",
             },
         )
-    artifact = load_v2(model_id, method)
+    artifact = load_v2(model_id, method, progress=progress)
     if artifact is None:
         return None
     manifest = artifact["manifest"]

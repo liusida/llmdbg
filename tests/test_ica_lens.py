@@ -9,6 +9,9 @@ from llmdbg import ica_lens
 
 
 class ICALensTest(unittest.TestCase):
+    def tearDown(self) -> None:
+        ica_lens.clear_cache()
+
     def test_supported_model_aliases_resolve_to_published_artifacts(self) -> None:
         self.assertEqual(
             ica_lens.artifact_repository("Qwen/Qwen3.5-2B"),
@@ -86,6 +89,24 @@ class ICALensTest(unittest.TestCase):
             result = ica_lens.remove_component("gpt2", 0, vector, 1)
         self.assertIs(result, vector)
         self.assertEqual(vector.tolist(), [11.0, 20.0])
+
+    def test_layer_artifact_reports_only_on_cache_miss(self) -> None:
+        artifact = (
+            np.zeros(2, dtype=np.float32),
+            np.eye(2, dtype=np.float32),
+            np.eye(2, dtype=np.float32),
+        )
+        messages: list[str] = []
+        with mock.patch.object(
+            ica_lens, "_download_layer_artifact", return_value=artifact
+        ) as download:
+            ica_lens._layer_artifact("owner/repo", 3, messages.append)
+            ica_lens._layer_artifact("owner/repo", 3, messages.append)
+
+        download.assert_called_once_with("owner/repo", 3)
+        self.assertIn("Resolving ICA basis for layer 3", messages[0])
+        self.assertIn("Loaded ICA basis for layer 3", messages[1])
+        self.assertEqual(len(messages), 2)
 
 
 if __name__ == "__main__":

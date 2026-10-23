@@ -300,6 +300,15 @@ class LLMDebugAdapter:
         self.sequence += 1
         self.stream.write(message)
 
+    def _console(self, message: str) -> None:
+        """Write one actionable progress line to the Debug Console."""
+        if not hasattr(self, "stream") or not hasattr(self, "sequence"):
+            return
+        self.send_event(
+            "output",
+            {"category": "console", "output": f"llmdbg: {message.rstrip()}\n"},
+        )
+
     def stop(self, reason: str) -> None:
         getattr(self, "lens_snapshot_cache", {}).clear()
         self.send_event(
@@ -413,8 +422,8 @@ class LLMDebugAdapter:
                 {
                     "category": "console",
                     "output": (
-                        f"llmdbg: prepared {trace_name}; forward execution will begin "
-                        "after breakpoints are configured\n"
+                        f"llmdbg: prepared {trace_name}; waiting for VS Code to finish "
+                        "configuring breakpoints\n"
                     ),
                 },
             )
@@ -422,6 +431,7 @@ class LLMDebugAdapter:
             self.send_response(request)
             if not self.launched:
                 return True
+            self._console("Breakpoints configured; starting forward execution.")
             if self.stop_on_entry:
                 self._load_token(0)
                 self.layer_index = 0
@@ -602,6 +612,10 @@ class LLMDebugAdapter:
             )
             snapshot = self.lens_snapshot_cache.get(cache_key)
             if snapshot is None:
+                self._console(
+                    f"Computing {mode} readouts for {view}; the first request may "
+                    "download and load Lens artifacts."
+                )
                 with activate(active_selection):
                     snapshot = self._neuron_lens_snapshot(
                         view=view,
@@ -619,6 +633,7 @@ class LLMDebugAdapter:
                     for child in snapshot.get("icaComponents", snapshot.get("neurons", [])):
                         child["activeResidualVocabularyLens"] = active_metadata
                 self.lens_snapshot_cache[cache_key] = snapshot
+                self._console(f"Finished computing {mode} readouts for {view}.")
             self.send_response(request, snapshot)
         elif command == "llmdbg/measureCosine":
             self.send_response(
@@ -678,6 +693,9 @@ class LLMDebugAdapter:
             )
         elif command == "llmdbg/patchVector":
             self.send_event("llmdbg/computationStarted", {"command": command})
+            self._console(
+                f"Replaying token {self.token_index} with the copied vector patch."
+            )
             result = self._patch_vector(
                 str(arguments.get("view", "")),
                 tuple(float(value) for value in arguments.get("vector", [])),
@@ -746,6 +764,10 @@ class LLMDebugAdapter:
             self.send_event(
                 "llmdbg/computationStarted", {"command": command}
             )
+            self._console(
+                f"Loading the ICA basis if needed, then replaying token {self.token_index} "
+                "with the selected component removed."
+            )
             result = self._remove_ica_component(
                 str(arguments.get("view", "")),
                 int(arguments.get("component", -1)),
@@ -759,6 +781,9 @@ class LLMDebugAdapter:
         elif command == "llmdbg/removeProjectedComponent":
             self.send_event(
                 "llmdbg/computationStarted", {"command": command}
+            )
+            self._console(
+                f"Replaying token {self.token_index} with the selected component removed."
             )
             result = self._remove_projected_component(
                 str(arguments.get("view", "")),
@@ -1339,6 +1364,10 @@ class LLMDebugAdapter:
         before_start: bool = False,
     ) -> None:
         """Advance in token-major order, including authored function-body operations."""
+        self._console(
+            f"Searching {len(self.tokens)} token positions and "
+            f"{len(self.source_lines)} execution locations for the next breakpoint."
+        )
         current_location = self.mlp_step_index + 1 if self.inside_internal else 0
         current = (self.token_index, self.layer_index, current_location)
         for token_position in range(len(self.tokens)):
@@ -1364,6 +1393,10 @@ class LLMDebugAdapter:
                         )
                         for breakpoint in self.breakpoints
                     ):
+                        self._console(
+                            f"Matched breakpoint at token {token_position}, source line {line}; "
+                            "preparing its model forward pass."
+                        )
                         self._load_token(token_position)
                         self.layer_index = layer_index
                         function_name = self._function_name_for_path(path)
@@ -1376,6 +1409,10 @@ class LLMDebugAdapter:
                         self.stop("breakpoint")
                         return
         if self.token_index + 1 < len(self.tokens):
+            self._console(
+                "No configured breakpoint matched; executing the final prompt token "
+                "before completing the trace."
+            )
             self._load_token(len(self.tokens) - 1)
             self.layer_index = len(self.trace) - 1
         if self._append_next_generated_token():
@@ -3014,6 +3051,10 @@ class LLMDebugAdapter:
         include_jpp_lens: bool = False,
     ) -> dict[str, Any]:
         """Describe top MLP neurons through direct and residual-transport lenses."""
+        if not self.trace:
+            raise ValueError(
+                "Lens data is not available until execution reaches its first breakpoint"
+            )
         jpp_lens_label = "J++ Lens"
         if include_jpp_lens:
             from llmdbg.jpp_lens import configured_display_name
