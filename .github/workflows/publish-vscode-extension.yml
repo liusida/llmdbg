@@ -37,6 +37,26 @@ jobs:
       - name: Install extension tooling
         working-directory: vscode-extension
         run: npm ci
+      # vsce 4.0.0 predates the Marketplace's current federated-token contract.
+      # This is the exact upstream fix merged in microsoft/vscode-vsce#1337;
+      # remove the compatibility step after the next vsce release includes it.
+      - name: Apply Marketplace OIDC compatibility fix
+        working-directory: vscode-extension
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = 'node_modules/@vscode/vsce/out/oidc.js';
+          let source = fs.readFileSync(path, 'utf8');
+          const oldUrl = "`${marketplaceUrl.replace(/\\/$/, '')}/_apis/gallery/token`";
+          const newUrl = "`${marketplaceUrl.replace(/\\/$/, '')}/_apis/gallery/token?api-version=7.2-preview.1`";
+          const oldAuth = 'Authorization: `Bearer ${oidcToken}`';
+          const newAuth = 'Authorization: `FederatedToken ${oidcToken}`';
+          if (!source.includes(oldUrl) || !source.includes(oldAuth)) {
+            throw new Error('Installed vsce does not match the expected 4.0.0 OIDC implementation');
+          }
+          source = source.replace(oldUrl, newUrl).replace(oldAuth, newAuth);
+          fs.writeFileSync(path, source);
+          NODE
       - name: Validate extension JavaScript
         working-directory: vscode-extension
         run: node --check extension.js
