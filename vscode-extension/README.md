@@ -74,9 +74,10 @@ as ordinary editable text fields. Each source may be a Hugging Face repository
 URL or a local folder containing the same `index.json`, manifests, and artifact
 layout.
 Run **llmdbg: Manage Custom Residual-to-Vocabulary Lenses** to add, edit,
-enable, disable, or remove other compatible lenses. Official J++ is included
-as a custom Lens by default, so it can be managed in exactly the same way as
-any user-added Lens. The Lens selector only shows entries available for the
+enable, disable, or remove other compatible lenses. Official J++ and the
+Post-only Neuronpedia J and J++ Lenses are included as custom Lenses by default, so they
+can be managed in exactly the same way as any user-added Lens. The Lens
+selector only shows entries available for the
 active model. Logit Lens is built in, and ICA Lens remains separately
 configured and displayed.
 

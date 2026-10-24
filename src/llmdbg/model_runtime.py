@@ -25,6 +25,17 @@ class ModelRuntime:
 
     model: Any
     tokenizer: Any
+    processor: Any = None
+
+    @property
+    def is_multimodal(self) -> bool:
+        return hasattr(getattr(self.model, "model", None), "language_model")
+
+    @property
+    def text_model(self) -> Any:
+        if self.is_multimodal:
+            return self.model.model.language_model
+        return self.model.transformer if self.architecture == "gpt2" else self.model.model
 
     @property
     def architecture(self) -> str:
@@ -33,16 +44,19 @@ class ModelRuntime:
 
     @property
     def layers(self) -> Any:
-        return self.model.transformer.h if self.architecture == "gpt2" else self.model.model.layers
+        return self.text_model.h if self.architecture == "gpt2" else self.text_model.layers
 
     @property
     def final_norm(self) -> Any:
-        return self.model.transformer.ln_f if self.architecture == "gpt2" else self.model.model.norm
+        return self.text_model.ln_f if self.architecture == "gpt2" else self.text_model.norm
 
     def layer_kind(self, index: int) -> str:
         if self.architecture == "gpt2":
             return "attention"
-        kind = self.model.config.layer_types[index]
+        if self.architecture == "gemma2":
+            return "full_attention"
+        config = getattr(self.text_model, "config", self.model.config)
+        kind = config.layer_types[index]
         return "gated_linear_attention" if kind == "linear_attention" else "full_attention"
 
     def state_name(self, index: int, kind: str) -> str:
@@ -84,8 +98,11 @@ class NeuronProjection:
     vocabulary: tuple[TokenScore, ...]
     contribution: tuple[TokenScore, ...]
     j_lens: tuple[TokenScore, ...] = ()
+    j_lens_metadata: dict[str, Any] | None = None
     r_lens: tuple[TokenScore, ...] = ()
+    r_lens_metadata: dict[str, Any] | None = None
     jpp_lens: tuple[TokenScore, ...] = ()
+    jpp_lens_metadata: dict[str, Any] | None = None
     output_projection: float = 0.0
     residual_norm: float = 0.0
     residual_cosine: float | None = None
@@ -100,8 +117,11 @@ class VectorProjection:
     norm: float
     vocabulary: tuple[TokenScore, ...]
     j_lens: tuple[TokenScore, ...] = ()
+    j_lens_metadata: dict[str, Any] | None = None
     r_lens: tuple[TokenScore, ...] = ()
+    r_lens_metadata: dict[str, Any] | None = None
     jpp_lens: tuple[TokenScore, ...] = ()
+    jpp_lens_metadata: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -127,6 +147,8 @@ class ModelExecution:
     progress: Callable[[str], None]
     dtype: str = "float32"
     rendered_prompt: str = ""
+    inputs_embeds: Any = None
+    position_ids: Any = None
     past_key_values: Any = None
     cached_through: int = -1
     interventions: dict[tuple[int, str, str, int], float] = field(default_factory=dict)
@@ -200,6 +222,14 @@ class ModelExecution:
                 ica_interventions=self.ica_interventions,
                 ica_observations=self.ica_observations,
                 vector_patches=self.vector_patches,
+                inputs_embeds=(
+                    self.inputs_embeds[:, position : position + 1]
+                    if self.inputs_embeds is not None else None
+                ),
+                position_ids=(
+                    self.position_ids[..., position : position + 1]
+                    if self.position_ids is not None else None
+                ),
             )
             self.past_key_values = next_cache
             self.cached_through = position
@@ -213,6 +243,13 @@ class ModelExecution:
             [[int(token_id)]], dtype=self.input_ids.dtype, device=self.input_ids.device
         )
         self.input_ids = torch.cat((self.input_ids, token), dim=1)
+        if self.inputs_embeds is not None:
+            embedding = self.runtime.text_model.get_input_embeddings()(
+                token.to(self.device)
+            )
+            self.inputs_embeds = torch.cat((self.inputs_embeds, embedding), dim=1)
+            next_position = self.position_ids[..., -1:] + 1
+            self.position_ids = torch.cat((self.position_ids, next_position), dim=-1)
         text = self.runtime.tokenizer.decode([int(token_id)])
         self.tokens = (*self.tokens, text)
         return text
@@ -288,8 +325,20 @@ class ModelExecution:
             (1, position), dtype=torch.long, device=self.device
         )
         with torch.inference_mode():
-            output = self.runtime.model(
-                input_ids=prefix,
+            model = (
+                self.runtime.text_model if self.inputs_embeds is not None
+                else self.runtime.model
+            )
+            output = model(
+                input_ids=None if self.inputs_embeds is not None else prefix,
+                inputs_embeds=(
+                    self.inputs_embeds[:, start:position]
+                    if self.inputs_embeds is not None else None
+                ),
+                position_ids=(
+                    self.position_ids[..., start:position]
+                    if self.position_ids is not None else None
+                ),
                 attention_mask=attention_mask,
                 past_key_values=self.past_key_values,
                 use_cache=True,
@@ -683,16 +732,19 @@ class ModelExecution:
                     if j_lens_ids is not None and j_lens_values is not None
                     else ()
                 ),
+                j_lens_metadata=(j_lens_source[1] if j_lens_source else None),
                 r_lens=(
                     token_scores(r_lens_ids[rank], r_lens_values[rank])
                     if r_lens_ids is not None and r_lens_values is not None
                     else ()
                 ),
+                r_lens_metadata=(r_lens_source[1] if r_lens_source else None),
                 jpp_lens=(
                     token_scores(jpp_lens_ids[rank], jpp_lens_values[rank])
                     if jpp_lens_ids is not None and jpp_lens_values is not None
                     else ()
                 ),
+                jpp_lens_metadata=(jpp_lens_source[1] if jpp_lens_source else None),
                 output_projection=float(output_projections[rank]),
                 residual_norm=residual_norm,
                 residual_cosine=residual_cosines[rank],
@@ -828,8 +880,11 @@ class ModelExecution:
                     norm=float(norms[index]),
                     vocabulary=direct[index],
                     j_lens=j_readouts[index],
+                    j_lens_metadata=(j_source[1] if j_source else None),
                     r_lens=r_readouts[index],
+                    r_lens_metadata=(r_source[1] if r_source else None),
                     jpp_lens=jpp_readouts[index],
+                    jpp_lens_metadata=(jpp_source[1] if jpp_source else None),
                 )
                 for index in range(len(vectors))
             )
@@ -875,8 +930,30 @@ class ModelExecution:
                 configured_root = Path(configured_source).expanduser()
                 if (configured_root / "index.json").is_file():
                     return None
-        if site != "post" or layer is None:
+        fallback_from_site = site if method in {"j", "jpp"} and site == "mid" else None
+        legacy_site = "post" if fallback_from_site is not None else site
+        if legacy_site != "post" or layer is None:
             return None
+        if fallback_from_site is not None and layer == len(self.runtime.layers) - 1:
+            import torch
+
+            fallback_label = "J-Lens" if method == "j" else "J++ Lens"
+            self.progress(
+                f"Using the final Post identity as a {fallback_label} fallback "
+                f"for Mid layer {layer}.\n"
+            )
+            return torch.eye(hidden_size), {
+                "format_version": 2,
+                "model_id": model_id,
+                "method": method,
+                "site": "post",
+                "layer": layer,
+                "tensor_key": f"post.{layer}",
+                "artifact_kind": "identity",
+                "fallback": True,
+                "fallback_from_site": fallback_from_site,
+                "fallback_from_tensor_key": f"{fallback_from_site}.{layer}",
+            }
         if method == "j":
             from llmdbg.j_lens import source_map as legacy_source_map
         elif method == "r":
@@ -895,7 +972,21 @@ class ModelExecution:
             return None
         matrix, metadata = legacy
         self.progress(f"Loaded legacy Post-only {method.upper()} Lens for layer {layer}.\n")
-        return matrix, {**metadata, "format_version": 1, "site": "post", "legacy": True}
+        resolved_metadata = {
+            **metadata, "format_version": 1, "site": "post", "legacy": True,
+        }
+        if fallback_from_site is not None:
+            resolved_metadata.update({
+                "fallback": True,
+                "fallback_from_site": fallback_from_site,
+                "fallback_from_tensor_key": f"{fallback_from_site}.{layer}",
+            })
+            fallback_label = "J-Lens" if method == "j" else "J++ Lens"
+            self.progress(
+                f"Using Post layer {layer} {fallback_label} as a fallback "
+                f"for Mid layer {layer}.\n"
+            )
+        return matrix, resolved_metadata
 
     def ica_components(
         self,
@@ -1035,7 +1126,13 @@ def _get_model_runtime(
 
     import torch
     from gb10_load_llm import from_pretrained_to_cuda
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import (
+        AutoConfig,
+        AutoModelForCausalLM,
+        AutoModelForMultimodalLM,
+        AutoProcessor,
+        AutoTokenizer,
+    )
 
     if _runtime is not None:
         progress("Model configuration changed; releasing the previous resident model.\n")
@@ -1053,13 +1150,22 @@ def _get_model_runtime(
         f"Resolving tokenizer for {model_name_or_path}; "
         "uncached files may be downloaded.\n"
     )
-    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, revision=revision)
+    config = AutoConfig.from_pretrained(model_name_or_path, revision=revision)
+    is_multimodal = getattr(config, "vision_config", None) is not None
+    processor = None
+    if is_multimodal:
+        processor = AutoProcessor.from_pretrained(model_name_or_path, revision=revision)
+        tokenizer = processor.tokenizer
+        model_class = AutoModelForMultimodalLM
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, revision=revision)
+        model_class = AutoModelForCausalLM
     progress(
         f"Loading {model_name_or_path} tensors on {device} through gb10-load-llm; "
         "uncached checkpoint shards may be downloaded.\n"
     )
     model = from_pretrained_to_cuda(
-        AutoModelForCausalLM,
+        model_class,
         model_name_or_path,
         revision=revision,
         dtype=torch_dtype,
@@ -1071,7 +1177,7 @@ def _get_model_runtime(
         f"Loaded {model_name_or_path} on {device} with {dtype} tensors; "
         "the model is ready.\n"
     )
-    runtime = ModelRuntime(model=model, tokenizer=tokenizer)
+    runtime = ModelRuntime(model=model, tokenizer=tokenizer, processor=processor)
     _runtime = runtime
     _runtime_key = key
     return runtime
@@ -1140,7 +1246,7 @@ def prepare_model_execution(
     *,
     revision: str = "main",
     prompt: str | None = None,
-    messages: list[dict[str, str]] | None = None,
+    messages: list[dict[str, Any]] | None = None,
     add_generation_prompt: bool = True,
     device: str = "auto",
     dtype: str = "auto",
@@ -1183,19 +1289,45 @@ def prepare_model_execution(
             dtype=dtype,
             progress=report,
         )
-        if runtime.architecture not in {"gpt2", "qwen3_5"}:
+        if runtime.architecture not in {"gpt2", "qwen3_5", "gemma2"}:
             raise ValueError(
-                "llmdbg supports GPT-2 and Qwen3.5 models, "
+                "llmdbg supports GPT-2, Qwen3.5, and Gemma 2 models, "
                 f"got {runtime.model.config.model_type!r}"
             )
-        if messages:
+        inputs_embeds = None
+        position_ids = None
+        if messages and runtime.is_multimodal:
+            multimodal_messages = _normalize_multimodal_messages(messages)
+            rendered_prompt = runtime.processor.apply_chat_template(
+                multimodal_messages,
+                add_generation_prompt=add_generation_prompt,
+                tokenize=False,
+            )
+            processed = runtime.processor.apply_chat_template(
+                multimodal_messages,
+                add_generation_prompt=add_generation_prompt, tokenize=True,
+                return_dict=True, return_tensors="pt",
+                # Keep interactive debugging practical: Qwen otherwise preserves
+                # enough pixels from a large photograph to create >10k tokens.
+                processor_kwargs={
+                    "images_kwargs": {
+                        "size": {
+                            "shortest_edge": 65_536,
+                            "longest_edge": 262_144,
+                        }
+                    }
+                },
+            )
+            input_ids = processed["input_ids"]
+            inputs_embeds, position_ids = _prepare_multimodal_embeddings(
+                runtime, processed, device
+            )
+        elif messages:
             rendered_prompt = runtime.tokenizer.apply_chat_template(
                 messages, add_generation_prompt=add_generation_prompt, tokenize=False
             )
             input_ids = runtime.tokenizer.apply_chat_template(
-                messages,
-                add_generation_prompt=add_generation_prompt,
-                tokenize=True,
+                messages, add_generation_prompt=add_generation_prompt, tokenize=True,
                 return_tensors="pt",
             )
         else:
@@ -1210,7 +1342,68 @@ def prepare_model_execution(
     return ModelExecution(
         runtime, input_ids, tokens, device, report,
         dtype=dtype, rendered_prompt=rendered_prompt,
+        inputs_embeds=inputs_embeds, position_ids=position_ids,
     )
+
+
+def _normalize_multimodal_messages(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Translate llmdbg's convenient local ``path`` key to processor ``url``."""
+    normalized: list[dict[str, Any]] = []
+    for message in messages:
+        copied = dict(message)
+        content = copied.get("content")
+        if isinstance(content, list):
+            copied["content"] = [
+                ({**part, "url": part["path"]} if part.get("type") == "image"
+                 and "path" in part and "url" not in part else dict(part))
+                for part in content
+            ]
+        normalized.append(copied)
+    return normalized
+
+
+def _prepare_multimodal_embeddings(
+    runtime: ModelRuntime, processed: Any, device: str
+) -> tuple[Any, Any]:
+    """Encode images once and merge them into Qwen3.5's decoder input stream."""
+    import torch
+
+    model = runtime.model.model
+    input_ids = processed["input_ids"].to(device)
+    attention_mask = processed.get("attention_mask")
+    if attention_mask is not None:
+        attention_mask = attention_mask.to(device)
+    with torch.inference_mode():
+        inputs_embeds = model.get_input_embeddings()(input_ids)
+        pixel_values = processed.get("pixel_values")
+        image_grid_thw = processed.get("image_grid_thw")
+        if pixel_values is not None:
+            image_grid_thw = image_grid_thw.to(device)
+            image_outputs = model.get_image_features(
+                pixel_values.to(device), image_grid_thw, return_dict=True
+            )
+            image_embeds = torch.cat(image_outputs.pooler_output, dim=0).to(
+                inputs_embeds.device, inputs_embeds.dtype
+            )
+            image_mask, _ = model.get_placeholder_mask(
+                input_ids, inputs_embeds=inputs_embeds, image_features=image_embeds
+            )
+            inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
+        position_ids = model.compute_3d_position_ids(
+            input_ids=input_ids,
+            image_grid_thw=image_grid_thw,
+            video_grid_thw=None,
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            past_key_values=None,
+            mm_token_type_ids=(
+                processed.get("mm_token_type_ids").to(device)
+                if processed.get("mm_token_type_ids") is not None else None
+            ),
+        )
+    return inputs_embeds, position_ids
 
 
 def _normalize_input_ids(value: Any, torch: Any) -> Any:
@@ -1249,6 +1442,8 @@ def _capture_gpt2_token_trace(
         tuple[int, str, str, int], tuple[tuple[float, ...], tuple[float, ...]]
     ],
     vector_patches: dict[tuple[int, str, str], tuple[float, ...]],
+    inputs_embeds: Any = None,
+    position_ids: Any = None,
 ) -> tuple[ModelTrace, Any]:
     """Capture all layer states for one token using an existing KV cache."""
     import torch
@@ -1490,11 +1685,14 @@ def _capture_qwen35_token_trace(
         tuple[int, str, str, int], tuple[tuple[float, ...], tuple[float, ...]]
     ],
     vector_patches: dict[tuple[int, str, str], tuple[float, ...]],
+    inputs_embeds: Any = None,
+    position_ids: Any = None,
 ) -> tuple[ModelTrace, Any]:
-    """Capture Qwen3.5 residual, hybrid-attention, and gated-MLP states."""
+    """Capture Qwen3.5 or Gemma 2 residual, attention, and gated-MLP states."""
     import torch
 
     model = runtime.model
+    is_gemma2 = runtime.architecture == "gemma2"
     captured: list[tuple[str, str, str, Any, bool]] = []
     detailed: dict[str, dict[str, Any]] = {}
     handles = []
@@ -1576,26 +1774,34 @@ def _capture_qwen35_token_trace(
             detailed.setdefault(state_name, {})[detail_name] = tensor.detach()
         return hook
 
-    def capture_qwen_gate(state_name: str):
+    def capture_gated_activation(state_name: str, activation: Any):
         def hook(_module, _inputs, output) -> None:
             gate = _tensor_from_output(output)
             apply_interventions(gate, state_name, "mlp_gate_pre_activation")
             detailed.setdefault(state_name, {})["mlp_gate_pre_activation"] = gate.detach()
-            gate_activation = torch.nn.functional.silu(gate)
+            gate_activation = activation(gate)
             apply_interventions(gate_activation, state_name, "mlp_gate_activation")
             detailed.setdefault(state_name, {})["mlp_gate_activation"] = gate_activation.detach()
         return hook
 
-    handles.append(
-        model.model.embed_tokens.register_forward_hook(
+    text_model = runtime.text_model
+    if inputs_embeds is not None:
+        captured.append((
+            "token_embedding", "multimodal embedding",
+            "Encodes this image or text token into the initial residual stream.",
+            inputs_embeds.detach(), True,
+        ))
+    else:
+        handles.append(
+            text_model.embed_tokens.register_forward_hook(
             capture(
                 "token_embedding",
                 "token embedding",
                 "Encodes the prompt token into the initial residual stream; positions enter through RoPE.",
                 True,
             )
+            )
         )
-    )
     for index, block in enumerate(runtime.layers):
         attention_kind = runtime.layer_kind(index)
         attention_name = runtime.state_name(index, attention_kind)
@@ -1621,13 +1827,24 @@ def _capture_qwen35_token_trace(
                 capture_detail_input(attention_name, mixing_detail)
             )
         )
-        handles.append(
-            output_projection.register_forward_hook(
-                capture_detail(attention_name, "attention_projection")
+        if not is_gemma2:
+            handles.append(
+                output_projection.register_forward_hook(
+                    capture_detail(attention_name, "attention_projection")
+                )
             )
+        else:
+            handles.append(
+                block.post_attention_layernorm.register_forward_hook(
+                    capture_detail(attention_name, "attention_projection")
+                )
+            )
+        attention_boundary = (
+            block.pre_feedforward_layernorm
+            if is_gemma2 else block.post_attention_layernorm
         )
         handles.append(
-            block.post_attention_layernorm.register_forward_pre_hook(
+            attention_boundary.register_forward_pre_hook(
                 capture_input(
                     attention_name,
                     attention_kind.replace("_", " ") + " + residual",
@@ -1636,12 +1853,14 @@ def _capture_qwen35_token_trace(
             )
         )
         handles.append(
-            block.post_attention_layernorm.register_forward_hook(
+            attention_boundary.register_forward_hook(
                 capture_detail(mlp_name, "normalized_input")
             )
         )
         handles.append(
-            block.mlp.gate_proj.register_forward_hook(capture_qwen_gate(mlp_name))
+            block.mlp.gate_proj.register_forward_hook(
+                capture_gated_activation(mlp_name, block.mlp.act_fn)
+            )
         )
         handles.append(
             block.mlp.up_proj.register_forward_hook(
@@ -1653,8 +1872,11 @@ def _capture_qwen35_token_trace(
                 capture_detail_input(mlp_name, "mlp_expansion")
             )
         )
+        mlp_projection = (
+            block.post_feedforward_layernorm if is_gemma2 else block.mlp.down_proj
+        )
         handles.append(
-            block.mlp.down_proj.register_forward_hook(
+            mlp_projection.register_forward_hook(
                 capture_detail(mlp_name, "mlp_projection")
             )
         )
@@ -1688,8 +1910,11 @@ def _capture_qwen35_token_trace(
         attention_mask = torch.ones((1, total_length), dtype=torch.long, device=device)
         progress(f"Running token {token_position} as a one-token cached forward pass.\n")
         with torch.inference_mode():
-            model_output = model(
-                input_ids=input_ids.to(device),
+            forward_model = text_model if inputs_embeds is not None else model
+            model_output = forward_model(
+                input_ids=None if inputs_embeds is not None else input_ids.to(device),
+                inputs_embeds=inputs_embeds,
+                position_ids=position_ids,
                 attention_mask=attention_mask,
                 past_key_values=past_key_values,
                 use_cache=True,
@@ -1724,6 +1949,6 @@ def _capture_qwen35_token_trace(
 
 
 def _capture_token_trace(runtime: ModelRuntime, **kwargs: Any) -> tuple[ModelTrace, Any]:
-    if runtime.architecture == "qwen3_5":
+    if runtime.architecture in {"qwen3_5", "gemma2"}:
         return _capture_qwen35_token_trace(runtime, **kwargs)
     return _capture_gpt2_token_trace(runtime, **kwargs)

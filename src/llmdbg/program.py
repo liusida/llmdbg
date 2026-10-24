@@ -16,7 +16,7 @@ class Prompt:
 
 @dataclass(frozen=True)
 class ChatPrompt:
-    messages: tuple[dict[str, str], ...]
+    messages: tuple[dict[str, Any], ...]
     add_generation_prompt: bool = True
     max_new_tokens: int = 20
 
@@ -92,7 +92,12 @@ class LayerHandle:
         return self.session.detail(self._name("mlp"), "mlp_expansion_pre_activation")
 
     def gelu(self, _hidden: TensorHandle) -> TensorHandle:
-        return self.session.detail(self._name("mlp"), "mlp_expansion")
+        detail = (
+            "mlp_gate_activation"
+            if _hidden.vector == "mlp_gate_pre_activation"
+            else "mlp_expansion"
+        )
+        return self.session.detail(self._name("mlp"), detail)
 
     def projection(self, _hidden: TensorHandle) -> TensorHandle:
         return self.session.detail(self._name("mlp"), "mlp_projection")
@@ -107,7 +112,16 @@ class LayerHandle:
         return self.session.detail(self._name("gated_linear_attention"), "gated_delta_mixing")
 
     def post_attention_layernorm(self, _x: TensorHandle) -> TensorHandle:
+        caller = inspect.currentframe().f_back.f_code.co_name  # type: ignore[union-attr]
+        detail = "attention_projection" if caller == "full_attention" else "normalized_input"
+        kind = "full_attention" if caller == "full_attention" else "mlp"
+        return self.session.detail(self._name(kind), detail)
+
+    def pre_feedforward_layernorm(self, _x: TensorHandle) -> TensorHandle:
         return self.session.detail(self._name("mlp"), "normalized_input")
+
+    def post_feedforward_layernorm(self, _x: TensorHandle) -> TensorHandle:
+        return self.session.detail(self._name("mlp"), "mlp_projection")
 
     def gate_projection(self, _x: TensorHandle) -> TensorHandle:
         return self.session.detail(self._name("mlp"), "mlp_gate_pre_activation")
@@ -133,7 +147,7 @@ class RemoteModel:
 
     def chat(
         self,
-        messages: Sequence[dict[str, str]],
+        messages: Sequence[dict[str, Any]],
         *,
         add_generation_prompt: bool = True,
         max_new_tokens: int = 20,
@@ -274,6 +288,16 @@ def qwen35(
     dtype: str = "auto",
 ) -> RemoteModel:
     return RemoteModel(model, architecture="qwen3_5", revision=revision, device=device, dtype=dtype)
+
+
+def gemma2(
+    model: str,
+    *,
+    revision: str = "main",
+    device: str = "auto",
+    dtype: str = "auto",
+) -> RemoteModel:
+    return RemoteModel(model, architecture="gemma2", revision=revision, device=device, dtype=dtype)
 
 
 def debug(

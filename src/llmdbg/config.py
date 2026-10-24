@@ -25,16 +25,25 @@ _QWEN_MLP_OPERATIONS = (
     "post_attention_layernorm", "gate_projection", "silu",
     "up_projection", "gated_multiply", "down_projection", "residual_add",
 )
+_GEMMA_MLP_OPERATIONS = (
+    "pre_feedforward_layernorm", "gate_projection", "gelu",
+    "up_projection", "gated_multiply", "down_projection",
+    "post_feedforward_layernorm", "residual_add",
+)
 _FULL_ATTENTION_OPERATIONS = (
     "input_layernorm", "full_attention", "output_projection", "residual_add",
+)
+_GEMMA_ATTENTION_OPERATIONS = (
+    "input_layernorm", "full_attention", "output_projection",
+    "post_attention_layernorm", "residual_add",
 )
 _GATED_LINEAR_ATTENTION_OPERATIONS = (
     "input_layernorm", "gated_delta", "output_projection", "residual_add",
 )
 _FUNCTION_VARIANTS = {
-    "mlp": (_MLP_OPERATIONS, _QWEN_MLP_OPERATIONS),
+    "mlp": (_MLP_OPERATIONS, _QWEN_MLP_OPERATIONS, _GEMMA_MLP_OPERATIONS),
     "attention": (_ATTENTION_OPERATIONS,),
-    "full_attention": (_FULL_ATTENTION_OPERATIONS,),
+    "full_attention": (_FULL_ATTENTION_OPERATIONS, _GEMMA_ATTENTION_OPERATIONS),
     "gated_linear_attention": (_GATED_LINEAR_ATTENTION_OPERATIONS,),
 }
 _FUNCTION_OPERATIONS = {
@@ -305,10 +314,11 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
                         if (
                             not isinstance(message, dict)
                             or message.get("role") not in {"system", "user", "assistant"}
-                            or not isinstance(message.get("content"), str)
+                            or not _valid_message_content(message.get("content"))
                         ):
                             raise ValueError(
-                                "each message must contain a supported role and string content"
+                                "each message must contain a supported role and either string "
+                                "content or image/text content parts"
                             )
                     messages = value
                     for keyword in node.keywords:
@@ -350,8 +360,8 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
             raise ValueError(f"def {name}() operations must be, in order: {expected}")
 
     model_kind = model_call.func.id if isinstance(model_call.func, ast.Name) else "gpt2"
-    if model_kind not in {"gpt2", "qwen35"}:
-        raise ValueError("model constructor must be gpt2(...) or qwen35(...)")
+    if model_kind not in {"gpt2", "qwen35", "gemma2"}:
+        raise ValueError("model constructor must be gpt2(...), qwen35(...), or gemma2(...)")
 
     return {
         "configPath": str(path), "model": model,
@@ -365,3 +375,20 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
         "pythonProgram": True, "callLines": call_lines, "functions": functions,
         "functionBindings": function_bindings, "modelKind": model_kind,
     }
+
+
+def _valid_message_content(content: object) -> bool:
+    if isinstance(content, str):
+        return True
+    if not isinstance(content, list) or not content:
+        return False
+    for part in content:
+        if not isinstance(part, dict) or part.get("type") not in {"text", "image"}:
+            return False
+        if part["type"] == "text" and not isinstance(part.get("text"), str):
+            return False
+        if part["type"] == "image" and not isinstance(
+            part.get("url", part.get("path")), str
+        ):
+            return False
+    return True

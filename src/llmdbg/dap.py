@@ -135,6 +135,23 @@ class LLMDebugAdapter:
         ("down_projection", "mlp_projection", "Project active features back to model width."),
         ("residual_add", "output", "Add the MLP update to the residual stream."),
     )
+    GEMMA_ATTENTION_STEPS = (
+        ("input_layernorm", "normalized_input", "RMS-normalize the residual stream."),
+        ("full_attention", "full_attention_mixing", "Apply causal multi-head attention."),
+        ("output_projection", "attention_projection", "Project attention back to model width."),
+        ("post_attention_layernorm", "attention_projection", "RMS-normalize the attention update."),
+        ("residual_add", "output", "Add the attention update to the residual stream."),
+    )
+    GEMMA_MLP_STEPS = (
+        ("pre_feedforward_layernorm", "normalized_input", "RMS-normalize the post-attention residual stream."),
+        ("gate_projection", "mlp_gate_pre_activation", "Project into the GeGLU gate branch."),
+        ("gelu", "mlp_gate_activation", "Apply approximate GELU to the gate branch."),
+        ("up_projection", "mlp_up_projection", "Project into the GeGLU value branch."),
+        ("gated_multiply", "mlp_expansion", "Multiply the activated gate and value branches."),
+        ("down_projection", "mlp_projection", "Project active features back to model width."),
+        ("post_feedforward_layernorm", "mlp_projection", "RMS-normalize the MLP update."),
+        ("residual_add", "output", "Add the MLP update to the residual stream."),
+    )
 
     def __init__(self, stream: ProtocolStream) -> None:
         self.stream = stream
@@ -143,6 +160,7 @@ class LLMDebugAdapter:
         self.execution: ModelExecution | None = None
         self.tokens: tuple[str, ...] = ()
         self.prompt = ""
+        self.messages: list[dict[str, Any]] = []
         self.model_name = "built-in demo"
         self.token_index = 0
         self.default_token: int | None = None
@@ -173,10 +191,20 @@ class LLMDebugAdapter:
         self.requested_dtype = "auto"
         self.max_new_tokens = 0
         self.generated_tokens = 0
+        self.transformer_layer_count = 0
 
     @property
     def internal_steps(self) -> tuple[tuple[str, str, str], ...]:
         function_name = self._function_name_for_path(self.outer_state.layer.name)
+        architecture = getattr(
+            getattr(getattr(self, "execution", None), "runtime", None),
+            "architecture", "",
+        )
+        if architecture == "gemma2":
+            if function_name == "full_attention":
+                return self.GEMMA_ATTENTION_STEPS
+            if function_name == "mlp":
+                return self.GEMMA_MLP_STEPS
         return {
             "attention": self.ATTENTION_STEPS,
             "full_attention": self.FULL_ATTENTION_STEPS,
@@ -356,6 +384,7 @@ class LLMDebugAdapter:
             model = arguments.get("model")
             self.model_name = str(model) if model else "built-in demo"
             self.prompt = str(arguments.get("prompt", "The capital of France is"))
+            self.messages = list(arguments.get("messages") or [])
             self.model_revision = str(arguments.get("revision", "main"))
             self.requested_device = str(arguments.get("device", "auto"))
             self.requested_dtype = str(arguments.get("dtype", "auto"))
@@ -574,6 +603,7 @@ class LLMDebugAdapter:
                     "prompt": self.prompt,
                     "tokens": list(self.tokens),
                     "currentToken": self.token_index,
+                    "images": self._prompt_images(),
                 },
             )
         elif command == "llmdbg/plot":
@@ -584,6 +614,7 @@ class LLMDebugAdapter:
                     str(arguments.get("code", "")),
                 ),
             )
+
         elif command == "llmdbg/neuronLens":
             mode = str(arguments.get("mode", "logit"))
             from llmdbg.residual_vocabulary_lenses import activate, available_lenses, lens
@@ -937,6 +968,41 @@ class LLMDebugAdapter:
             self.send_response(request, success=False, message=f"Unsupported request: {command}")
         return True
 
+    def _prompt_images(self) -> list[dict[str, Any]]:
+        """Describe multimodal inputs and their contiguous visual-token spans."""
+        sources: list[str] = []
+        for message in self.messages:
+            content = message.get("content") if isinstance(message, dict) else None
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "image":
+                    source = part.get("url", part.get("path"))
+                    if isinstance(source, str):
+                        sources.append(source)
+
+        spans: list[tuple[int, int]] = []
+        start: int | None = None
+        for index, token in enumerate((*self.tokens, "")):
+            visual = "image_pad" in token
+            if visual and start is None:
+                start = index
+            elif not visual and start is not None:
+                spans.append((start, index - 1))
+                start = None
+        return [
+            {
+                "source": source,
+                "startToken": spans[index][0] if index < len(spans) else None,
+                "endToken": spans[index][1] if index < len(spans) else None,
+                "tokenCount": (
+                    spans[index][1] - spans[index][0] + 1
+                    if index < len(spans) else None
+                ),
+            }
+            for index, source in enumerate(sources)
+        ]
+
     def _build_virtual_source(
         self,
         arguments: dict[str, Any],
@@ -982,6 +1048,7 @@ class LLMDebugAdapter:
                 "h",
                 (),
             )
+        self.transformer_layer_count = len(runtime_layers)
         runtime_architecture = getattr(runtime, "architecture", "gpt2")
 
         def layer_kind(index: int) -> str:
@@ -1081,9 +1148,18 @@ class LLMDebugAdapter:
         self.function_bindings = dict(arguments.get("functionBindings", {}))
         step_sets = {
             "attention": self.ATTENTION_STEPS,
-            "full_attention": self.FULL_ATTENTION_STEPS,
+            "full_attention": (
+                self.GEMMA_ATTENTION_STEPS
+                if runtime_architecture == "gemma2" else self.FULL_ATTENTION_STEPS
+            ),
             "gated_linear_attention": self.GATED_LINEAR_ATTENTION_STEPS,
-            "mlp": self.QWEN_MLP_STEPS if runtime_architecture == "qwen3_5" else self.MLP_STEPS,
+            "mlp": (
+                self.GEMMA_MLP_STEPS
+                if runtime_architecture == "gemma2"
+                else self.QWEN_MLP_STEPS
+                if runtime_architecture == "qwen3_5"
+                else self.MLP_STEPS
+            ),
         }
         self.function_source_lines = {}
         if isinstance(functions, dict):
@@ -1239,6 +1315,14 @@ class LLMDebugAdapter:
             return int(nop_match.group(1))
         demo_match = re.fullmatch(r"(?:attention|mlp)_(\d+)", path)
         return int(demo_match.group(1)) if demo_match is not None else None
+
+    def _is_final_transformer_layer(self, path: str) -> bool:
+        index = self._transformer_layer_index(path)
+        return (
+            index is not None
+            and getattr(self, "transformer_layer_count", 0) > 0
+            and index == self.transformer_layer_count - 1
+        )
 
     def _current_lens_phase(self) -> int:
         """Return the explicit block phase: pre, attention, mid, MLP, or post."""
@@ -3391,6 +3475,7 @@ class LLMDebugAdapter:
                     "token": self.tokens[self.token_index],
                     "layer": layer,
                     "transformerLayer": self._transformer_layer_index(layer),
+                    "isFinalLayer": self._is_final_transformer_layer(layer),
                     "saved": self._lens_result_is_saved(view, layer),
                     "vectorLabel": f"ICA {label}",
                     "vectorNorm": sum(float(value) ** 2 for value in vector) ** 0.5,
@@ -3413,6 +3498,18 @@ class LLMDebugAdapter:
                             "componentNorm": component.projection.norm,
                             "logitTokens": tokens(component.projection.vocabulary),
                             "jLensTokens": tokens(component.projection.j_lens),
+                            "jLensFallback": bool(
+                                getattr(component.projection, "j_lens_metadata", None)
+                                and component.projection.j_lens_metadata.get("fallback")
+                            ),
+                            "rLensFallback": bool(
+                                getattr(component.projection, "r_lens_metadata", None)
+                                and component.projection.r_lens_metadata.get("fallback")
+                            ),
+                            "jppLensFallback": bool(
+                                getattr(component.projection, "jpp_lens_metadata", None)
+                                and component.projection.jpp_lens_metadata.get("fallback")
+                            ),
                             "rLensTokens": tokens(component.projection.r_lens),
                             "jppLensTokens": tokens(
                                 getattr(component.projection, "jpp_lens", ())
@@ -3448,6 +3545,7 @@ class LLMDebugAdapter:
                 "token": self.tokens[self.token_index],
                 "layer": layer,
                 "transformerLayer": self._transformer_layer_index(layer),
+                "isFinalLayer": self._is_final_transformer_layer(layer),
                 "saved": self._lens_result_is_saved(view, layer),
                 "vectorLabel": label,
                 "vectorNorm": projection.norm,
@@ -3463,6 +3561,18 @@ class LLMDebugAdapter:
                 "jppLensLabel": jpp_lens_label,
                 "logitTokens": tokens(projection.vocabulary),
                 "jLensTokens": tokens(projection.j_lens),
+                "jLensFallback": bool(
+                    getattr(projection, "j_lens_metadata", None)
+                    and projection.j_lens_metadata.get("fallback")
+                ),
+                "rLensFallback": bool(
+                    getattr(projection, "r_lens_metadata", None)
+                    and projection.r_lens_metadata.get("fallback")
+                ),
+                "jppLensFallback": bool(
+                    getattr(projection, "jpp_lens_metadata", None)
+                    and projection.jpp_lens_metadata.get("fallback")
+                ),
                 "rLensTokens": tokens(projection.r_lens),
                 "jppLensTokens": tokens(getattr(projection, "jpp_lens", ())),
                 "jLensUnavailable": missing_message(
@@ -3520,6 +3630,7 @@ class LLMDebugAdapter:
             "token": self.tokens[self.token_index],
             "layer": layer,
             "transformerLayer": self._transformer_layer_index(layer),
+            "isFinalLayer": self._is_final_transformer_layer(layer),
             "saved": self._lens_result_is_saved(view, layer),
             "jLensResolved": include_j_lens,
             "rLensResolved": include_r_lens,
@@ -3615,6 +3726,18 @@ class LLMDebugAdapter:
                         }
                         for token_rank, token in enumerate(neuron.j_lens, start=1)
                     ],
+                    "jLensFallback": bool(
+                        getattr(neuron, "j_lens_metadata", None)
+                        and neuron.j_lens_metadata.get("fallback")
+                    ),
+                    "rLensFallback": bool(
+                        getattr(neuron, "r_lens_metadata", None)
+                        and neuron.r_lens_metadata.get("fallback")
+                    ),
+                    "jppLensFallback": bool(
+                        getattr(neuron, "jpp_lens_metadata", None)
+                        and neuron.jpp_lens_metadata.get("fallback")
+                    ),
                     "jppLensTokens": [
                         {
                             "rank": token_rank,

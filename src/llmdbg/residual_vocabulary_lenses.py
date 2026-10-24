@@ -39,6 +39,20 @@ DEFAULT_LENSES: tuple[dict[str, Any], ...] = (
         "models": ["Qwen/Qwen3.5-9B"],
         "enabled": True,
     },
+    {
+        "id": "j-neuronpedia",
+        "label": "Neuronpedia J Lens",
+        "method": "j",
+        "source": "hf://models/neuronpedia/jacobian-lens",
+        "enabled": True,
+    },
+    {
+        "id": "jpp-neuronpedia",
+        "label": "Neuronpedia J++ Lens",
+        "method": "jpp",
+        "source": "hf://models/neuronpedia/jacobian-lens",
+        "enabled": True,
+    },
 )
 
 _active_id: ContextVar[str | dict[str, str] | None] = ContextVar(
@@ -161,6 +175,18 @@ def available_lenses(model_id: str) -> tuple[dict[str, str], ...]:
         if not local_jpp and isinstance(models, list) and not any(
             str(candidate).lower() in {normalized, "*"} for candidate in models
         ):
+            continue
+        from llmdbg.neuronpedia_discovery import is_source as is_neuronpedia_source
+
+        if is_neuronpedia_source(item, item["method"]):
+            if not isinstance(models, list):
+                if item["method"] == "j":
+                    from llmdbg.neuronpedia_j_lens import artifact_path
+                else:
+                    from llmdbg.neuronpedia_jpp_lens import artifact_path
+                if artifact_path(model_id, item) is None:
+                    continue
+            result.append({"id": item["id"], "label": item["label"], "method": item["method"]})
             continue
         if not isinstance(models, list):
             try:

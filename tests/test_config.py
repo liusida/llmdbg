@@ -8,6 +8,28 @@ from llmdbg.config import load_debug_config
 
 
 class DebugConfigTest(unittest.TestCase):
+    def test_loads_gemma2_chat_program(self) -> None:
+        source = Path(__file__).parents[2] / "llmdbg-usecase" / "Gemma2-2B-IT.llmdbg.py"
+        config = load_debug_config(str(source))
+
+        self.assertEqual(config["modelKind"], "gemma2")
+        self.assertEqual(config["model"], "google/gemma-2-2b-it")
+        self.assertEqual(
+            list(config["functions"]["full_attention"]),
+            [
+                "input_layernorm", "full_attention", "output_projection",
+                "post_attention_layernorm", "residual_add",
+            ],
+        )
+        self.assertEqual(
+            list(config["functions"]["mlp"]),
+            [
+                "pre_feedforward_layernorm", "gate_projection", "gelu",
+                "up_projection", "gated_multiply", "down_projection",
+                "post_feedforward_layernorm", "residual_add",
+            ],
+        )
+
     def test_loads_qwen35_chat_program(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "Qwen35-2B-Chat.llmdbg.py"
@@ -35,6 +57,19 @@ with debug(model, tokens):
         self.assertTrue(config["addGenerationPrompt"])
         self.assertEqual(config["maxNewTokens"], 12)
         self.assertEqual(config["prompt"], "")
+
+    def test_loads_qwen35_multimodal_chat_program(self) -> None:
+        source = Path(__file__).parents[2] / "llmdbg-usecase" / "Qwen35-2B-Vision.llmdbg.py"
+        config = load_debug_config(str(source))
+
+        self.assertEqual(config["model"], "Qwen/Qwen3.5-2B")
+        content = config["messages"][1]["content"]
+        self.assertEqual(content[0]["type"], "image")
+        image_source = content[0].get("url", content[0].get("path"))
+        self.assertIsInstance(image_source, str)
+        self.assertTrue(image_source.lower().endswith((".jpg", ".jpeg", ".png", ".webp")))
+        self.assertEqual(content[1]["type"], "text")
+        self.assertEqual(config["maxNewTokens"], 20)
 
     def test_loads_qwen35_hybrid_python_program(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

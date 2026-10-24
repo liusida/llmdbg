@@ -17,6 +17,52 @@ from llmdbg.residual_vocabulary_lenses import (
 
 
 class ResidualVocabularyLensRegistryTest(unittest.TestCase):
+    def test_neuronpedia_folders_are_discovered_without_a_model_allowlist(self) -> None:
+        configured = [
+            {
+                "id": "j-neuronpedia", "label": "Neuronpedia J Lens",
+                "method": "j", "source": "hf://models/neuronpedia/jacobian-lens",
+            },
+            {
+                "id": "jpp-neuronpedia", "label": "Neuronpedia J++ Lens",
+                "method": "jpp", "source": "hf://models/neuronpedia/jacobian-lens",
+            },
+        ]
+        files = (
+            "new-model/jlens/Salesforce-wikitext/new-model_jacobian_lens.pt",
+            "new-model/jpp/Salesforce-wikitext/new-model_jpp_lens.pt",
+        )
+        with patch.dict(
+            os.environ,
+            {"LLMDBG_RESIDUAL_TO_VOCABULARY_LENSES": json.dumps(configured)},
+        ), patch(
+            "llmdbg.neuronpedia_discovery.repository_files", return_value=files
+        ):
+            available_lenses.cache_clear()
+            labels = {item["label"] for item in available_lenses("owner/new-model")}
+            available_lenses.cache_clear()
+
+        self.assertEqual(labels, {"Neuronpedia J Lens", "Neuronpedia J++ Lens"})
+
+    def test_neuronpedia_default_is_available_only_for_declared_models(self) -> None:
+        configured = [{
+            "id": "j-neuronpedia",
+            "label": "Neuronpedia J Lens",
+            "method": "j",
+            "source": "hf://models/neuronpedia/jacobian-lens",
+            "models": ["Qwen/Qwen3.5-27B"],
+        }]
+        with patch.dict(
+            os.environ,
+            {"LLMDBG_RESIDUAL_TO_VOCABULARY_LENSES": json.dumps(configured)},
+        ):
+            available_lenses.cache_clear()
+            qwen = available_lenses("Qwen/Qwen3.5-27B")
+            self.assertIn("Neuronpedia J Lens", {item["label"] for item in qwen})
+            unsupported = available_lenses("Qwen/Qwen3.5-9B")
+            self.assertNotIn("Neuronpedia J Lens", {item["label"] for item in unsupported})
+            available_lenses.cache_clear()
+
     def test_custom_lens_can_be_selected_without_replacing_its_method(self) -> None:
         configured = [
             {

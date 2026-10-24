@@ -78,6 +78,11 @@ def _download_from_hub(model_id: str) -> dict[str, Any] | None:
     from llmdbg.residual_vocabulary_lenses import active_lens, source_file
 
     configured = active_lens("j")
+    from llmdbg.neuronpedia_j_lens import is_source as is_neuronpedia_source
+    from llmdbg.neuronpedia_j_lens import load as load_neuronpedia
+
+    if is_neuronpedia_source(configured):
+        return load_neuronpedia(configured, model_id)
     source = configured or {"source": f"hf://{HUB_REPO_TYPE}s/{HUB_REPO_ID}"}
     index_path = source_file(source, "index.json")
     index = json.loads(index_path.read_text())

@@ -13,6 +13,7 @@ dependencies = [
   "gb10-load-llm==0.1.2",
   "huggingface-hub>=1.0,<3",
   "safetensors>=0.5,<1",
+  "torchvision>=0.24,<1",
 ]
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",

@@ -61,6 +61,52 @@ class WorkspaceLensTest(unittest.TestCase):
             self.assertTrue(torch.equal(embed.matrix, torch.eye(2)))
             self.assertIsNone(missing_post)
 
+    def test_j_mid_uses_same_layer_post_map_as_an_explicit_fallback(self) -> None:
+        artifact = {
+            "manifest": {"format_version": 2, "model_id": "Qwen/Exact", "method": "j"},
+            "tensors": {"post.3": torch.full((2, 2), 3.0)},
+        }
+        with mock.patch.object(workspace_lens, "load_v2", return_value=artifact):
+            source = workspace_lens.source_map(
+                "j", "Qwen/Exact", "mid", 3, 2, layer_count=5
+            )
+        assert source is not None
+        self.assertTrue(torch.equal(source.matrix, artifact["tensors"]["post.3"]))
+        self.assertEqual(source.metadata["site"], "post")
+        self.assertEqual(source.metadata["tensor_key"], "post.3")
+        self.assertTrue(source.metadata["fallback"])
+        self.assertEqual(source.metadata["fallback_from_tensor_key"], "mid.3")
+
+    def test_jpp_mid_uses_same_layer_post_map_as_an_explicit_fallback(self) -> None:
+        artifact = {
+            "manifest": {"format_version": 2, "model_id": "Qwen/Exact", "method": "jpp"},
+            "tensors": {"post.3": torch.full((2, 2), 3.0)},
+        }
+        with mock.patch.object(workspace_lens, "load_v2", return_value=artifact):
+            source = workspace_lens.source_map(
+                "jpp", "Qwen/Exact", "mid", 3, 2, layer_count=5
+            )
+        assert source is not None
+        self.assertTrue(torch.equal(source.matrix, artifact["tensors"]["post.3"]))
+        self.assertEqual(source.metadata["site"], "post")
+        self.assertTrue(source.metadata["fallback"])
+        self.assertEqual(source.metadata["fallback_from_tensor_key"], "mid.3")
+
+    def test_final_jpp_mid_falls_back_to_implicit_post_identity(self) -> None:
+        artifact = {
+            "manifest": {"format_version": 2, "model_id": "Qwen/Exact", "method": "jpp"},
+            "tensors": {},
+        }
+        with mock.patch.object(workspace_lens, "load_v2", return_value=artifact):
+            source = workspace_lens.source_map(
+                "jpp", "Qwen/Exact", "mid", 3, 2, layer_count=4
+            )
+        assert source is not None
+        self.assertTrue(torch.equal(source.matrix, torch.eye(2)))
+        self.assertEqual(source.metadata["site"], "post")
+        self.assertEqual(source.metadata["artifact_kind"], "identity")
+        self.assertTrue(source.metadata["fallback"])
+
     def test_v2_artifact_rejects_a_different_checkpoint_revision(self) -> None:
         artifact = {
             "manifest": {"model_revision": "fitted-sha"},

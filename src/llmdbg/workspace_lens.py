@@ -107,6 +107,20 @@ def load_v2(
     key = (model_id.lower(), method, configured_id)
     if key in _cache:
         return _cache[key]
+    if method == "j":
+        from llmdbg.neuronpedia_j_lens import is_source as is_neuronpedia_source
+
+        if is_neuronpedia_source(configured):
+            # Neuronpedia publishes Anthropic-format block-output maps. They
+            # are resolved by the explicit legacy Post-only adapter below.
+            _cache[key] = None
+            return None
+    if method == "jpp":
+        from llmdbg.neuronpedia_jpp_lens import is_source as is_neuronpedia_jpp_source
+
+        if is_neuronpedia_jpp_source(configured):
+            _cache[key] = None
+            return None
     report = progress or (lambda _message: None)
     report(
         f"Resolving {method.upper()} Lens artifact for {model_id}; "
@@ -208,6 +222,15 @@ def source_map(
             )
     key = tensor_key(site, layer)
     matrix = artifact["tensors"].get(key)
+    fallback_from: str | None = None
+    if matrix is None and method in {"j", "jpp"} and site == "mid" and layer is not None:
+        fallback_from = key
+        key = tensor_key("post", layer)
+        matrix = artifact["tensors"].get(key)
+        if matrix is None and layer == layer_count - 1:
+            import torch
+
+            matrix = torch.eye(hidden_size)
     if matrix is None:
         return None
     if tuple(matrix.shape) != (hidden_size, hidden_size):
@@ -216,7 +239,15 @@ def source_map(
             f"expected {(hidden_size, hidden_size)}"
         )
     metadata = dict(artifact["manifest"])
-    metadata.update({"site": site, "layer": layer, "tensor_key": key})
+    metadata.update({"site": key.split(".", 1)[0], "layer": layer, "tensor_key": key})
+    if fallback_from is not None and layer == layer_count - 1:
+        metadata["artifact_kind"] = "identity"
+    if fallback_from is not None:
+        metadata.update({
+            "fallback": True,
+            "fallback_from_site": site,
+            "fallback_from_tensor_key": fallback_from,
+        })
     return LensSource(matrix, metadata)
 
 

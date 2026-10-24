@@ -200,6 +200,115 @@ class ModelRuntimeCacheTest(unittest.TestCase):
         self.assertEqual(result[0].score, 0.0)
         self.assertEqual(result[0].energy, 0.0)
 
+    def test_legacy_j_mid_uses_same_layer_post_map_as_fallback(self) -> None:
+        import torch
+        from types import SimpleNamespace
+
+        messages = []
+        model = SimpleNamespace(
+            config=SimpleNamespace(
+                _name_or_path="Qwen/Test", _commit_hash="revision",
+                model_type="qwen3_5", layer_types=["full_attention"] * 4,
+            ),
+            model=SimpleNamespace(layers=[object()] * 4),
+        )
+        execution = model_runtime.ModelExecution(
+            runtime=model_runtime.ModelRuntime(
+                model=model,
+                tokenizer=SimpleNamespace(_commit_hash="revision"),
+            ),
+            input_ids=None,
+            tokens=("x",),
+            device="cpu",
+            progress=messages.append,
+        )
+        matrix = torch.eye(2)
+        with mock.patch(
+            "llmdbg.workspace_lens.source_map", return_value=None
+        ), mock.patch(
+            "llmdbg.j_lens.source_map", return_value=(matrix, {"model_id": "Qwen/Test"})
+        ):
+            source = execution._workspace_lens_source(
+                "j", "Qwen/Test", "mid", 2, 2
+            )
+
+        assert source is not None
+        self.assertIs(source[0], matrix)
+        self.assertTrue(source[1]["fallback"])
+        self.assertEqual(source[1]["fallback_from_tensor_key"], "mid.2")
+        self.assertTrue(any("Post layer 2 J-Lens" in message for message in messages))
+
+    def test_legacy_jpp_mid_uses_same_layer_post_map_as_fallback(self) -> None:
+        import torch
+        from types import SimpleNamespace
+
+        messages = []
+        model = SimpleNamespace(
+            config=SimpleNamespace(
+                _name_or_path="Qwen/Test", _commit_hash="revision",
+                model_type="qwen3_5", layer_types=["full_attention"] * 4,
+            ),
+            model=SimpleNamespace(layers=[object()] * 4),
+        )
+        execution = model_runtime.ModelExecution(
+            runtime=model_runtime.ModelRuntime(
+                model=model,
+                tokenizer=SimpleNamespace(_commit_hash="revision"),
+            ),
+            input_ids=None,
+            tokens=("x",),
+            device="cpu",
+            progress=messages.append,
+        )
+        matrix = torch.eye(2)
+        with mock.patch(
+            "llmdbg.workspace_lens.source_map", return_value=None
+        ), mock.patch(
+            "llmdbg.jpp_lens.source_map", return_value=(matrix, {"model_id": "Qwen/Test"})
+        ):
+            source = execution._workspace_lens_source(
+                "jpp", "Qwen/Test", "mid", 2, 2
+            )
+
+        assert source is not None
+        self.assertIs(source[0], matrix)
+        self.assertTrue(source[1]["fallback"])
+        self.assertEqual(source[1]["fallback_from_tensor_key"], "mid.2")
+        self.assertTrue(any("Post layer 2 J++ Lens" in message for message in messages))
+
+    def test_legacy_final_jpp_mid_uses_post_identity_without_artifact(self) -> None:
+        import torch
+        from types import SimpleNamespace
+
+        messages = []
+        model = SimpleNamespace(
+            config=SimpleNamespace(
+                _name_or_path="Qwen/Test", _commit_hash="revision",
+                model_type="qwen3_5", layer_types=["full_attention"] * 4,
+            ),
+            model=SimpleNamespace(layers=[object()] * 4),
+        )
+        execution = model_runtime.ModelExecution(
+            runtime=model_runtime.ModelRuntime(
+                model=model,
+                tokenizer=SimpleNamespace(_commit_hash="revision"),
+            ),
+            input_ids=None,
+            tokens=("x",),
+            device="cpu",
+            progress=messages.append,
+        )
+        with mock.patch("llmdbg.workspace_lens.source_map", return_value=None):
+            source = execution._workspace_lens_source(
+                "jpp", "Qwen/Test", "mid", 3, 2
+            )
+
+        assert source is not None
+        self.assertTrue(torch.equal(source[0], torch.eye(2)))
+        self.assertEqual(source[1]["artifact_kind"], "identity")
+        self.assertTrue(source[1]["fallback"])
+        self.assertTrue(any("final Post identity" in message for message in messages))
+
     def test_component_fan_uses_top_component_as_unit_and_projects_full_output(self) -> None:
         import torch
         from types import SimpleNamespace

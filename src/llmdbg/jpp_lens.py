@@ -24,6 +24,8 @@ def _sha256(path: Path) -> str:
 
 
 def _maps(artifact: dict[str, Any]) -> dict[Any, Any] | None:
+    if isinstance(artifact.get("J"), dict):
+        return artifact["J"]
     parameters = artifact.get("parameters")
     if isinstance(parameters, dict) and isinstance(parameters.get("jacobians"), dict):
         return parameters["jacobians"]
@@ -60,6 +62,21 @@ def load_jpp_lens(model_id: str) -> dict[str, Any] | None:
     cache_key = f"{configured_id}:{model_id}"
     if cache_key in _artifact_cache:
         return _artifact_cache[cache_key]
+    if configured:
+        from llmdbg.neuronpedia_jpp_lens import is_source as is_neuronpedia_source
+        from llmdbg.neuronpedia_jpp_lens import load as load_neuronpedia
+
+        if is_neuronpedia_source(configured):
+            artifact = load_neuronpedia(configured, model_id)
+            if artifact is None:
+                return None
+            artifact["_artifact_kind"] = "custom"
+            artifact["_configured_id"] = configured_id
+            artifact["_configured_label"] = str(
+                configured.get("label") or "Neuronpedia J++ Lens"
+            )
+            _artifact_cache[cache_key] = artifact
+            return artifact
     override = os.environ.get("LLMDBG_JPP_LENS_PATH")
     if override:
         path = Path(override).expanduser()
