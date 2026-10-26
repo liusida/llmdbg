@@ -8,6 +8,14 @@ from llmdbg.config import load_debug_config
 
 
 class DebugConfigTest(unittest.TestCase):
+    def test_loads_gemma4_vision_program(self) -> None:
+        source = Path(__file__).parents[2] / "llmdbg-usecase" / "Gemma4-E2B.llmdbg.py"
+        config = load_debug_config(str(source))
+        self.assertEqual(config["modelKind"], "gemma4")
+        self.assertEqual(config["model"], "google/gemma-4-E2B-it")
+        self.assertEqual(len(config["functions"]["full_attention"]), 9)
+        self.assertEqual(len(config["functions"]["mlp"]), 8)
+
     def test_loads_gemma2_chat_program(self) -> None:
         source = Path(__file__).parents[2] / "llmdbg-usecase" / "Gemma2-2B-IT.llmdbg.py"
         config = load_debug_config(str(source))
@@ -64,12 +72,20 @@ with debug(model, tokens):
 
         self.assertEqual(config["model"], "Qwen/Qwen3.5-2B")
         content = config["messages"][1]["content"]
-        self.assertEqual(content[0]["type"], "image")
-        image_source = content[0].get("url", content[0].get("path"))
+        image = next(part for part in content if part["type"] == "image")
+        image_source = image.get("url", image.get("path"))
         self.assertIsInstance(image_source, str)
         self.assertTrue(image_source.lower().endswith((".jpg", ".jpeg", ".png", ".webp")))
-        self.assertEqual(content[1]["type"], "text")
+        self.assertTrue(any(part["type"] == "text" for part in content))
         self.assertEqual(config["maxNewTokens"], 20)
+
+    def test_loads_qwen3vl_full_attention_vision_example(self) -> None:
+        source = Path(__file__).parents[2] / "llmdbg-usecase" / "Qwen3-VL-2B-Instruct.llmdbg.py"
+        config = load_debug_config(str(source))
+        self.assertEqual(config["model"], "Qwen/Qwen3-VL-2B-Instruct")
+        self.assertEqual(config["modelKind"], "qwen3vl")
+        self.assertIn("visual_residual", config["callLines"])
+        self.assertIn("query_projection", config["functions"]["full_attention"])
 
     def test_loads_qwen35_hybrid_python_program(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

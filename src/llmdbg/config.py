@@ -31,19 +31,35 @@ _GEMMA_MLP_OPERATIONS = (
     "post_feedforward_layernorm", "residual_add",
 )
 _FULL_ATTENTION_OPERATIONS = (
+    "input_layernorm", "query_projection", "key_projection", "value_projection",
+    "cached_keys", "cached_values", "attention_weights", "mix_values",
+    "output_projection", "residual_add",
+)
+_FULL_ATTENTION_LEGACY_OPERATIONS = (
     "input_layernorm", "full_attention", "output_projection", "residual_add",
 )
 _GEMMA_ATTENTION_OPERATIONS = (
     "input_layernorm", "full_attention", "output_projection",
     "post_attention_layernorm", "residual_add",
 )
+_GEMMA4_ATTENTION_OPERATIONS = (
+    "input_layernorm", "query_projection", "cached_keys", "cached_values",
+    "attention_weights", "mix_values", "output_projection", "post_attention_layernorm", "residual_add",
+)
 _GATED_LINEAR_ATTENTION_OPERATIONS = (
     "input_layernorm", "gated_delta", "output_projection", "residual_add",
 )
 _FUNCTION_VARIANTS = {
     "mlp": (_MLP_OPERATIONS, _QWEN_MLP_OPERATIONS, _GEMMA_MLP_OPERATIONS),
-    "attention": (_ATTENTION_OPERATIONS,),
-    "full_attention": (_FULL_ATTENTION_OPERATIONS, _GEMMA_ATTENTION_OPERATIONS),
+    "attention": (_ATTENTION_OPERATIONS, ("query_projection", "key_projection", "value_projection", "cached_keys", "cached_values", "attention_weights", "mix_values")),
+    "gated_delta": (("convolved_qkv", "gates", "cached_memory", "update_memory", "read_memory", "gated_output_norm"),),
+    "full_attention": (
+        _FULL_ATTENTION_OPERATIONS,
+        _FULL_ATTENTION_LEGACY_OPERATIONS,
+        _GEMMA_ATTENTION_OPERATIONS,
+        _GEMMA4_ATTENTION_OPERATIONS,
+        ("input_layernorm", "attention", "output_projection", "residual_add"),
+    ),
     "gated_linear_attention": (_GATED_LINEAR_ATTENTION_OPERATIONS,),
 }
 _FUNCTION_OPERATIONS = {
@@ -225,6 +241,7 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
     functions: dict[str, dict[str, int]] = {}
     function_bindings: dict[str, list[dict[str, Any]]] = {}
     call_lines: dict[str, Any] = {}
+    function_returns: dict[str, dict[str, Any]] = {}
     globals_: dict[str, Any] = {}
 
     for statement in tree.body:
@@ -238,7 +255,21 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
         elif isinstance(statement, ast.FunctionDef) and statement.name in _FUNCTION_OPERATIONS:
             operations: dict[str, int] = {}
             bindings: list[dict[str, Any]] = []
+            if statement.body and isinstance(statement.body[-1], ast.Return) and isinstance(statement.body[-1].value, ast.Name):
+                function_returns[statement.name] = {"line": statement.body[-1].lineno, "name": statement.body[-1].value.id}
             for node in ast.walk(statement):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _FUNCTION_OPERATIONS[statement.name]:
+                    operations.setdefault(node.func.id, node.lineno)
+                if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.value, ast.Call):
+                    operation = node.value.func.attr if isinstance(node.value.func, ast.Attribute) else node.value.func.id if isinstance(node.value.func, ast.Name) else ""
+                    if operation in _FUNCTION_OPERATIONS[statement.name]:
+                        if isinstance(node.targets[0], ast.Tuple):
+                            vectors = {"convolved_qkv": ("delta_query", "delta_key", "delta_value"), "gates": ("delta_decay", "delta_beta", "delta_gate")}.get(operation, ())
+                            for target, vector in zip(node.targets[0].elts, vectors):
+                                if isinstance(target, ast.Name):
+                                    bindings.append({"name": target.id, "operation": operation, "vector": vector, "line": node.lineno})
+                        elif isinstance(node.targets[0], ast.Name) and isinstance(node.value.func, ast.Name):
+                            bindings.append({"name": node.targets[0].id, "operation": operation, "line": node.lineno})
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                     operation = node.func.attr
                     if operation in _FUNCTION_OPERATIONS[statement.name]:
@@ -334,7 +365,7 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
                                 raise ValueError("max_new_tokens must be non-negative")
                 elif node.func.attr in {
                     "token_embedding", "final_layernorm", "vocabulary_projection",
-                    "top_tokens",
+                    "top_tokens", "visual_residual", "per_layer_residual", "layer_scale",
                 }:
                     call_lines.setdefault(node.func.attr, node.lineno)
             elif isinstance(node.func, ast.Name) and node.func.id in _FUNCTION_OPERATIONS:
@@ -354,14 +385,21 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
         prompt = globals_.get("prompt")
     if messages is None and (not isinstance(prompt, str) or not prompt):
         raise ValueError("Python llmdbg program must tokenize a prompt or chat messages")
+    model_kind = model_call.func.id if isinstance(model_call.func, ast.Name) else "gpt2"
+    if model_kind not in {"gpt2", "qwen35", "qwen3vl", "gemma2", "gemma4"}:
+        raise ValueError("model constructor must be gpt2(...), qwen35(...), qwen3vl(...), gemma2(...), or gemma4(...)")
+
+    from llmdbg.source_plan import compile_plans
+    program_calls = {node.func.id for statement in tree.body if not isinstance(statement,(ast.FunctionDef,ast.AsyncFunctionDef))
+                     for node in ast.walk(statement) if isinstance(node,ast.Call) and isinstance(node.func,ast.Name)}
+    source_plans = compile_plans(tree, model_kind, program_calls)
+    reachable = {frame['name'] for plan in source_plans.values() for step in plan['steps'] for frame in step['frames']}
+    for name, plan in source_plans.items():
+        functions[name] = {step['operation']:step['line'] for step in plan['steps'] if step['kind']=='operation'}
     for name, variants in _FUNCTION_VARIANTS.items():
-        if name in functions and tuple(functions[name]) not in variants:
+        if name in functions and name not in reachable and tuple(functions[name]) not in variants:
             expected = " or ".join(", ".join(variant) for variant in variants)
             raise ValueError(f"def {name}() operations must be, in order: {expected}")
-
-    model_kind = model_call.func.id if isinstance(model_call.func, ast.Name) else "gpt2"
-    if model_kind not in {"gpt2", "qwen35", "gemma2"}:
-        raise ValueError("model constructor must be gpt2(...), qwen35(...), or gemma2(...)")
 
     return {
         "configPath": str(path), "model": model,
@@ -373,7 +411,8 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
         "defaultToken": token if token is not None else globals_.get("token"),
         "stopOnEntry": globals_.get("stop_on_entry", stop_on_entry),
         "pythonProgram": True, "callLines": call_lines, "functions": functions,
-        "functionBindings": function_bindings, "modelKind": model_kind,
+        "functionBindings": function_bindings, "functionReturns": function_returns, "modelKind": model_kind,
+        "sourcePlans": source_plans,
     }
 
 

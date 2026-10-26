@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Mapping
+from typing import Any, Mapping
 
 
 @dataclass(frozen=True)
@@ -27,6 +27,7 @@ class LayerState:
     output_vector: tuple[float, ...]
     interpretation: str
     details: Mapping[str, tuple[float, ...]] = field(default_factory=dict)
+    tensors: Mapping[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
 
 LAYERS = (
