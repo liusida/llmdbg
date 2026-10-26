@@ -1223,6 +1223,7 @@ async function createRuntime(context, runtimeRoot, recipe, output) {
 }
 
 function activate(context) {
+  require('./concept-trace').registerConceptTrace(context, vscode);
   const runningVersion = context.extension.packageJSON.version;
   let updateReloadStarted = false;
   async function reloadIfExtensionUpdated() {

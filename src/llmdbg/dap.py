@@ -739,6 +739,13 @@ class LLMDebugAdapter:
             self.send_event("invalidated", {"areas": ["variables", "watch"]})
         elif command == "llmdbg/vector":
             self.send_response(request, self._vector_snapshot())
+        elif command == "llmdbg/conceptTrace":
+            from llmdbg.concept_trace import dispatch
+            try:
+                result = dispatch(self, arguments)
+            except ValueError as error:
+                raise DebugActionError(str(error)) from error
+            self.send_response(request, result)
         elif command == "llmdbg/promptTokens":
             self.send_response(
                 request,

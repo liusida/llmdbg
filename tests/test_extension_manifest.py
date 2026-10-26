@@ -82,6 +82,8 @@ class ExtensionManifestTest(unittest.TestCase):
                 ("llmdbg.closePromptTokens", "llmdbg@3"),
                 ("llmdbg.decodeExpression", "llmdbg@4"),
                 ("llmdbg.closeExpressionDecoder", "llmdbg@4"),
+                ("llmdbg.showConceptTrace", "llmdbg@5"),
+                ("llmdbg.closeConceptTrace", "llmdbg@5"),
             ],
         )
 

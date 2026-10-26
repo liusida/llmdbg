@@ -23,6 +23,7 @@
   ],
   "files": [
     "extension.js",
+    "concept-trace.js",
     "runtime-profiles.js",
     "assets/**",
     "bundled/**",
@@ -114,6 +115,16 @@
         }
       },
       {
+        "command": "llmdbg.showConceptTrace",
+        "title": "llmdbg: Open Concept Trace",
+        "icon": { "light": "assets/concept-trace.svg", "dark": "assets/concept-trace.svg" }
+      },
+      {
+        "command": "llmdbg.closeConceptTrace",
+        "title": "llmdbg: Close Concept Trace",
+        "icon": { "light": "assets/concept-trace-open.svg", "dark": "assets/concept-trace-open.svg" }
+      },
+      {
         "command": "llmdbg.unloadModel",
         "title": "llmdbg: Unload Model",
         "icon": "$(trash)"
@@ -170,6 +181,16 @@
           "command": "llmdbg.closeExpressionDecoder",
           "when": "debugType == llmdbg && llmdbg.decoderPanelOpen",
           "group": "llmdbg@4"
+        },
+        {
+          "command": "llmdbg.showConceptTrace",
+          "when": "debugType == llmdbg && !llmdbg.conceptTraceOpen",
+          "group": "llmdbg@5"
+        },
+        {
+          "command": "llmdbg.closeConceptTrace",
+          "when": "debugType == llmdbg && llmdbg.conceptTraceOpen",
+          "group": "llmdbg@5"
         }
       ]
     },
