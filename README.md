@@ -65,6 +65,24 @@ size (0.8B, 2B, 9B, and 27B), plus a `.vscode/launch.json` entry that runs
 the currently active `.llmdbg.py` file,
 while leaving any existing files untouched.
 
+`Qwen3-VL-2B-Instruct.llmdbg.py` supports image+text prompts with full attention
+at every decoder layer. Use `qwen3vl("Qwen/Qwen3-VL-2B-Instruct")` and the
+checkpoint's chat processor. The example exposes Q/K/V, KV-cache tensors,
+attention weights, MLP steps, and early `block.visual_residual(x)` DeepStack
+injections. The vision encoder runs once during preparation; its embeddings and
+DeepStack features are retained for cached stepping and generation. Attention
+channel token contributions and image patch maps work at every decoder layer.
+Logit Lens is available immediately; J/R/J++ and ICA require artifacts fitted
+for this exact checkpoint and are not borrowed from Qwen3.5.
+
+`Gemma4-E2B.llmdbg.py` uses `gemma4("google/gemma-4-E2B-it")` for
+image+text debugging. Its 35 decoder layers expose sliding/global softmax
+attention, shared KV tensors, GeGLU MLPs, per-layer token-identity embedding
+updates, and final layer scaling. Image tokens support attention contribution
+and value patch maps. The vision encoder runs during preparation, not as
+step-through Python. Logit Lens works without fitted artifacts; other lenses
+must match the exact checkpoint (the base E2B and E2B-it are distinct).
+
 Qwen3.5 2B has separate Base and Chat starters. The Base starter tokenizes raw
 text. The Chat starter passes literal `messages` through the checkpoint's own
 chat template with `model.chat(messages, add_generation_prompt=True)` and pins
@@ -189,6 +207,128 @@ Set breakpoints on these calls or use
 **Step Over** to advance through them. Runtime vectors appear in debugger
 scopes; the source file is never rewritten.
 
+Dependency environments are isolated into **stable** (GPT-2, Gemma 2, Qwen)
+and **gemma4-preview** (Gemma 4) profiles. Selection is automatic from the
+source model; `"runtimeProfile": "stable"` or `"gemma4-preview"` in a launch
+configuration overrides it. Both pin Python 3.12 and Transformers 5.20.2.
+On GB10/CUDA 13, stable pins torch 2.10.0 / torchvision 0.25.0; Gemma preview
+pins torch 2.14.1 / torchvision 0.29.1. Other GPU backends have their own
+recipes, defined in `vscode-extension/runtime-profiles.js`.
+
+Profiles live in extension storage under `runtimes/<profile-platform-backend-hash>`.
+Changing a recipe creates a different directory, leaving other profiles and
+the legacy `runtime/` untouched. The resolved dependency lock is saved under
+`runtimes/locks/` and reused on rebuild. Model downloads still share the normal
+Hugging Face cache. **llmdbg: Show Runtime Diagnostics** shows the selected
+profile, interpreter, versions, and CUDA operation checks. Rebuild prompts for
+one profile and preserves its old environment as a backup. Switching profiles
+restarts the model host, so tensors are not reused across interpreters.
+The GB10 profiles have been smoke-tested with Qwen 3.5 2B vision and Gemma 4
+E2B-it respectively; other hardware/model combinations require their own tests.
+
+The Qwen 3.5 2B Vision example uses nested `attention(normalized, block)` and
+`gated_delta(normalized, block)` cores. Step Into enters either core; Step Over
+skips it (unless a breakpoint is hit), and Step Out returns to the outer
+output projection. DeltaNet exposes convolved/normalized Q/K/V, decay/beta/output
+gates, previous and updated recurrent memory, and the readout as inspectable
+tensors. Memory/gate snapshots are read-only diagnostic values; existing
+mixed-channel interventions remain available. Extra recurrent snapshots are
+captured only for programs defining the expanded DeltaNet core.
+When a nested mixer assigns its final output and then uses `return mixed`,
+stepping pauses on that return line with `mixed` and the other core locals
+still available to Watch, Tensor Plot, and Tensor Decoder. Inline returns such
+as `return block.gated_output_norm(readout, gate)` remain supported.
+
+Python helper stepping is derived from the authored source rather than a fixed
+operation/line sequence. Ordinary assignments, renamed locals, aliases,
+reassignment, tuple unpacking, safe tensor expressions, helper calls and returns
+automatically become source locations. Each helper has separate locals and a
+stack frame; breakpoints and Step Into/Over/Out follow that same source plan.
+Watch, Tensor Plot and Tensor Decoder resolve the locals available at the paused
+line. For example, these inspection-only additions need no adapter changes:
+
+```python
+mixed = block.gated_output_norm(readout, gate)
+copy = mixed
+difference = mixed - normalized
+return mixed
+```
+
+Model computations still use captured native tensors through an explicit
+operation registry. Alias arguments are supported; changing an operation's
+inputs or the model's residual return is rejected instead of showing an
+unrelated captured result. New model operations (or repeated cache-mutating
+operations) require backend capture support. Helper bodies are straight-line:
+arbitrary Python calls, mutation, recursion, and helper-local loops/branches are
+not executed and produce an explicit validation error. Existing outer token and
+layer loops remain supported. No runtime dependency changes are needed.
+
+**Decode Tensor Expression** opens a separate toolbar panel with a blank input for expressions
+such as `normalized - x`. It displays Logit Lens and every enabled configured
+J/R/J++ vocabulary lens, including custom/Neuronpedia entries, independently.
+Lenses without fitted maps are hidden; other loading failures remain visible without stopping debugging. The
+expression must squeeze to one model-width vector; matrices are not silently
+flattened. Variables, layer, and lens context come from the paused line;
+there are no separate site/layer controls. These arbitrary-expression readouts are
+exploratory labels, not calibrated probabilities or measured causal effects.
+Results are marked stale when the debug position changes; press Enter or
+Decode to read the current tensors.
+
+`W_o` exposes the paused layer's attention output weight in input-by-output
+orientation (including for linear-attention layers). For example,
+`mixed[0, 0, :64] @ W_o[:64, :]` projects the first 64 channels into residual
+space before decoding. This is a detached inspection copy and excludes bias.
+The collapsed **Loop** controls can bind an integer variable (default `i`)
+over a start-inclusive, stop-exclusive range, with up to 64 results. Enable it
+and use, for example, `mixed[0, 0, i*64:(i+1)*64] @ W_o[i*64:(i+1)*64, :]`
+to decode several heads at the current paused position.
+
+The Lens panel also includes **Attention Head Lens**. It decodes
+each head's `mixed_h @ W_o_h` using the selected vocabulary lenses and the
+model's actual head width. Before the channel lens, it shows the top five heads
+by calibrated norm (current norm / per-head reference median), with five tokens
+per lens. Compact cards use the same pill meters as channels, full at 10×;
+click a pill for raw norm, reference, and × measurements. Missing calibration
+is an explicit error with no meter, and ranking falls back to raw norms.
+Head outputs exclude projection bias and any later
+whole-output normalization. For gated attention, the captured mixed values
+already include the output gate. This block is available after mixing completes
+in conventional attention and DeltaNet layers.
+Each of the five heads occupies its own row. Click the head pill
+to inspect the top three channels restricted to that head, indented below
+its vocabulary readouts. Channel indices remain global; their existing signed
+projection-onto-module-output ranking, calibration, image/source-token controls,
+and interventions are preserved. The separate global Channel Lens is optional
+in the block picker rather than shown by default.
+
+DeltaNet head cards have a **Memory Contributions** icon. Only clicking it
+replays the prefix with a separate cache and captures the selected head's keys,
+values, decay and beta history. The shared Token Contributions panel then shows
+signed support for the current projected head output, source-token filtering,
+image-region highlighting, and collapsed patch maps for support and magnitude.
+The decomposition includes later overwriting, with the current query, gate and
+RMS denominator held fixed; it is not an attention weight or causal deletion
+effect. Positions identify writes, not exclusive pixel origins. Normal debugging
+does not collect this history. One result is cached until its inputs or
+interventions change. Replays that disagree with the paused snapshot are rejected.
+
+`scripts/measure_attention_channel_activation_scales.py` also records
+`head_norm_scales` for each conventional attention layer in its output JSON.
+Each query head has its own median reference norm of `mixed_h @ W_o_h`, plus
+token-norm percentiles. Prefix tokens are excluded as for channel calibration;
+projection and norm statistics use fp32, without bias or subsequent output
+normalization. Qwen3.5-2B also includes DeltaNet head references and separate
+`value_head_norm_scales` for its Value Lens. The artifact
+records the corpus hash and text-only modality; these are text-baseline
+references, not image-specific calibration. Existing JSON files must be
+regenerated to contain head scales; old files are not silently approximated.
+GPT-2 Medium includes head calibration for all 24 layers × 16 heads, using
+511 analyzed tokens from the diverse 32-sentence corpus (prefix excluded).
+The same corpus also supplies checkpoint-specific head references for GPT-2,
+Gemma 2 2B IT, Gemma 4 E2B IT, Qwen3-VL 2B Instruct, and Qwen3.5
+0.8B/2B/2B-Base/9B/27B. Only conventional attention layers receive head
+references; linear-attention layers retain channel-only calibration.
+
 Press **Step Into (F11)** on `attention()` or `mlp()` to enter its authored
 definition in the same file. Attention exposes LayerNorm, the combined QKV
 projection, the concatenated per-head attention result, output projection, and
@@ -254,6 +394,12 @@ percentile ribbons, and the packaged median scale as a marked guide line. Run
 `scripts/measure_mlp_activation_scales.py` or
 `scripts/measure_attention_channel_activation_scales.py` with `--plot-output`
 to reproduce them from the calibration prompt.
+Gemma 4 E2B-it has attention-channel and MLP scales for all 35 layers,
+measured in bfloat16 on the 441 non-prefix tokens of
+`scripts/data/diverse_32_sentences.txt`. This is a text-only reference, also
+used when inspecting image prompts; it is not an image-specific baseline.
+The scripts support Gemma's varying channel/MLP widths. Its plots are in
+`build/calibration/`. These scales are not used for the base E2B checkpoint.
 The toolbar's **Lens** view has a selector for **Logit Lens**, **J-Lens**,
 **R-Lens**, **J++ Lens**, or **All lenses**. Logit Lens projects the neuron's
 down-projection direction directly through the unembedding. J-Lens first
