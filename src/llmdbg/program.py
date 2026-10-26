@@ -4,9 +4,16 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass
+from types import FunctionType
 from typing import Any, Iterator, Sequence
 
 from llmdbg.model_runtime import ModelExecution, TokenPrediction, prepare_model_execution
+
+
+def _needs_delta_capture(frame) -> bool:
+    """Detect expanded DeltaNet operations independently of helper naming."""
+    return any(isinstance(value,FunctionType) and 'convolved_qkv' in value.__code__.co_names
+               for scope in (frame.f_globals,frame.f_locals) for value in scope.values())
 
 
 @dataclass(frozen=True)
@@ -86,6 +93,8 @@ class LayerHandle:
     def output_projection(self, _mixed: TensorHandle) -> TensorHandle:
         caller = inspect.currentframe().f_back.f_code.co_name  # type: ignore[union-attr]
         kind = caller if caller in {"full_attention", "gated_linear_attention"} else "attention"
+        if self.session.execution is not None and self.session.execution.runtime.architecture == "gemma4":
+            return self.session.detail(self._name(kind), "attention_projection_raw")
         return self.session.detail(self._name(kind), "attention_projection")
 
     def expansion(self, _x: TensorHandle) -> TensorHandle:
@@ -108,7 +117,64 @@ class LayerHandle:
     def full_attention(self, _x: TensorHandle) -> TensorHandle:
         return self.session.detail(self._name("full_attention"), "full_attention_mixing")
 
+    def visual_residual(self, x: TensorHandle) -> TensorHandle:
+        assert self.session.execution is not None
+        if self.index >= self.session.execution.runtime.visual_layer_count:
+            return x
+        return self.session.output(self._name("visual_residual"))
+
+    def per_layer_residual(self, x: TensorHandle) -> TensorHandle:
+        assert self.session.execution is not None
+        return self.session.output(self._name("per_layer_residual")) if self.session.execution.runtime.has_per_layer_inputs else x
+
+    def layer_scale(self, x: TensorHandle) -> TensorHandle:
+        assert self.session.execution is not None
+        return self.session.output(self._name("layer_scale")) if self.session.execution.runtime.has_per_layer_inputs else x
+
+    def query_projection(self, _x: TensorHandle) -> TensorHandle:
+        return self.session.detail(self._name("full_attention"), "attention_query")
+
+    def key_projection(self, _x: TensorHandle) -> TensorHandle:
+        return self.session.detail(self._name("full_attention"), "attention_key")
+
+    def value_projection(self, _x: TensorHandle) -> TensorHandle:
+        return self.session.detail(self._name("full_attention"), "attention_value")
+
+    def cached_keys(self, _key: TensorHandle) -> TensorHandle:
+        return self.session.detail(self._name("full_attention"), "attention_cached_keys")
+
+    def cached_values(self, _value: TensorHandle) -> TensorHandle:
+        return self.session.detail(self._name("full_attention"), "attention_cached_values")
+
+    def attention_weights(
+        self, _query: TensorHandle, _keys: TensorHandle
+    ) -> TensorHandle:
+        return self.session.detail(self._name("full_attention"), "attention_weights")
+
+    def mix_values(
+        self, _weights: TensorHandle, _values: TensorHandle
+    ) -> TensorHandle:
+        return self.session.detail(self._name("full_attention"), "full_attention_mixing")
+
     def gated_delta(self, _x: TensorHandle) -> TensorHandle:
+        return self.session.detail(self._name("gated_linear_attention"), "gated_delta_mixing")
+
+    def convolved_qkv(self, _x):
+        return tuple(self.session.detail(self._name("gated_linear_attention"), "delta_" + name) for name in ("query", "key", "value"))
+
+    def gates(self, _x):
+        return tuple(self.session.detail(self._name("gated_linear_attention"), "delta_" + name) for name in ("decay", "beta", "gate"))
+
+    def cached_memory(self):
+        return self.session.detail(self._name("gated_linear_attention"), "delta_previous_memory")
+
+    def update_memory(self, memory, key, value, decay, beta):
+        return self.session.detail(self._name("gated_linear_attention"), "delta_updated_memory")
+
+    def read_memory(self, query, memory):
+        return self.session.detail(self._name("gated_linear_attention"), "delta_readout")
+
+    def gated_output_norm(self, readout, gate):
         return self.session.detail(self._name("gated_linear_attention"), "gated_delta_mixing")
 
     def post_attention_layernorm(self, _x: TensorHandle) -> TensorHandle:
@@ -201,6 +267,7 @@ class DebugSession:
             device=self.model.device, dtype=self.model.dtype,
         )
         self.model._session = self
+        self.execution.capture_delta_core = _needs_delta_capture(inspect.currentframe().f_back)
         self._refresh()
         return self
 
@@ -290,6 +357,13 @@ def qwen35(
     return RemoteModel(model, architecture="qwen3_5", revision=revision, device=device, dtype=dtype)
 
 
+def qwen3vl(
+    model: str = "Qwen/Qwen3-VL-2B-Instruct",
+    *, revision: str = "main", device: str = "auto", dtype: str = "auto",
+) -> RemoteModel:
+    return RemoteModel(model, architecture="qwen3_vl", revision=revision, device=device, dtype=dtype)
+
+
 def gemma2(
     model: str,
     *,
@@ -298,6 +372,12 @@ def gemma2(
     dtype: str = "auto",
 ) -> RemoteModel:
     return RemoteModel(model, architecture="gemma2", revision=revision, device=device, dtype=dtype)
+
+
+def gemma4(
+    model: str = "google/gemma-4-E2B-it", *, revision: str = "main", device: str = "auto", dtype: str = "auto",
+) -> RemoteModel:
+    return RemoteModel(model, architecture="gemma4", revision=revision, device=device, dtype=dtype)
 
 
 def debug(

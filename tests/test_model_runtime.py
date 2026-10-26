@@ -7,6 +7,160 @@ import llmdbg.model_runtime as model_runtime
 
 
 class ModelRuntimeCacheTest(unittest.TestCase):
+    def test_delta_channels_group_by_value_heads_not_attention_heads(self) -> None:
+        import torch
+        from types import SimpleNamespace
+        execution = object.__new__(model_runtime.ModelExecution)
+        execution.runtime = SimpleNamespace(
+            architecture='qwen35',
+            layers=[SimpleNamespace(linear_attn=SimpleNamespace(out_proj=SimpleNamespace(weight=torch.ones(3, 2048))))],
+            model=SimpleNamespace(config=SimpleNamespace(text_config=SimpleNamespace(
+                num_attention_heads=8, linear_num_value_heads=16))),
+        )
+        with mock.patch.object(model_runtime.ModelExecution, '_top_projected_components', return_value=()) as project:
+            execution.top_attention_channels('model.layers.0.gated_linear_attention', (1.,)*2048, head_index=15)
+        self.assertEqual(project.call_args.kwargs['channel_range'], (1920, 2048))
+
+    def test_delta_core_snapshots_reconstruct_native_memory_and_readout(self) -> None:
+        import torch
+        from types import SimpleNamespace
+        from transformers import Qwen3_5TextConfig, Qwen3_5ForCausalLM
+        config = Qwen3_5TextConfig(
+            vocab_size=64, hidden_size=32, intermediate_size=64, num_hidden_layers=2,
+            num_attention_heads=4, num_key_value_heads=2, head_dim=8,
+            linear_num_key_heads=2, linear_num_value_heads=4,
+            linear_key_head_dim=8, linear_value_head_dim=8,
+            layer_types=["linear_attention", "full_attention"],
+        )
+        with torch.random.fork_rng():
+            torch.manual_seed(42)
+            model = Qwen3_5ForCausalLM(config).eval()
+            runtime = model_runtime.ModelRuntime(model, SimpleNamespace(decode=lambda ids: str(ids[0])))
+            ids = torch.tensor([[1, 2, 3]])
+            execution = model_runtime.ModelExecution(runtime, ids, ("a", "b", "c"), "cpu", lambda _: None)
+            execution.capture_delta_core = True
+            with torch.inference_mode():
+                expected = model.model(input_ids=ids, use_cache=False).last_hidden_state
+            for position in (0, 2):
+                trace = execution.trace_token(position)
+                state = next(s for s in trace.states if s.layer.name.endswith(".gated_linear_attention"))
+                t = state.tensors
+                q, k, v = (t["delta_" + name][:, 0].float() for name in ("query", "key", "value"))
+                memory = t["delta_previous_memory"] * t["delta_decay"][:, 0, :, None, None]
+                prediction = (memory * k.unsqueeze(-1)).sum(-2)
+                correction = (v - prediction) * t["delta_beta"][:, 0, :, None]
+                updated = memory + k.unsqueeze(-1) * correction.unsqueeze(-2)
+                torch.testing.assert_close(updated, t["delta_updated_memory"], atol=1e-5, rtol=1e-4)
+                readout = (updated * q.unsqueeze(-1)).sum(-2)
+                torch.testing.assert_close(readout, t["delta_readout"][:, 0], atol=1e-5, rtol=1e-4)
+                torch.testing.assert_close(torch.tensor(trace.states[-1].output_vector), expected[0, position], atol=1e-5, rtol=1e-4)
+
+    def test_gemma4_cached_trace_matches_native_shared_sliding_attention(self) -> None:
+        import torch
+        from types import SimpleNamespace
+        from transformers import Gemma4TextConfig, Gemma4ForCausalLM
+
+        config = Gemma4TextConfig(
+            vocab_size=64, hidden_size=32, intermediate_size=64, num_hidden_layers=4,
+            num_attention_heads=4, num_key_value_heads=1, head_dim=8, global_head_dim=16,
+            layer_types=["sliding_attention", "full_attention"] * 2,
+            num_kv_shared_layers=2, sliding_window=4,
+            hidden_size_per_layer_input=8, vocab_size_per_layer_input=64,
+            final_logit_softcapping=30.,
+        )
+        with torch.random.fork_rng():
+            torch.manual_seed(42)
+            model = Gemma4ForCausalLM(config).eval()
+            model.model.config._attn_implementation = "eager"
+            runtime = model_runtime.ModelRuntime(model, SimpleNamespace(decode=lambda ids: str(ids[0])))
+            ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9]])
+            with torch.inference_mode():
+                embeddings = model.model.get_input_embeddings()(ids)
+                ple = model.model.get_per_layer_inputs(ids, embeddings)
+                reference = model.model(input_ids=ids, use_cache=False).last_hidden_state
+            execution = model_runtime.ModelExecution(
+                runtime, ids, tuple(str(i) for i in range(9)), "cpu", lambda _: None,
+                inputs_embeds=embeddings, position_ids=torch.arange(9).view(1, -1),
+                per_layer_inputs=ple,
+            )
+            for position in (1, 6, 8):
+                trace = execution.trace_token(position)
+                torch.testing.assert_close(torch.tensor(trace.states[-1].output_vector), reference[0, position], rtol=1e-4, atol=1e-5)
+                self.assertEqual(len([s for s in trace.states if s.layer.name.endswith(".per_layer_residual")]), 4)
+                self.assertEqual(len([s for s in trace.states if s.layer.name.endswith(".layer_scale")]), 4)
+
+    def test_qwen3vl_cached_trace_matches_native_deepstack_forward(self) -> None:
+        import torch
+        from types import SimpleNamespace
+        try:
+            from transformers import Qwen3VLConfig, Qwen3VLForConditionalGeneration, Qwen3VLTextConfig, Qwen3VLVisionConfig
+        except ImportError:
+            self.skipTest("Qwen3-VL requires current Transformers")
+        text = Qwen3VLTextConfig(
+            vocab_size=64, hidden_size=32, intermediate_size=64, num_hidden_layers=4,
+            num_attention_heads=4, num_key_value_heads=2, head_dim=8,
+            rope_parameters={"rope_type": "default", "rope_theta": 10000., "mrope_section": [1, 1, 2]},
+        )
+        vision = Qwen3VLVisionConfig(
+            depth=2, hidden_size=16, intermediate_size=32, num_heads=2,
+            out_hidden_size=32, num_position_embeddings=16, deepstack_visual_indexes=[0, 1],
+        )
+        with torch.random.fork_rng():
+            torch.manual_seed(42)
+            model = Qwen3VLForConditionalGeneration(Qwen3VLConfig(
+                text_config=text.to_dict(), vision_config=vision.to_dict(),
+            )).eval()
+            model.model.language_model.config._attn_implementation = "eager"
+            runtime = model_runtime.ModelRuntime(model, SimpleNamespace(decode=lambda ids: str(ids[0])))
+            ids = torch.tensor([[1, 2, 3, 4, 5]])
+            with torch.inference_mode():
+                embeddings = runtime.text_model.get_input_embeddings()(ids)
+                features = [torch.randn(2, 32), torch.randn(2, 32)]
+            mask = torch.tensor([[False, True, False, True, False]])
+            positions = torch.arange(5).view(1, 1, 5).expand(4, 1, 5)
+            execution = model_runtime.ModelExecution(
+                runtime, ids, ("a", "image1", "b", "image2", "c"), "cpu", lambda _: None,
+                inputs_embeds=embeddings, position_ids=positions,
+                visual_pos_masks=mask, deepstack_visual_embeds=features,
+            )
+            with torch.inference_mode():
+                reference = runtime.text_model(
+                    inputs_embeds=embeddings, position_ids=positions, visual_pos_masks=mask,
+                    deepstack_visual_embeds=features, use_cache=False,
+                ).last_hidden_state
+            for position in (1, 3, 4):
+                trace = execution.trace_token(position)
+                actual = torch.tensor(trace.states[-1].output_vector)
+                torch.testing.assert_close(actual, reference[0, position], rtol=1e-4, atol=1e-5)
+                visual_states = [state for state in trace.states if state.layer.name.endswith(".visual_residual")]
+                self.assertEqual(len(visual_states), 2)
+
+    def test_qwen3vl_slices_deepstack_features_by_visual_token_positions(self) -> None:
+        import torch
+        execution = model_runtime.ModelExecution(
+            runtime=None, input_ids=torch.tensor([[1, 2, 3, 4, 5]]),
+            tokens=("a", "image", "b", "image", "c"), device="cpu", progress=lambda _: None,
+            visual_pos_masks=torch.tensor([[False, True, False, True, False]]),
+            deepstack_visual_embeds=[torch.tensor([[10., 11.], [20., 21.]])],
+        )
+        first = execution._visual_slice(0, 3)
+        self.assertEqual(first["visual_pos_masks"].tolist(), [[False, True, False]])
+        self.assertEqual(first["deepstack_visual_embeds"][0].tolist(), [[10., 11.]])
+        second = execution._visual_slice(3, 4)
+        self.assertEqual(second["deepstack_visual_embeds"][0].tolist(), [[20., 21.]])
+        text = execution._visual_slice(4, 5)
+        self.assertEqual(tuple(text["deepstack_visual_embeds"][0].shape), (0, 2))
+
+    def test_qwen3vl_runtime_uses_full_attention_and_deepstack_count(self) -> None:
+        from types import SimpleNamespace
+        runtime = model_runtime.ModelRuntime(model=SimpleNamespace(
+            config=SimpleNamespace(model_type="qwen3_vl", vision_config=SimpleNamespace(deepstack_visual_indexes=[8, 16, 24])),
+            model=SimpleNamespace(language_model=SimpleNamespace(layers=[object()] * 28)),
+        ), tokenizer=None)
+        self.assertEqual(runtime.architecture, "qwen3_vl")
+        self.assertEqual(runtime.visual_layer_count, 3)
+        self.assertTrue(all(runtime.layer_kind(index) == "full_attention" for index in range(28)))
+
     def test_tokenizers_encoding_ids_are_normalized_to_batched_tensor(self) -> None:
         import torch
 
@@ -128,6 +282,15 @@ class ModelRuntimeCacheTest(unittest.TestCase):
         self.assertEqual(result[0].index, 1)
         self.assertEqual(result[0].activation, 1.0)
         self.assertEqual(result[0].direction_norm, 3.0)
+
+        # Restrict candidates before ranking, while retaining global indices.
+        projection = torch.tensor([[100., 0.], [90., 0.], [1., 0.], [2., 0.], [3., 0.], [4., 0.]])
+        grouped = execution._top_projected_components(
+            0, (1.,)*6, projection, channel_range=(2, 6), component_count=3,
+            token_count=1, include_logit_lens=True, include_j_lens=False,
+            include_r_lens=False, include_indices=(0,),
+        )
+        self.assertEqual([item.index for item in grouped], [5, 4, 3])
 
     def test_projected_components_retain_explicitly_removed_index(self) -> None:
         import torch

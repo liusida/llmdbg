@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from threading import RLock
 from typing import Any
@@ -40,7 +40,20 @@ class ModelRuntime:
     @property
     def architecture(self) -> str:
         model_type = getattr(self.model.config, "model_type", "")
+        if model_type in {"qwen3_vl", "qwen3_vl_text"}:
+            return "qwen3_vl"
+        if model_type in {"gemma4", "gemma4_text"}:
+            return "gemma4"
         return "qwen3_5" if model_type in {"qwen3_5", "qwen3_5_text"} else model_type
+
+    @property
+    def visual_layer_count(self) -> int:
+        vision = getattr(self.model.config, "vision_config", None)
+        return len(getattr(vision, "deepstack_visual_indexes", ())) if self.architecture == "qwen3_vl" else 0
+
+    @property
+    def has_per_layer_inputs(self) -> bool:
+        return self.architecture == "gemma4" and bool(self.text_model.config.hidden_size_per_layer_input)
 
     @property
     def layers(self) -> Any:
@@ -53,7 +66,7 @@ class ModelRuntime:
     def layer_kind(self, index: int) -> str:
         if self.architecture == "gpt2":
             return "attention"
-        if self.architecture == "gemma2":
+        if self.architecture in {"gemma2", "gemma4", "qwen3_vl"}:
             return "full_attention"
         config = getattr(self.text_model, "config", self.model.config)
         kind = config.layer_types[index]
@@ -136,6 +149,27 @@ class ICAProjection:
     vector: tuple[float, ...] = ()
 
 
+def delta_write_readout_contributions(keys: Any, values: Any, decays: Any, betas: Any, query: Any) -> Any:
+    """Exact zero-initial-memory decomposition, including subsequent overwrites.
+
+    Backward adjoint scan avoids storing a 128x128 matrix per source position.
+    Q/K/V, gates and decays are held fixed; this is not a causal deletion effect.
+    """
+    import torch
+    if keys.ndim != 2 or values.ndim != 2 or len(keys) != len(values) or query.shape != keys.shape[1:]:
+        raise ValueError('Invalid DeltaNet history dimensions')
+    if decays.shape != (len(keys),) or betas.shape != (len(keys),):
+        raise ValueError('Invalid DeltaNet decay/beta history dimensions')
+    adjoint = query.float().clone()
+    result = torch.empty_like(values, dtype=torch.float32)
+    for source in range(len(keys)-1, -1, -1):
+        key, value = keys[source].float(), values[source].float()
+        match = adjoint @ key
+        result[source] = betas[source] * match * value
+        adjoint = decays[source] * (adjoint - betas[source] * match * key)
+    return result
+
+
 @dataclass
 class ModelExecution:
     """A prompt execution that advances one token at a time with a KV cache."""
@@ -149,6 +183,11 @@ class ModelExecution:
     rendered_prompt: str = ""
     inputs_embeds: Any = None
     position_ids: Any = None
+    image_grids: tuple[tuple[int, int, int], ...] = ()
+    image_merge_size: int = 1
+    visual_pos_masks: Any = None
+    deepstack_visual_embeds: Any = None
+    per_layer_inputs: Any = None
     past_key_values: Any = None
     cached_through: int = -1
     interventions: dict[tuple[int, str, str, int], float] = field(default_factory=dict)
@@ -163,6 +202,122 @@ class ModelExecution:
         default_factory=dict
     )
     semantic_token_masks: dict[tuple[int, str], Any] = field(default_factory=dict)
+    capture_delta_core: bool = False
+
+    def delta_memory_contributions(self, layer: int, head: int, position: int) -> dict[str, Any]:
+        """On-demand replay with an independent cache; retain only one head's history."""
+        import hashlib
+        import torch
+
+        if self.runtime.architecture != 'qwen3_5' or not 0 <= layer < len(self.runtime.layers):
+            raise ValueError('Memory contributions require a Qwen3.5 DeltaNet layer')
+        mixer = getattr(self.runtime.layers[layer], 'linear_attn', None)
+        if mixer is None or not 0 <= head < mixer.num_v_heads or not 0 <= position < self.token_count:
+            raise ValueError('Invalid DeltaNet layer, head, or query position')
+        with _runtime_lock, torch.inference_mode():
+            digest = hashlib.sha256()
+            def fingerprint(value):
+                if isinstance(value, torch.Tensor):
+                    digest.update(str((tuple(value.shape), value.dtype)).encode())
+                    digest.update(value.detach().contiguous().reshape(-1).view(torch.uint8).cpu().numpy().tobytes())
+                elif isinstance(value, dict):
+                    for key in sorted(value, key=repr): fingerprint(key); fingerprint(value[key])
+                elif isinstance(value, (list, tuple)):
+                    digest.update(str((type(value).__name__, len(value))).encode())
+                    for item in value: fingerprint(item)
+                else: digest.update(repr((type(value).__name__, value)).encode())
+            for value in (self.input_ids, self.inputs_embeds, self.position_ids, self.visual_pos_masks,
+                          self.deepstack_visual_embeds, self.per_layer_inputs, self.interventions,
+                          self.ica_interventions, self.vector_patches, self.tokens,
+                          getattr(self.runtime.model.config, '_commit_hash', None)):
+                fingerprint(value)
+            key = (layer, head, position, digest.hexdigest())
+            cached = getattr(self, '_delta_contribution_result', None)
+            if cached is not None and cached[0] == key:
+                return cached[1]
+            replay = replace(self, past_key_values=None, cached_through=-1, capture_delta_core=True,
+                             inputs_embeds=self.inputs_embeds.clone() if self.inputs_embeds is not None else None,
+                             interventions=dict(self.interventions), ica_interventions=dict(self.ica_interventions),
+                             vector_patches=dict(self.vector_patches), ica_observations={})
+            name = f'model.layers.{layer}.gated_linear_attention'
+            keys, values, decays, betas = [], [], [], []
+            self.progress(f'Replaying tokens 0..{position} for DeltaNet layer {layer}, head {head}; debugger cache is unchanged.\n')
+            if self.interventions or self.ica_interventions or self.vector_patches:
+                # Apply each historical intervention at its recorded token.
+                for source in range(position + 1):
+                    trace = replay.trace_token(source)
+                    state = next(s for s in trace.states if s.layer.name == name)
+                    tensors = state.tensors
+                    keys.append(tensors['delta_key'][0, 0, head].float().cpu())
+                    values.append(tensors['delta_value'][0, 0, head].float().cpu())
+                    decays.append(float(tensors['delta_decay'][0, 0, head]))
+                    betas.append(float(tensors['delta_beta'][0, 0, head]))
+            else:
+                # Capture only this head at the actual kernel boundary, including
+                # the batched prefill. No per-position memory snapshots are saved.
+                import importlib
+                implementation = importlib.import_module(type(mixer).__module__)
+                selected = [False]
+                def enter(_module, _args): selected[0] = True
+                def leave(_module, _args, _output): selected[0] = False
+                handles = [mixer.register_forward_pre_hook(enter), mixer.register_forward_hook(leave)]
+                originals = []
+                def capture(original):
+                    def wrapped(query, key, value, *args, **kwargs):
+                        if selected[0]:
+                            normalized_key = implementation.l2norm(key.float()) if kwargs.get('use_qk_l2norm_in_kernel') else key.float()
+                            keys.extend(normalized_key[0, :, head].cpu().unbind())
+                            values.extend(value[0, :, head].detach().float().cpu().unbind())
+                            decays.extend(kwargs['g'][0, :, head].float().exp().cpu().tolist())
+                            betas.extend(kwargs['beta'][0, :, head].float().cpu().tolist())
+                        return original(query, key, value, *args, **kwargs)
+                    return wrapped
+                try:
+                    for kernel in ('torch_chunk_gated_delta_rule', 'torch_recurrent_gated_delta_rule'):
+                        original = getattr(implementation, kernel)
+                        originals.append((kernel, original))
+                        setattr(implementation, kernel, capture(original))
+                    trace = replay.trace_token(position)
+                finally:
+                    for kernel, original in reversed(originals): setattr(implementation, kernel, original)
+                    for handle in handles: handle.remove()
+                state = next(s for s in trace.states if s.layer.name == name)
+                tensors = state.tensors
+            if len(keys) != position + 1:
+                raise ValueError('DeltaNet kernel did not expose the complete source history for this backend')
+            query = tensors['delta_query'][0, 0, head].float().cpu()
+            contributions = delta_write_readout_contributions(
+                torch.stack(keys), torch.stack(values), torch.tensor(decays), torch.tensor(betas), query)
+            readout = tensors['delta_readout'][0, 0, head].float()
+            reconstructed = contributions.sum(0).to(readout.device)
+            if not torch.allclose(reconstructed, readout, atol=1e-3, rtol=.02):
+                raise ValueError('Memory attribution cannot reconstruct this readout; captured-state interventions or unsupported kernels may alter the recurrence')
+            # Freeze the actual RMS denominator, keeping an additive decomposition.
+            gate = tensors['delta_gate'][0, 0, head].float()
+            factor = torch.rsqrt(readout.square().mean() + mixer.norm.variance_epsilon)
+            factor = factor * mixer.norm.weight.detach().float() * torch.nn.functional.silu(gate)
+            width = mixer.head_v_dim
+            weight = mixer.out_proj.weight.detach().T[head * width:(head + 1) * width].float()
+            projected = (contributions.to(weight.device) * factor) @ weight
+            actual = tensors['gated_delta_mixing'].flatten()[head * width:(head + 1) * width].float() @ weight
+            summed = projected.sum(0)
+            error = float((summed - actual).norm())
+            if error > .03 * float(actual.norm()) + .001:
+                raise ValueError('Memory attribution cannot reconstruct the gated projected head output; output interventions may be active')
+            norm = float(actual.norm())
+            support = projected @ (actual / max(norm, 1e-30))
+            magnitudes = projected.norm(dim=-1)
+            rows = [{'position':s, 'token':self.tokens[s], 'contribution':float(support[s]),
+                     'magnitude':float(magnitudes[s]), 'beta':betas[s], 'decay':decays[s]}
+                    for s in range(position + 1)]
+            result = {'kind':'delta-memory', 'head':head, 'headDimension':width, 'rows':rows,
+                      'sum':float(support.sum()), 'positiveSum':sum(max(0., r['contribution']) for r in rows),
+                      'negativeSum':sum(min(0., r['contribution']) for r in rows),
+                      'outputNorm':norm, 'reconstructionError':error,
+                      'outputVector':tuple(actual.cpu().tolist()),
+                      'readoutReconstructionError':float((reconstructed-readout).norm())}
+            self._delta_contribution_result = (key, result)  # Bound cache to one snapshot.
+            return result
 
     def _semantic_token_mask(self, device: Any, vocabulary_size: int) -> Any:
         """Return the J++ readout mask: decoded tokens containing a letter/digit."""
@@ -230,6 +385,8 @@ class ModelExecution:
                     self.position_ids[..., position : position + 1]
                     if self.position_ids is not None else None
                 ),
+                **self._visual_slice(position, position + 1),
+                **({"capture_delta_core": self.capture_delta_core} if self.runtime.architecture == "qwen3_5" else {}),
             )
             self.past_key_values = next_cache
             self.cached_through = position
@@ -250,6 +407,13 @@ class ModelExecution:
             self.inputs_embeds = torch.cat((self.inputs_embeds, embedding), dim=1)
             next_position = self.position_ids[..., -1:] + 1
             self.position_ids = torch.cat((self.position_ids, next_position), dim=-1)
+            if self.per_layer_inputs is not None:
+                per_layer = self.runtime.text_model.get_per_layer_inputs(token.to(self.device), None)
+                self.per_layer_inputs = torch.cat((self.per_layer_inputs, per_layer), dim=1)
+            if self.visual_pos_masks is not None:
+                self.visual_pos_masks = torch.cat((self.visual_pos_masks, torch.zeros(
+                    (1, 1), dtype=torch.bool, device=self.visual_pos_masks.device
+                )), dim=1)
         text = self.runtime.tokenizer.decode([int(token_id)])
         self.tokens = (*self.tokens, text)
         return text
@@ -263,7 +427,12 @@ class ModelExecution:
         with _runtime_lock, torch.inference_mode():
             weight = self.runtime.model.get_output_embeddings().weight
             vector = torch.tensor(hidden, device=weight.device, dtype=weight.dtype)
-            logits = torch.mv(weight, vector).float()
+            logits = torch.mv(weight, vector)
+            config = getattr(self.runtime.model, "config", None)
+            cap = getattr(getattr(config, "text_config", config), "final_logit_softcapping", None)
+            if cap is not None:
+                logits = torch.tanh(logits / cap) * cap
+            logits = logits.float()
             values, ids = torch.topk(logits, min(count, logits.numel()))
             probabilities = torch.softmax(logits, dim=0).index_select(0, ids)
             predictions = tuple(
@@ -312,6 +481,17 @@ class ModelExecution:
         """Replace one model-width vector at a computation boundary on replay."""
         self.vector_patches[(token_position, layer_name, vector_name)] = vector
 
+    def _visual_slice(self, start: int, stop: int) -> dict[str, Any]:
+        result = {}
+        if self.per_layer_inputs is not None:
+            result["per_layer_inputs"] = self.per_layer_inputs[:, start:stop]
+        if self.visual_pos_masks is None or self.deepstack_visual_embeds is None:
+            return result
+        first = int(self.visual_pos_masks[:, :start].sum().item())
+        last = int(self.visual_pos_masks[:, :stop].sum().item())
+        return {**result, "visual_pos_masks": self.visual_pos_masks[:, start:stop],
+                "deepstack_visual_embeds": [feature[first:last] for feature in self.deepstack_visual_embeds]}
+
     def _prefill(self, position: int) -> None:
         """Run uncaptured prompt tokens into the cache before a target token."""
         import torch
@@ -342,6 +522,7 @@ class ModelExecution:
                 attention_mask=attention_mask,
                 past_key_values=self.past_key_values,
                 use_cache=True,
+                **self._visual_slice(start, position),
             )
         self.past_key_values = output.past_key_values
         self.cached_through = position - 1
@@ -396,6 +577,7 @@ class ModelExecution:
         output: tuple[float, ...] | None = None,
         residual: tuple[float, ...] | None = None,
         channel_count: int = 5,
+        head_index: int | None = None,
         token_count: int = 5,
         include_logit_lens: bool = True,
         include_j_lens: bool = False,
@@ -428,8 +610,18 @@ class ModelExecution:
                 if hasattr(mixer, "o_proj")
                 else mixer.out_proj.weight.T
             )
+        channel_range = None
+        if head_index is not None:
+            config = getattr(self.runtime.model.config, 'text_config', self.runtime.model.config)
+            heads = int(config.linear_num_value_heads if layer_name.endswith('.gated_linear_attention')
+                        else config.n_head if self.runtime.architecture == 'gpt2' else config.num_attention_heads)
+            if not 0 <= head_index < heads or len(activation) % heads:
+                raise ValueError('Invalid attention head index or channel layout')
+            width = len(activation) // heads
+            channel_range = (head_index * width, (head_index + 1) * width)
         return self._top_projected_components(
             layer_index, activation, projection,
+            channel_range=channel_range,
             source_site="mid",
             output=output,
             residual=residual,
@@ -562,6 +754,7 @@ class ModelExecution:
         output: tuple[float, ...] | None = None,
         residual: tuple[float, ...] | None = None,
         include_indices: tuple[int, ...] = (),
+        channel_range: tuple[int, int] | None = None,
     ) -> tuple[NeuronProjection, ...]:
         """Read individual activated input channels through a linear projection."""
         import torch
@@ -614,11 +807,11 @@ class ModelExecution:
                         projection.float() @ output_unit
                     )
                     ranking_scores = all_output_projections
-            _, active_indices = torch.topk(
-                ranking_scores, min(component_count, activation_tensor.numel())
-            )
+            start, stop = channel_range or (0, activation_tensor.numel())
+            _, active_indices = torch.topk(ranking_scores[start:stop], min(component_count, stop-start))
+            active_indices += start
             selected = active_indices.tolist()
-            selected.extend(index for index in include_indices if index not in selected)
+            selected.extend(index for index in include_indices if index not in selected and (channel_range is None or start <= index < stop))
             if any(index < 0 or index >= activation_tensor.numel() for index in selected):
                 raise ValueError(
                     f"component index is outside range 0..{activation_tensor.numel() - 1}"
@@ -1195,6 +1388,18 @@ def _last_token_vector(tensor) -> tuple[float, ...]:
     return tuple(float(value) for value in tensor[0, -1].detach().float().cpu().tolist())
 
 
+def _inspection_snapshots(hidden: Any, previous: Any, details: dict[str, Any]) -> dict[str, Any]:
+    """Keep independent tensors for inspection without retaining autograd graphs."""
+    return {
+        name: tensor.detach().clone()
+        for name, tensor in {
+            "input": previous if previous is not None else hidden,
+            "output": hidden,
+            **details,
+        }.items()
+    }
+
+
 def _logit_lens(model, tokenizer, hidden, *, apply_final_norm: bool) -> str:
     """Describe an intermediate vector using its strongest next-token predictions."""
     import torch
@@ -1289,13 +1494,16 @@ def prepare_model_execution(
             dtype=dtype,
             progress=report,
         )
-        if runtime.architecture not in {"gpt2", "qwen3_5", "gemma2"}:
+        if runtime.architecture not in {"gpt2", "qwen3_5", "qwen3_vl", "gemma2", "gemma4"}:
             raise ValueError(
-                "llmdbg supports GPT-2, Qwen3.5, and Gemma 2 models, "
+                "llmdbg supports GPT-2, Qwen3.5, Qwen3-VL, Gemma 2, and Gemma 4 E2B models, "
                 f"got {runtime.model.config.model_type!r}"
             )
         inputs_embeds = None
         position_ids = None
+        image_grids = ()
+        image_merge_size = 1
+        visual_inputs = {}
         if messages and runtime.is_multimodal:
             multimodal_messages = _normalize_multimodal_messages(messages)
             rendered_prompt = runtime.processor.apply_chat_template(
@@ -1310,7 +1518,7 @@ def prepare_model_execution(
                 # Keep interactive debugging practical: Qwen otherwise preserves
                 # enough pixels from a large photograph to create >10k tokens.
                 processor_kwargs={
-                    "images_kwargs": {
+                    "images_kwargs": {"max_soft_tokens": 280} if runtime.architecture == "gemma4" else {
                         "size": {
                             "shortest_edge": 65_536,
                             "longest_edge": 262_144,
@@ -1319,9 +1527,21 @@ def prepare_model_execution(
                 },
             )
             input_ids = processed["input_ids"]
-            inputs_embeds, position_ids = _prepare_multimodal_embeddings(
-                runtime, processed, device
-            )
+            grid = processed.get("image_grid_thw")
+            if grid is not None:
+                image_grids = tuple(tuple(int(value) for value in row) for row in grid.tolist())
+                image_merge_size = int(runtime.processor.image_processor.merge_size)
+            if runtime.architecture == "gemma4":
+                inputs_embeds, position_ids, visual_inputs = _prepare_gemma4_embeddings(runtime, processed, device)
+                coordinates = processed.get("image_position_ids")
+                if coordinates is not None:
+                    image_grids = tuple((1, int(points[:, 1].max()) + 1, int(points[:, 0].max()) + 1)
+                                        for points in coordinates)
+                    image_merge_size = int(runtime.model.config.vision_config.pooling_kernel_size)
+            else:
+                inputs_embeds, position_ids, visual_inputs = _prepare_multimodal_embeddings(
+                    runtime, processed, device
+                )
         elif messages:
             rendered_prompt = runtime.tokenizer.apply_chat_template(
                 messages, add_generation_prompt=add_generation_prompt, tokenize=False
@@ -1343,31 +1563,52 @@ def prepare_model_execution(
         runtime, input_ids, tokens, device, report,
         dtype=dtype, rendered_prompt=rendered_prompt,
         inputs_embeds=inputs_embeds, position_ids=position_ids,
+        image_grids=image_grids, image_merge_size=image_merge_size,
+        **visual_inputs,
     )
 
 
 def _normalize_multimodal_messages(
     messages: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Translate llmdbg's convenient local ``path`` key to processor ``url``."""
+    """Normalize local image sources for the Transformers multimodal processor."""
+    import base64
+    import io
+
+    from PIL import Image
+
+    def processor_source(source: str) -> str:
+        path = Path(source).expanduser()
+        if path.suffix.lower() not in {".avif", ".heic", ".heif"} or not path.is_file():
+            return source
+        with Image.open(path) as image:
+            output = io.BytesIO()
+            image.convert("RGB").save(output, format="PNG")
+        return "data:image/png;base64," + base64.b64encode(output.getvalue()).decode("ascii")
+
     normalized: list[dict[str, Any]] = []
     for message in messages:
         copied = dict(message)
         content = copied.get("content")
         if isinstance(content, list):
-            copied["content"] = [
-                ({**part, "url": part["path"]} if part.get("type") == "image"
-                 and "path" in part and "url" not in part else dict(part))
-                for part in content
-            ]
+            parts = []
+            for part in content:
+                item = dict(part)
+                if item.get("type") == "image":
+                    source = item.get("url", item.get("path"))
+                    if isinstance(source, str):
+                        item["url"] = processor_source(source)
+                        item.pop("path", None)
+                parts.append(item)
+            copied["content"] = parts
         normalized.append(copied)
     return normalized
 
 
 def _prepare_multimodal_embeddings(
     runtime: ModelRuntime, processed: Any, device: str
-) -> tuple[Any, Any]:
-    """Encode images once and merge them into Qwen3.5's decoder input stream."""
+) -> tuple[Any, Any, dict[str, Any]]:
+    """Encode Qwen images once, retaining any DeepStack decoder features."""
     import torch
 
     model = runtime.model.model
@@ -1376,6 +1617,7 @@ def _prepare_multimodal_embeddings(
     if attention_mask is not None:
         attention_mask = attention_mask.to(device)
     with torch.inference_mode():
+        visual_inputs = {}
         inputs_embeds = model.get_input_embeddings()(input_ids)
         pixel_values = processed.get("pixel_values")
         image_grid_thw = processed.get("image_grid_thw")
@@ -1391,6 +1633,14 @@ def _prepare_multimodal_embeddings(
                 input_ids, inputs_embeds=inputs_embeds, image_features=image_embeds
             )
             inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
+            deepstack = getattr(image_outputs, "deepstack_features", None)
+            if deepstack is not None:
+                visual_inputs = {
+                    "visual_pos_masks": image_mask[..., 0],
+                    "deepstack_visual_embeds": [torch.cat(feature, dim=0).to(
+                        device=inputs_embeds.device, dtype=inputs_embeds.dtype
+                    ) for feature in deepstack],
+                }
         position_ids = model.compute_3d_position_ids(
             input_ids=input_ids,
             image_grid_thw=image_grid_thw,
@@ -1403,7 +1653,31 @@ def _prepare_multimodal_embeddings(
                 if processed.get("mm_token_type_ids") is not None else None
             ),
         )
-    return inputs_embeds, position_ids
+    return inputs_embeds, position_ids, visual_inputs
+
+
+def _prepare_gemma4_embeddings(runtime: ModelRuntime, processed: Any, device: str) -> tuple[Any, Any, dict[str, Any]]:
+    """Match Gemma 4's native image merge and token-identity PLE lookup."""
+    import torch
+    model = runtime.model.model
+    config = model.config.get_text_config()
+    if config.enable_moe_block or config.use_bidirectional_attention is not None:
+        raise ValueError("Gemma 4 debugging currently supports dense, causal E2B checkpoints")
+    ids = processed["input_ids"].to(device)
+    with torch.inference_mode():
+        masks = model.get_placeholder_mask(ids, None)
+        multimodal = masks[0] | masks[1] | masks[2]
+        safe_ids = torch.where(multimodal, config.pad_token_id, ids)
+        embeddings = model.get_input_embeddings()(safe_ids)
+        per_layer = model.language_model.get_per_layer_inputs(safe_ids, embeddings)
+        if processed.get("pixel_values") is not None:
+            features = model.get_image_features(
+                processed["pixel_values"].to(device), processed["image_position_ids"].to(device), return_dict=True,
+            )
+            values = torch.cat(features.pooler_output, dim=0).to(embeddings.device, embeddings.dtype)
+            embeddings = embeddings.masked_scatter(masks[0].unsqueeze(-1).expand_as(embeddings), values)
+        positions = torch.arange(ids.shape[1], device=device).unsqueeze(0)
+    return embeddings, positions, {"per_layer_inputs": per_layer}
 
 
 def _normalize_input_ids(value: Any, torch: Any) -> Any:
@@ -1646,6 +1920,7 @@ def _capture_gpt2_token_trace(
 
     states: list[LayerState] = []
     previous: tuple[float, ...] | None = None
+    previous_tensor = None
     for name, operation, meaning, hidden, apply_final_norm in captured:
         output = _last_token_vector(hidden)
         interpretation = (
@@ -1662,9 +1937,11 @@ def _capture_gpt2_token_trace(
                     detail_name: _last_token_vector(detail_tensor)
                     for detail_name, detail_tensor in detailed.get(name, {}).items()
                 },
+                _inspection_snapshots(hidden, previous_tensor, detailed.get(name, {})),
             )
         )
         previous = output
+        previous_tensor = hidden
 
     progress(f"Captured {len(states)} layer states for token {token_position}.\n")
     return ModelTrace(tuple(states), ()), model_output.past_key_values
@@ -1687,15 +1964,74 @@ def _capture_qwen35_token_trace(
     vector_patches: dict[tuple[int, str, str], tuple[float, ...]],
     inputs_embeds: Any = None,
     position_ids: Any = None,
+    visual_pos_masks: Any = None,
+    deepstack_visual_embeds: Any = None,
+    per_layer_inputs: Any = None,
+    capture_delta_core: bool = False,
 ) -> tuple[ModelTrace, Any]:
-    """Capture Qwen3.5 or Gemma 2 residual, attention, and gated-MLP states."""
+    """Capture Qwen and Gemma residual, attention, and gated-MLP states."""
     import torch
 
     model = runtime.model
-    is_gemma2 = runtime.architecture == "gemma2"
+    is_gemma4 = runtime.architecture == "gemma4"
+    is_gemma2 = runtime.architecture in {"gemma2", "gemma4"}
     captured: list[tuple[str, str, str, Any, bool]] = []
     detailed: dict[str, dict[str, Any]] = {}
+    inspection_details: dict[str, dict[str, Any]] = {}
     handles = []
+    attention_configs: dict[int, tuple[Any, str]] = {}
+    gemma_cache_before: dict[str, tuple[Any, Any]] = {}
+    per_layer_residuals: dict[str, Any] = {}
+    active_delta: list[str | None] = [None]
+    delta_patches: list[tuple[Any, str, Any]] = []
+
+    def store_delta(name, detail, tensor):
+        snapshot = tensor.detach().clone()
+        inspection_details.setdefault(name, {})[detail] = snapshot
+        detailed.setdefault(name, {})[detail] = snapshot.reshape(snapshot.shape[0], 1, -1)
+
+    def delta_enter(name):
+        def hook(_module, _args):
+            active_delta[0] = name
+        return hook
+
+    def delta_norm_input(name, mixer):
+        def hook(_module, inputs):
+            store_delta(name, "delta_gate", inputs[1].reshape(1, 1, mixer.num_v_heads, mixer.head_v_dim))
+        return hook
+
+    def wrap_delta_kernel(original, module):
+        def wrapped(query, key, value, *args, **kwargs):
+            name = active_delta[0]
+            if name is None or query.shape[1] != 1:
+                return original(query, key, value, *args, **kwargs)
+            q, k = module.l2norm(query.float()), module.l2norm(key.float())
+            q = q / q.shape[-1] ** 0.5
+            memory = kwargs.get("initial_state")
+            if memory is None:
+                memory = torch.zeros(query.shape[0], value.shape[2], key.shape[-1], value.shape[-1], device=query.device)
+            store_delta(name, "delta_previous_memory", memory.float())
+            for detail, tensor in (("delta_query", q), ("delta_key", k), ("delta_value", value),
+                                   ("delta_decay", kwargs["g"].float().exp()), ("delta_beta", kwargs["beta"])):
+                store_delta(name, detail, tensor)
+            store_delta(name, "delta_qkv", torch.cat((q.flatten(2), k.flatten(2), value.flatten(2)), dim=-1))
+            result = original(query, key, value, *args, **kwargs)
+            store_delta(name, "delta_updated_memory", result[1])
+            store_delta(name, "delta_readout", result[0])
+            return result
+        return wrapped
+
+    def token_heads(tensor: Any) -> Any:
+        """Represent [batch, token, heads, width] as a debugger vector."""
+        return tensor.reshape(tensor.shape[0], tensor.shape[1], -1)
+
+    def attention_matrix(tensor: Any) -> Any:
+        """Represent [batch, heads, query, key] at each query position."""
+        return tensor.transpose(1, 2).reshape(tensor.shape[0], tensor.shape[2], -1)
+
+    def cached_sequence(tensor: Any) -> Any:
+        """Expose every cached position as one inspectable debugger vector."""
+        return tensor.transpose(1, 2).reshape(tensor.shape[0], 1, -1)
 
     def apply_vector_patch(tensor: Any, state_name: str, vector_name: str) -> Any:
         replacement = vector_patches.get((token_position, state_name, vector_name))
@@ -1774,6 +2110,69 @@ def _capture_qwen35_token_trace(
             detailed.setdefault(state_name, {})[detail_name] = tensor.detach()
         return hook
 
+    def capture_attention_heads(state_name: str, detail_name: str):
+        def hook(_module, _inputs, output) -> None:
+            tensor = token_heads(_tensor_from_output(output))
+            detailed.setdefault(state_name, {})[detail_name] = tensor.detach()
+            inspection_details.setdefault(state_name, {})[detail_name] = output.detach()
+        return hook
+
+    def capture_attention_result(state_name: str):
+        def hook(_module, _inputs, output) -> None:
+            if not isinstance(output, tuple) or output[1] is None:
+                return
+            weights = attention_matrix(output[1])
+            detailed.setdefault(state_name, {})["attention_weights"] = weights.detach()
+            inspection_details.setdefault(state_name, {})["attention_weights"] = output[1].detach()
+        return hook
+
+    def capture_gemma_cache_before(state_name: str):
+        def hook(module, _args, kwargs):
+            cache = kwargs.get("past_key_values")
+            layers = getattr(cache, "layers", ())
+            if not module.is_kv_shared_layer and module.layer_idx < len(layers):
+                layer = layers[module.layer_idx]
+                if getattr(layer, "keys", None) is not None:
+                    gemma_cache_before[state_name] = (layer.keys.detach().clone(), layer.values.detach().clone())
+        return hook
+
+    def capture_gemma_attention(state_name: str):
+        def hook(module, _args, kwargs, output):
+            weights = output[1]
+            if weights is None:
+                raise RuntimeError("Gemma 4 tracing requires eager attention weights")
+            count = int(weights.shape[-1])
+            if module.is_kv_shared_layer:
+                keys, values = kwargs["shared_kv_states"][module.layer_type]
+            else:
+                layer = kwargs["past_key_values"].layers[module.layer_idx]
+                keys, values = layer.keys, layer.values
+                if keys.shape[-2] < count:
+                    old_keys, old_values = gemma_cache_before[state_name]
+                    keys = torch.cat((old_keys, keys[..., -1:, :]), dim=-2)
+                    values = torch.cat((old_values, values[..., -1:, :]), dim=-2)
+                keys, values = keys[..., -count:, :], values[..., -count:, :]
+            for detail, tensor in (("attention_cached_keys", keys), ("attention_cached_values", values)):
+                inspection_details.setdefault(state_name, {})[detail] = tensor.detach()
+                detailed.setdefault(state_name, {})[detail] = cached_sequence(tensor).detach()
+            inspection_details[state_name]["attention_source_positions"] = torch.arange(total_length - count, total_length)
+            inspection_details[state_name]["attention_weights"] = weights.detach()
+            detailed[state_name]["attention_weights"] = attention_matrix(weights).detach()
+        return hook
+
+    def remember_mlp_residual(name: str):
+        def hook(_module, inputs):
+            per_layer_residuals[name] = inputs[0].detach()
+        return hook
+
+    def capture_per_layer_residual(name: str, mlp_name: str):
+        def hook(_module, _inputs, output):
+            update = _tensor_from_output(output)
+            tensor = per_layer_residuals[mlp_name] + update
+            detailed.setdefault(name, {})["per_layer_update"] = update.detach()
+            captured.append((name, "per-layer embedding + residual", "Adds the gated per-layer token-identity embedding.", tensor.detach(), True))
+        return hook
+
     def capture_gated_activation(state_name: str, activation: Any):
         def hook(_module, _inputs, output) -> None:
             gate = _tensor_from_output(output)
@@ -1806,6 +2205,12 @@ def _capture_qwen35_token_trace(
         attention_kind = runtime.layer_kind(index)
         attention_name = runtime.state_name(index, attention_kind)
         mlp_name = runtime.state_name(index, "mlp")
+        if index > 0 and index <= runtime.visual_layer_count:
+            handles.append(block.register_forward_pre_hook(capture_input(
+                runtime.state_name(index - 1, "visual_residual"),
+                "DeepStack visual residual addition",
+                f"Injects vision-encoder features after layer {index - 1} at image-token positions.",
+            )))
         def intervene_block_input(_module, inputs, name=attention_name):
             apply_vector_patch(inputs[0], name, "input")
             apply_ica_interventions(inputs[0], name, "input")
@@ -1816,7 +2221,41 @@ def _capture_qwen35_token_trace(
             )
         )
         mixer = block.self_attn if attention_kind == "full_attention" else block.linear_attn
+        if attention_kind == "gated_linear_attention" and capture_delta_core:
+            handles.append(mixer.register_forward_pre_hook(delta_enter(attention_name)))
+            handles.append(mixer.norm.register_forward_pre_hook(delta_norm_input(attention_name, mixer)))
         output_projection = mixer.o_proj if attention_kind == "full_attention" else mixer.out_proj
+        if attention_kind == "full_attention" and is_gemma2 and not is_gemma4:
+            handles.append(mixer.v_proj.register_forward_hook(capture_detail(attention_name, "attention_value")))
+        if attention_kind == "full_attention" and (not is_gemma2 or is_gemma4):
+            config = mixer.config
+            config_key = id(config)
+            if config_key not in attention_configs:
+                attention_configs[config_key] = (
+                    config,
+                    str(getattr(config, "_attn_implementation", "eager")),
+                )
+                config._attn_implementation = "eager"
+            handles.append(
+                mixer.q_norm.register_forward_hook(
+                    capture_attention_heads(attention_name, "attention_query")
+                )
+            )
+            if hasattr(mixer, "k_norm"):
+                handles.append(mixer.k_norm.register_forward_hook(
+                    capture_attention_heads(attention_name, "attention_key")
+                ))
+            value_projection = getattr(mixer, "v_norm", None) if is_gemma4 else getattr(mixer, "v_proj", None)
+            if value_projection is not None:
+                handles.append(value_projection.register_forward_hook(
+                    capture_attention_heads(attention_name, "attention_value") if is_gemma4 else
+                    capture_detail(attention_name, "attention_value")
+                ))
+            if is_gemma4:
+                handles.append(mixer.register_forward_pre_hook(capture_gemma_cache_before(attention_name), with_kwargs=True))
+                handles.append(mixer.register_forward_hook(capture_gemma_attention(attention_name), with_kwargs=True))
+            else:
+                handles.append(mixer.register_forward_hook(capture_attention_result(attention_name)))
         mixing_detail = (
             "full_attention_mixing"
             if attention_kind == "full_attention"
@@ -1834,6 +2273,8 @@ def _capture_qwen35_token_trace(
                 )
             )
         else:
+            if is_gemma4:
+                handles.append(output_projection.register_forward_hook(capture_detail(attention_name, "attention_projection_raw")))
             handles.append(
                 block.post_attention_layernorm.register_forward_hook(
                     capture_detail(attention_name, "attention_projection")
@@ -1880,16 +2321,31 @@ def _capture_qwen35_token_trace(
                 capture_detail(mlp_name, "mlp_projection")
             )
         )
-        handles.append(
-            block.register_forward_hook(
+        if is_gemma4 and block.hidden_size_per_layer_input:
+            handles.append(block.per_layer_input_gate.register_forward_pre_hook(capture_input(
+                mlp_name, "GeGLU MLP + residual", f"Layer {index} has applied its MLP residual addition.",
+            )))
+            handles.append(block.per_layer_input_gate.register_forward_pre_hook(remember_mlp_residual(mlp_name)))
+            handles.append(block.post_per_layer_input_norm.register_forward_hook(capture_per_layer_residual(
+                runtime.state_name(index, "per_layer_residual"), mlp_name,
+            )))
+            handles.append(block.register_forward_hook(capture(
+                runtime.state_name(index, "layer_scale"), "layer scaling", "Scales the complete block output by its learned layer scalar.", True,
+            )))
+        else:
+            handles.append(block.register_forward_hook(
                 capture(
                     mlp_name,
                     "SwiGLU MLP + residual",
                     f"Layer {index} has applied its gated feature transformation.",
                     True,
                 )
-            )
-        )
+            ))
+    if runtime.visual_layer_count == len(runtime.layers) and runtime.visual_layer_count:
+        handles.append(runtime.final_norm.register_forward_pre_hook(capture_input(
+            runtime.state_name(len(runtime.layers) - 1, "visual_residual"),
+            "DeepStack visual residual addition", "Injects vision features after the final block.",
+        )))
     handles.append(
         runtime.final_norm.register_forward_hook(
             capture(
@@ -1907,6 +2363,17 @@ def _capture_qwen35_token_trace(
     )
 
     try:
+        if runtime.architecture == "qwen3_5" and capture_delta_core:
+            import importlib
+            for block in runtime.layers:
+                if not hasattr(block, "linear_attn"):
+                    continue
+                module = importlib.import_module(type(block.linear_attn).__module__)
+                for name in ("torch_recurrent_gated_delta_rule", "torch_chunk_gated_delta_rule"):
+                    original = getattr(module, name)
+                    delta_patches.append((module, name, original))
+                    setattr(module, name, wrap_delta_kernel(original, module))
+                break
         attention_mask = torch.ones((1, total_length), dtype=torch.long, device=device)
         progress(f"Running token {token_position} as a one-token cached forward pass.\n")
         with torch.inference_mode():
@@ -1918,13 +2385,43 @@ def _capture_qwen35_token_trace(
                 attention_mask=attention_mask,
                 past_key_values=past_key_values,
                 use_cache=True,
+                **({"visual_pos_masks": visual_pos_masks,
+                    "deepstack_visual_embeds": deepstack_visual_embeds}
+                   if runtime.architecture == "qwen3_vl" else {}),
+                **({"per_layer_inputs": per_layer_inputs} if is_gemma4 else {}),
             )
+        cache = model_output.past_key_values
+        cache_layers = getattr(cache, "layers", ())
+        for index, block in enumerate(runtime.layers):
+            if is_gemma4:
+                break  # Captured from the actual attention inputs, including shared/sliding KV.
+            if runtime.layer_kind(index) != "full_attention" or index >= len(cache_layers):
+                continue
+            cache_layer = cache_layers[index]
+            keys = getattr(cache_layer, "keys", None)
+            values = getattr(cache_layer, "values", None)
+            state_name = runtime.state_name(index, "full_attention")
+            if keys is not None:
+                inspection_details.setdefault(state_name, {})["attention_cached_keys"] = keys.detach()
+                detailed.setdefault(state_name, {})["attention_cached_keys"] = (
+                    cached_sequence(keys).detach()
+                )
+            if values is not None:
+                inspection_details.setdefault(state_name, {})["attention_cached_values"] = values.detach()
+                detailed.setdefault(state_name, {})["attention_cached_values"] = (
+                    cached_sequence(values).detach()
+                )
     finally:
+        for module, name, original in delta_patches:
+            setattr(module, name, original)
         for handle in handles:
             handle.remove()
+        for config, implementation in attention_configs.values():
+            config._attn_implementation = implementation
 
     states: list[LayerState] = []
     previous: tuple[float, ...] | None = None
+    previous_tensor = None
     for name, operation, meaning, hidden, apply_final_norm in captured:
         output = _last_token_vector(hidden)
         interpretation = (
@@ -1941,14 +2438,18 @@ def _capture_qwen35_token_trace(
                     detail_name: _last_token_vector(detail_tensor)
                     for detail_name, detail_tensor in detailed.get(name, {}).items()
                 },
+                _inspection_snapshots(hidden, previous_tensor, {
+                    **detailed.get(name, {}), **inspection_details.get(name, {}),
+                }),
             )
         )
         previous = output
+        previous_tensor = hidden
     progress(f"Captured {len(states)} layer states for token {token_position}.\n")
     return ModelTrace(tuple(states), ()), model_output.past_key_values
 
 
 def _capture_token_trace(runtime: ModelRuntime, **kwargs: Any) -> tuple[ModelTrace, Any]:
-    if runtime.architecture in {"qwen3_5", "gemma2"}:
+    if runtime.architecture in {"qwen3_5", "qwen3_vl", "gemma2", "gemma4"}:
         return _capture_qwen35_token_trace(runtime, **kwargs)
     return _capture_gpt2_token_trace(runtime, **kwargs)
