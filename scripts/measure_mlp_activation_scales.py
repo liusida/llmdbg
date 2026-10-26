@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from gb10_load_llm import load_model_to_cuda
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForMultimodalLM, AutoTokenizer
 
 
 def parse_args() -> argparse.Namespace:
@@ -124,7 +124,7 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(args.model, revision=args.revision)
     full_prompt = args.prefix + prompt
     max_length = int(
-        getattr(config, "max_position_embeddings", tokenizer.model_max_length)
+        getattr(getattr(config, "text_config", config), "max_position_embeddings", tokenizer.model_max_length)
     )
     encoded = tokenizer(
         full_prompt,
@@ -142,12 +142,12 @@ def main() -> None:
 
     print(f"Loading {args.model} through gb10-load-llm...", flush=True)
     model, touched = load_model_to_cuda(
-        AutoModelForCausalLM,
+        AutoModelForMultimodalLM if getattr(config, "vision_config", None) is not None else AutoModelForCausalLM,
         args.model,
         config=config,
         revision=args.revision,
         dtype=torch.bfloat16,
-        attn_implementation="sdpa",
+        attn_implementation="eager" if config.model_type == "gemma4" else "sdpa",
         touch="auto",
         return_touched=True,
     )
@@ -158,11 +158,11 @@ def main() -> None:
         hook_modules = [layer.mlp.c_proj for layer in layers]
         activation_definition = "input to mlp.c_proj (gelu(c_fc(x)))"
     else:
-        architecture = "qwen35"
-        layers = model.model.layers
+        architecture = config.model_type
+        layers = getattr(model.model, "language_model", model.model).layers
         hook_modules = [layer.mlp.down_proj for layer in layers]
         activation_definition = (
-            "input to mlp.down_proj (silu(gate_proj(x)) * up_proj(x))"
+            f"input to mlp.down_proj ({getattr(getattr(config, 'text_config', config), 'hidden_activation', 'silu')}(gate_proj(x)) * up_proj(x))"
         )
     measurements: dict[int, dict[str, object]] = {}
     token_scales: dict[int, list[float]] = {}
@@ -243,8 +243,6 @@ def main() -> None:
 
     if len(measurements) != len(layers):
         raise RuntimeError(f"captured {len(measurements)} of {len(layers)} layers")
-    if len(intermediate_sizes) != 1:
-        raise RuntimeError(f"captured inconsistent MLP widths: {intermediate_sizes}")
     payload = {
         "schema_version": 2,
         "model_id": args.model,
@@ -271,7 +269,8 @@ def main() -> None:
         "captured_tokens": encoded.input_ids.shape[1],
         "untruncated_tokens": untruncated_token_count,
         "truncated_to_model_context": untruncated_token_count > encoded.input_ids.shape[1],
-        "intermediate_size": intermediate_sizes.pop(),
+        "intermediate_size": next(iter(intermediate_sizes)) if len(intermediate_sizes) == 1 else None,
+        "intermediate_sizes": sorted(intermediate_sizes),
         "touched_model_bytes": touched,
         "layers": [measurements[index] for index in range(len(layers))],
     }

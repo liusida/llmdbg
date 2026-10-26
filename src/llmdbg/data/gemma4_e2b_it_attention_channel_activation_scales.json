@@ -1,0 +1,4344 @@
+{
+  "schema_version": 2,
+  "head_norm_calibration": {
+    "version": 1,
+    "quantity": "l2_norm(mixed_head @ W_o_head)",
+    "statistic": "per-layer, per-query-head median across analyzed tokens",
+    "dtype": "float32 projection and norm from captured model-dtype activations",
+    "model_dtype": "bfloat16",
+    "bias_included": false,
+    "post_projection_normalization_included": false,
+    "delta_net_included": false,
+    "input_modality": "text-only reference corpus",
+    "score": "current projected head norm / scale"
+  },
+  "model_id": "google/gemma-4-E2B-it",
+  "model_revision": "main",
+  "architecture": "gemma4",
+  "activation": "input channels to attention o_proj/out_proj",
+  "quantity": "activation * l2_norm(output-projection direction)",
+  "statistic": "median across analyzed tokens of token p99(abs(activation) * l2_norm(output-projection direction))",
+  "quantile": 0.99,
+  "side_definition": "sign of the activation-weighted contribution magnitude nearest p99 at the token supplying the layer median",
+  "prompt_file": "diverse_32_sentences.txt",
+  "prompt_sha256": "97481d04d1c042669991e8ecc7bb2b2b650aff51f3c1574874cac1dfda4257e0",
+  "prefix": "Context:\n",
+  "excluded_prefix_tokens": 3,
+  "analyzed_tokens": 441,
+  "captured_tokens": 444,
+  "untruncated_tokens": 444,
+  "truncated_to_model_context": false,
+  "channel_size": null,
+  "channel_sizes": [
+    2048,
+    4096
+  ],
+  "touched_model_bytes": 10208601186,
+  "layers": [
+    {
+      "layer": 0,
+      "attention_kind": "full_attention",
+      "scale": 2.0553486347198486,
+      "side": "negative",
+      "signed_reference": -2.1415462493896484,
+      "captured_token_position": 232,
+      "analysis_token_position": 229,
+      "nearest_channel": 323,
+      "token_scale_percentiles": {
+        "p01": 1.5031150579452515,
+        "p10": 1.7661678791046143,
+        "p50": 2.0553486347198486,
+        "p90": 2.4243767261505127,
+        "p99": 2.8363029956817627
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 7.9938483238220215,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.40904426574707,
+            "p10": 6.944939136505127,
+            "p50": 7.9938483238220215,
+            "p90": 9.476929664611816,
+            "p99": 12.046625137329102
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 17.89261245727539,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 11.861270904541016,
+            "p10": 13.350107192993164,
+            "p50": 17.89261245727539,
+            "p90": 20.28543472290039,
+            "p99": 21.540157318115234
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 10.660367012023926,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.991679668426514,
+            "p10": 7.502062797546387,
+            "p50": 10.660367012023926,
+            "p90": 12.877900123596191,
+            "p99": 14.463480949401855
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 8.424985885620117,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.772390842437744,
+            "p10": 7.0866522789001465,
+            "p50": 8.424985885620117,
+            "p90": 19.16086196899414,
+            "p99": 26.692813873291016
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 8.142282485961914,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.071589469909668,
+            "p10": 6.946033477783203,
+            "p50": 8.142282485961914,
+            "p90": 14.569554328918457,
+            "p99": 22.687318801879883
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 28.06480598449707,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.438791275024414,
+            "p10": 8.486050605773926,
+            "p50": 28.06480598449707,
+            "p90": 36.312713623046875,
+            "p99": 38.02890396118164
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 8.981575965881348,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.6937689781188965,
+            "p10": 7.128231048583984,
+            "p50": 8.981575965881348,
+            "p90": 13.914920806884766,
+            "p99": 16.28426170349121
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 8.945453643798828,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.717894554138184,
+            "p10": 8.197750091552734,
+            "p50": 8.945453643798828,
+            "p90": 10.288532257080078,
+            "p99": 16.299867630004883
+          }
+        }
+      ]
+    },
+    {
+      "layer": 1,
+      "attention_kind": "full_attention",
+      "scale": 1.7561098337173462,
+      "side": "positive",
+      "signed_reference": 1.8037056922912598,
+      "captured_token_position": 385,
+      "analysis_token_position": 382,
+      "nearest_channel": 860,
+      "token_scale_percentiles": {
+        "p01": 1.11769437789917,
+        "p10": 1.2786210775375366,
+        "p50": 1.7561098337173462,
+        "p90": 2.241997718811035,
+        "p99": 2.5261075496673584
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 9.465987205505371,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.207544326782227,
+            "p10": 7.010770320892334,
+            "p50": 9.465987205505371,
+            "p90": 13.527972221374512,
+            "p99": 20.559045791625977
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 8.405470848083496,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.225971698760986,
+            "p10": 7.053936004638672,
+            "p50": 8.405470848083496,
+            "p90": 12.690690994262695,
+            "p99": 17.66084861755371
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 10.219083786010742,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.7424821853637695,
+            "p10": 7.2617573738098145,
+            "p50": 10.219083786010742,
+            "p90": 14.423604965209961,
+            "p99": 17.380861282348633
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 12.96854305267334,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.135303974151611,
+            "p10": 8.688203811645508,
+            "p50": 12.96854305267334,
+            "p90": 17.16492462158203,
+            "p99": 18.595111846923828
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 9.225184440612793,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.917318344116211,
+            "p10": 5.522322654724121,
+            "p50": 9.225184440612793,
+            "p90": 19.28946876525879,
+            "p99": 23.94577407836914
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 10.008923530578613,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.950573921203613,
+            "p10": 7.925122261047363,
+            "p50": 10.008923530578613,
+            "p90": 14.978007316589355,
+            "p99": 19.105688095092773
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 8.34563159942627,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.76032018661499,
+            "p10": 6.4789886474609375,
+            "p50": 8.34563159942627,
+            "p90": 15.454652786254883,
+            "p99": 18.309724807739258
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 10.382664680480957,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.491640090942383,
+            "p10": 6.276126384735107,
+            "p50": 10.382664680480957,
+            "p90": 15.729171752929688,
+            "p99": 22.393692016601562
+          }
+        }
+      ]
+    },
+    {
+      "layer": 2,
+      "attention_kind": "full_attention",
+      "scale": 2.128596067428589,
+      "side": "positive",
+      "signed_reference": 2.135241746902466,
+      "captured_token_position": 258,
+      "analysis_token_position": 255,
+      "nearest_channel": 1082,
+      "token_scale_percentiles": {
+        "p01": 1.3351976871490479,
+        "p10": 1.5800693035125732,
+        "p50": 2.128596067428589,
+        "p90": 2.6780827045440674,
+        "p99": 3.1057050228118896
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 10.68094539642334,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.261112689971924,
+            "p10": 5.228670597076416,
+            "p50": 10.68094539642334,
+            "p90": 18.219938278198242,
+            "p99": 25.946474075317383
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 12.639139175415039,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.29484748840332,
+            "p10": 8.097137451171875,
+            "p50": 12.639139175415039,
+            "p90": 19.558225631713867,
+            "p99": 24.190019607543945
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 9.10327434539795,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.056318283081055,
+            "p10": 5.934066295623779,
+            "p50": 9.10327434539795,
+            "p90": 21.172794342041016,
+            "p99": 25.764448165893555
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 9.010824203491211,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.443563461303711,
+            "p10": 5.4501752853393555,
+            "p50": 9.010824203491211,
+            "p90": 19.371835708618164,
+            "p99": 26.218692779541016
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 9.89768123626709,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.6454339027404785,
+            "p10": 6.111100196838379,
+            "p50": 9.89768123626709,
+            "p90": 17.661418914794922,
+            "p99": 23.105653762817383
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 12.96160888671875,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.0449700355529785,
+            "p10": 6.876886367797852,
+            "p50": 12.96160888671875,
+            "p90": 19.753143310546875,
+            "p99": 23.018482208251953
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 9.517789840698242,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.323683261871338,
+            "p10": 7.146215438842773,
+            "p50": 9.517789840698242,
+            "p90": 16.813894271850586,
+            "p99": 21.9377498626709
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 13.995015144348145,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.595760822296143,
+            "p10": 10.316951751708984,
+            "p50": 13.995015144348145,
+            "p90": 21.359397888183594,
+            "p99": 25.19171142578125
+          }
+        }
+      ]
+    },
+    {
+      "layer": 3,
+      "attention_kind": "full_attention",
+      "scale": 2.1047751903533936,
+      "side": "negative",
+      "signed_reference": -2.1051998138427734,
+      "captured_token_position": 31,
+      "analysis_token_position": 28,
+      "nearest_channel": 219,
+      "token_scale_percentiles": {
+        "p01": 1.6466624736785889,
+        "p10": 1.8739861249923706,
+        "p50": 2.1047751903533936,
+        "p90": 2.406059980392456,
+        "p99": 2.594086170196533
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 14.28087043762207,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 10.99229907989502,
+            "p10": 12.193264961242676,
+            "p50": 14.28087043762207,
+            "p90": 18.76423454284668,
+            "p99": 22.126529693603516
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 19.11484146118164,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 11.473357200622559,
+            "p10": 13.26258373260498,
+            "p50": 19.11484146118164,
+            "p90": 23.133922576904297,
+            "p99": 25.847192764282227
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 10.816184043884277,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 9.217761993408203,
+            "p10": 9.75169563293457,
+            "p50": 10.816184043884277,
+            "p90": 17.360931396484375,
+            "p99": 22.161731719970703
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 12.899886131286621,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 10.097909927368164,
+            "p10": 10.88086223602295,
+            "p50": 12.899886131286621,
+            "p90": 16.98098373413086,
+            "p99": 20.97119140625
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 13.980496406555176,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.7756805419921875,
+            "p10": 9.38740348815918,
+            "p50": 13.980496406555176,
+            "p90": 17.218708038330078,
+            "p99": 19.959436416625977
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 11.889315605163574,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 8.251105308532715,
+            "p10": 10.013320922851562,
+            "p50": 11.889315605163574,
+            "p90": 16.932395935058594,
+            "p99": 20.83823013305664
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 16.355621337890625,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 10.91874885559082,
+            "p10": 12.709734916687012,
+            "p50": 16.355621337890625,
+            "p90": 19.718069076538086,
+            "p99": 21.428030014038086
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 14.313155174255371,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 10.38116455078125,
+            "p10": 11.998672485351562,
+            "p50": 14.313155174255371,
+            "p90": 16.44767951965332,
+            "p99": 20.128759384155273
+          }
+        }
+      ]
+    },
+    {
+      "layer": 4,
+      "attention_kind": "full_attention",
+      "scale": 1.907870888710022,
+      "side": "negative",
+      "signed_reference": -1.9071747064590454,
+      "captured_token_position": 67,
+      "analysis_token_position": 64,
+      "nearest_channel": 3071,
+      "token_scale_percentiles": {
+        "p01": 1.490279197692871,
+        "p10": 1.6239941120147705,
+        "p50": 1.907870888710022,
+        "p90": 2.2435293197631836,
+        "p99": 2.520453691482544
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 512,
+          "scale": 18.469133377075195,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 13.394938468933105,
+            "p10": 14.50278091430664,
+            "p50": 18.469133377075195,
+            "p90": 24.350555419921875,
+            "p99": 30.92441749572754
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 512,
+          "scale": 24.909709930419922,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 14.679582595825195,
+            "p10": 18.08432960510254,
+            "p50": 24.909709930419922,
+            "p90": 34.166805267333984,
+            "p99": 41.498863220214844
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 512,
+          "scale": 16.161882400512695,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 13.242963790893555,
+            "p10": 14.070663452148438,
+            "p50": 16.161882400512695,
+            "p90": 19.951854705810547,
+            "p99": 24.896699905395508
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 512,
+          "scale": 20.600116729736328,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 17.72910499572754,
+            "p10": 18.698863983154297,
+            "p50": 20.600116729736328,
+            "p90": 24.712158203125,
+            "p99": 29.680253982543945
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 512,
+          "scale": 20.010713577270508,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 13.561402320861816,
+            "p10": 15.724201202392578,
+            "p50": 20.010713577270508,
+            "p90": 25.680492401123047,
+            "p99": 30.408170700073242
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 512,
+          "scale": 20.937732696533203,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 13.468467712402344,
+            "p10": 16.3170166015625,
+            "p50": 20.937732696533203,
+            "p90": 26.708599090576172,
+            "p99": 31.719379425048828
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 512,
+          "scale": 20.760072708129883,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 15.430123329162598,
+            "p10": 17.068979263305664,
+            "p50": 20.760072708129883,
+            "p90": 25.812183380126953,
+            "p99": 28.874649047851562
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 512,
+          "scale": 19.76152992248535,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 13.795337677001953,
+            "p10": 15.77196979522705,
+            "p50": 19.76152992248535,
+            "p90": 24.502229690551758,
+            "p99": 33.64091110229492
+          }
+        }
+      ]
+    },
+    {
+      "layer": 5,
+      "attention_kind": "full_attention",
+      "scale": 2.3110129833221436,
+      "side": "positive",
+      "signed_reference": 2.321232795715332,
+      "captured_token_position": 260,
+      "analysis_token_position": 257,
+      "nearest_channel": 321,
+      "token_scale_percentiles": {
+        "p01": 1.6311200857162476,
+        "p10": 1.91627836227417,
+        "p50": 2.3110129833221436,
+        "p90": 2.6818463802337646,
+        "p99": 2.9020960330963135
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 13.832541465759277,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.409396171569824,
+            "p10": 7.8723273277282715,
+            "p50": 13.832541465759277,
+            "p90": 20.075021743774414,
+            "p99": 22.651262283325195
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 17.318601608276367,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 9.614673614501953,
+            "p10": 11.500359535217285,
+            "p50": 17.318601608276367,
+            "p90": 23.03640365600586,
+            "p99": 26.055639266967773
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 15.33757209777832,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.816119194030762,
+            "p10": 10.872221946716309,
+            "p50": 15.33757209777832,
+            "p90": 20.797025680541992,
+            "p99": 23.8682804107666
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 8.863785743713379,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.496713161468506,
+            "p10": 6.04069709777832,
+            "p50": 8.863785743713379,
+            "p90": 13.914761543273926,
+            "p99": 16.197023391723633
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 9.079599380493164,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.889007568359375,
+            "p10": 7.417855739593506,
+            "p50": 9.079599380493164,
+            "p90": 14.798637390136719,
+            "p99": 19.25361442565918
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 12.57503604888916,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.3467206954956055,
+            "p10": 8.048701286315918,
+            "p50": 12.57503604888916,
+            "p90": 16.508541107177734,
+            "p99": 19.972808837890625
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 12.67579174041748,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 8.681035041809082,
+            "p10": 10.069103240966797,
+            "p50": 12.67579174041748,
+            "p90": 17.665180206298828,
+            "p99": 20.48625946044922
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 7.939309120178223,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.89927864074707,
+            "p10": 6.4787678718566895,
+            "p50": 7.939309120178223,
+            "p90": 15.39085865020752,
+            "p99": 19.01633644104004
+          }
+        }
+      ]
+    },
+    {
+      "layer": 6,
+      "attention_kind": "full_attention",
+      "scale": 2.3768692016601562,
+      "side": "positive",
+      "signed_reference": 2.377471923828125,
+      "captured_token_position": 381,
+      "analysis_token_position": 378,
+      "nearest_channel": 1504,
+      "token_scale_percentiles": {
+        "p01": 1.4671086072921753,
+        "p10": 1.7226085662841797,
+        "p50": 2.3768692016601562,
+        "p90": 2.7386081218719482,
+        "p99": 3.114858865737915
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 13.928481101989746,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 8.534092903137207,
+            "p10": 9.963568687438965,
+            "p50": 13.928481101989746,
+            "p90": 18.30633544921875,
+            "p99": 21.579299926757812
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 10.639326095581055,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 8.74561595916748,
+            "p10": 9.428414344787598,
+            "p50": 10.639326095581055,
+            "p90": 12.207155227661133,
+            "p99": 16.315269470214844
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 14.822056770324707,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 9.914702415466309,
+            "p10": 11.617471694946289,
+            "p50": 14.822056770324707,
+            "p90": 18.964689254760742,
+            "p99": 20.69342613220215
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 13.220959663391113,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 10.231451988220215,
+            "p10": 11.16223430633545,
+            "p50": 13.220959663391113,
+            "p90": 15.497818946838379,
+            "p99": 17.004261016845703
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 12.45371150970459,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 8.970998764038086,
+            "p10": 9.849759101867676,
+            "p50": 12.45371150970459,
+            "p90": 15.531051635742188,
+            "p99": 17.803234100341797
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 21.123580932617188,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 9.307134628295898,
+            "p10": 11.723235130310059,
+            "p50": 21.123580932617188,
+            "p90": 33.89713668823242,
+            "p99": 40.86067581176758
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 11.94485855102539,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 8.181299209594727,
+            "p10": 8.976029396057129,
+            "p50": 11.94485855102539,
+            "p90": 16.29265022277832,
+            "p99": 19.577030181884766
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 11.345691680908203,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 8.09421443939209,
+            "p10": 8.645968437194824,
+            "p50": 11.345691680908203,
+            "p90": 16.553077697753906,
+            "p99": 20.359891891479492
+          }
+        }
+      ]
+    },
+    {
+      "layer": 7,
+      "attention_kind": "full_attention",
+      "scale": 1.9959312677383423,
+      "side": "positive",
+      "signed_reference": 2.026103973388672,
+      "captured_token_position": 375,
+      "analysis_token_position": 372,
+      "nearest_channel": 547,
+      "token_scale_percentiles": {
+        "p01": 1.5754762887954712,
+        "p10": 1.747174859046936,
+        "p50": 1.9959312677383423,
+        "p90": 2.392746925354004,
+        "p99": 2.7720344066619873
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 11.007658958435059,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.3492817878723145,
+            "p10": 7.9946513175964355,
+            "p50": 11.007658958435059,
+            "p90": 14.255518913269043,
+            "p99": 16.920698165893555
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 9.94882583618164,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.339710235595703,
+            "p10": 8.29097843170166,
+            "p50": 9.94882583618164,
+            "p90": 12.046964645385742,
+            "p99": 14.252224922180176
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 8.789536476135254,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.65294075012207,
+            "p10": 7.087482452392578,
+            "p50": 8.789536476135254,
+            "p90": 11.404682159423828,
+            "p99": 15.449501991271973
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 11.30627155303955,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.507986068725586,
+            "p10": 8.491168022155762,
+            "p50": 11.30627155303955,
+            "p90": 15.657307624816895,
+            "p99": 18.748218536376953
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 12.586039543151855,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.728845596313477,
+            "p10": 9.341129302978516,
+            "p50": 12.586039543151855,
+            "p90": 15.867878913879395,
+            "p99": 19.58831787109375
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 12.47024917602539,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 10.296052932739258,
+            "p10": 10.822036743164062,
+            "p50": 12.47024917602539,
+            "p90": 17.044933319091797,
+            "p99": 25.69476890563965
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 9.021265029907227,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.74721097946167,
+            "p10": 6.4912028312683105,
+            "p50": 9.021265029907227,
+            "p90": 11.936175346374512,
+            "p99": 13.969846725463867
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 9.750102043151855,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.8875813484191895,
+            "p10": 7.6526288986206055,
+            "p50": 9.750102043151855,
+            "p90": 12.116044998168945,
+            "p99": 14.541204452514648
+          }
+        }
+      ]
+    },
+    {
+      "layer": 8,
+      "attention_kind": "full_attention",
+      "scale": 1.735770583152771,
+      "side": "positive",
+      "signed_reference": 1.764640212059021,
+      "captured_token_position": 342,
+      "analysis_token_position": 339,
+      "nearest_channel": 381,
+      "token_scale_percentiles": {
+        "p01": 1.0138896703720093,
+        "p10": 1.435889482498169,
+        "p50": 1.735770583152771,
+        "p90": 1.9988120794296265,
+        "p99": 2.302885055541992
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 10.459465980529785,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.897902011871338,
+            "p10": 7.91993522644043,
+            "p50": 10.459465980529785,
+            "p90": 14.329404830932617,
+            "p99": 17.514087677001953
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 9.200571060180664,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.779660701751709,
+            "p10": 6.904239177703857,
+            "p50": 9.200571060180664,
+            "p90": 10.958283424377441,
+            "p99": 12.92735767364502
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 8.243692398071289,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.724986553192139,
+            "p10": 5.986656665802002,
+            "p50": 8.243692398071289,
+            "p90": 10.4474458694458,
+            "p99": 12.371177673339844
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 7.6150431632995605,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.050362586975098,
+            "p10": 5.931421279907227,
+            "p50": 7.6150431632995605,
+            "p90": 9.626705169677734,
+            "p99": 11.282946586608887
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 9.885808944702148,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.356658458709717,
+            "p10": 7.254002571105957,
+            "p50": 9.885808944702148,
+            "p90": 12.672584533691406,
+            "p99": 14.60423469543457
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 8.988715171813965,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.342918395996094,
+            "p10": 6.360355854034424,
+            "p50": 8.988715171813965,
+            "p90": 10.697721481323242,
+            "p99": 12.952120780944824
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 7.556734561920166,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 3.906182050704956,
+            "p10": 5.678337574005127,
+            "p50": 7.556734561920166,
+            "p90": 9.564615249633789,
+            "p99": 12.113384246826172
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 7.967259407043457,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.632050514221191,
+            "p10": 6.255314350128174,
+            "p50": 7.967259407043457,
+            "p90": 9.776691436767578,
+            "p99": 12.722363471984863
+          }
+        }
+      ]
+    },
+    {
+      "layer": 9,
+      "attention_kind": "full_attention",
+      "scale": 2.3591957092285156,
+      "side": "positive",
+      "signed_reference": 2.3586244583129883,
+      "captured_token_position": 355,
+      "analysis_token_position": 352,
+      "nearest_channel": 799,
+      "token_scale_percentiles": {
+        "p01": 1.5415611267089844,
+        "p10": 2.0004258155822754,
+        "p50": 2.3591957092285156,
+        "p90": 2.6103358268737793,
+        "p99": 2.896360158920288
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 512,
+          "scale": 17.41571044921875,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 13.29709529876709,
+            "p10": 14.634506225585938,
+            "p50": 17.41571044921875,
+            "p90": 22.18495750427246,
+            "p99": 26.45710563659668
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 512,
+          "scale": 24.096031188964844,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 9.927093505859375,
+            "p10": 18.685585021972656,
+            "p50": 24.096031188964844,
+            "p90": 26.948347091674805,
+            "p99": 28.917829513549805
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 512,
+          "scale": 16.912099838256836,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 9.169231414794922,
+            "p10": 13.326976776123047,
+            "p50": 16.912099838256836,
+            "p90": 18.52227020263672,
+            "p99": 19.974170684814453
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 512,
+          "scale": 14.332547187805176,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 8.803871154785156,
+            "p10": 10.812067031860352,
+            "p50": 14.332547187805176,
+            "p90": 17.829710006713867,
+            "p99": 20.48103904724121
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 512,
+          "scale": 13.737685203552246,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.095461368560791,
+            "p10": 9.963364601135254,
+            "p50": 13.737685203552246,
+            "p90": 16.864662170410156,
+            "p99": 18.93902587890625
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 512,
+          "scale": 11.311317443847656,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.1040849685668945,
+            "p10": 9.615692138671875,
+            "p50": 11.311317443847656,
+            "p90": 14.269342422485352,
+            "p99": 16.617189407348633
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 512,
+          "scale": 15.766194343566895,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 9.035408020019531,
+            "p10": 12.991194725036621,
+            "p50": 15.766194343566895,
+            "p90": 19.820388793945312,
+            "p99": 22.932373046875
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 512,
+          "scale": 20.938356399536133,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 10.68556022644043,
+            "p10": 18.32801628112793,
+            "p50": 20.938356399536133,
+            "p90": 22.825159072875977,
+            "p99": 24.32399559020996
+          }
+        }
+      ]
+    },
+    {
+      "layer": 10,
+      "attention_kind": "full_attention",
+      "scale": 2.3045034408569336,
+      "side": "negative",
+      "signed_reference": -2.332876205444336,
+      "captured_token_position": 302,
+      "analysis_token_position": 299,
+      "nearest_channel": 1385,
+      "token_scale_percentiles": {
+        "p01": 1.7870229482650757,
+        "p10": 2.0540311336517334,
+        "p50": 2.3045034408569336,
+        "p90": 2.5830001831054688,
+        "p99": 2.940314292907715
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 13.319661140441895,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.744582653045654,
+            "p10": 11.615838050842285,
+            "p50": 13.319661140441895,
+            "p90": 15.12896728515625,
+            "p99": 16.743408203125
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 15.618635177612305,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 9.98145580291748,
+            "p10": 12.964774131774902,
+            "p50": 15.618635177612305,
+            "p90": 17.56387710571289,
+            "p99": 19.958372116088867
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 11.511953353881836,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.584671497344971,
+            "p10": 9.189972877502441,
+            "p50": 11.511953353881836,
+            "p90": 13.223278045654297,
+            "p99": 14.414067268371582
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 9.56973648071289,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.599604606628418,
+            "p10": 7.952168941497803,
+            "p50": 9.56973648071289,
+            "p90": 11.601922035217285,
+            "p99": 12.729878425598145
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 9.992820739746094,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.196656227111816,
+            "p10": 8.402186393737793,
+            "p50": 9.992820739746094,
+            "p90": 11.644547462463379,
+            "p99": 13.44112777709961
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 16.143827438354492,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 12.669828414916992,
+            "p10": 14.403116226196289,
+            "p50": 16.143827438354492,
+            "p90": 18.578189849853516,
+            "p99": 20.061866760253906
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 11.481487274169922,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 9.105318069458008,
+            "p10": 10.414677619934082,
+            "p50": 11.481487274169922,
+            "p90": 13.156525611877441,
+            "p99": 15.973787307739258
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 10.509114265441895,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.6907806396484375,
+            "p10": 8.885306358337402,
+            "p50": 10.509114265441895,
+            "p90": 13.285978317260742,
+            "p99": 15.468239784240723
+          }
+        }
+      ]
+    },
+    {
+      "layer": 11,
+      "attention_kind": "full_attention",
+      "scale": 1.7928097248077393,
+      "side": "positive",
+      "signed_reference": 1.8094912767410278,
+      "captured_token_position": 248,
+      "analysis_token_position": 245,
+      "nearest_channel": 1391,
+      "token_scale_percentiles": {
+        "p01": 1.3893256187438965,
+        "p10": 1.623037576675415,
+        "p50": 1.7928097248077393,
+        "p90": 1.9961602687835693,
+        "p99": 2.3191583156585693
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 7.337939739227295,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.50051212310791,
+            "p10": 6.099268913269043,
+            "p50": 7.337939739227295,
+            "p90": 10.222607612609863,
+            "p99": 12.75804328918457
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 11.98609733581543,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 9.36164665222168,
+            "p10": 10.692010879516602,
+            "p50": 11.98609733581543,
+            "p90": 13.705102920532227,
+            "p99": 16.465919494628906
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 9.562219619750977,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.371326446533203,
+            "p10": 8.568440437316895,
+            "p50": 9.562219619750977,
+            "p90": 10.625967979431152,
+            "p99": 13.233036994934082
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 12.65280818939209,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 9.488155364990234,
+            "p10": 11.091464042663574,
+            "p50": 12.65280818939209,
+            "p90": 14.717463493347168,
+            "p99": 17.04989242553711
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 9.259211540222168,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.57586145401001,
+            "p10": 7.751482009887695,
+            "p50": 9.259211540222168,
+            "p90": 10.635923385620117,
+            "p99": 11.7188720703125
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 8.77458381652832,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.72027063369751,
+            "p10": 7.550427436828613,
+            "p50": 8.77458381652832,
+            "p90": 11.224479675292969,
+            "p99": 13.343244552612305
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 12.602079391479492,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 9.65810775756836,
+            "p10": 10.817068099975586,
+            "p50": 12.602079391479492,
+            "p90": 14.197866439819336,
+            "p99": 17.172719955444336
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 8.681127548217773,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.815162181854248,
+            "p10": 7.457727909088135,
+            "p50": 8.681127548217773,
+            "p90": 10.27938175201416,
+            "p99": 12.917675018310547
+          }
+        }
+      ]
+    },
+    {
+      "layer": 12,
+      "attention_kind": "full_attention",
+      "scale": 1.4700063467025757,
+      "side": "positive",
+      "signed_reference": 1.4799792766571045,
+      "captured_token_position": 204,
+      "analysis_token_position": 201,
+      "nearest_channel": 949,
+      "token_scale_percentiles": {
+        "p01": 1.0604623556137085,
+        "p10": 1.2901400327682495,
+        "p50": 1.4700063467025757,
+        "p90": 1.662960410118103,
+        "p99": 2.020350933074951
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 6.525545597076416,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.89354133605957,
+            "p10": 5.363115310668945,
+            "p50": 6.525545597076416,
+            "p90": 8.014766693115234,
+            "p99": 9.178471565246582
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 9.826926231384277,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.935866832733154,
+            "p10": 7.756494998931885,
+            "p50": 9.826926231384277,
+            "p90": 11.26745891571045,
+            "p99": 12.377589225769043
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 8.906757354736328,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.4665093421936035,
+            "p10": 7.58513069152832,
+            "p50": 8.906757354736328,
+            "p90": 9.96609115600586,
+            "p99": 11.032878875732422
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 10.172615051269531,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.218734264373779,
+            "p10": 8.176774024963379,
+            "p50": 10.172615051269531,
+            "p90": 12.373800277709961,
+            "p99": 14.662318229675293
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 6.858466625213623,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.728072643280029,
+            "p10": 5.285302639007568,
+            "p50": 6.858466625213623,
+            "p90": 8.51770305633545,
+            "p99": 9.545782089233398
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 7.384810447692871,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.679134845733643,
+            "p10": 5.695130348205566,
+            "p50": 7.384810447692871,
+            "p90": 9.28217601776123,
+            "p99": 11.234084129333496
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 7.639195442199707,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.300588607788086,
+            "p10": 6.456672668457031,
+            "p50": 7.639195442199707,
+            "p90": 8.571146965026855,
+            "p99": 9.924017906188965
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 7.324332237243652,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.034290313720703,
+            "p10": 6.445744037628174,
+            "p50": 7.324332237243652,
+            "p90": 8.793216705322266,
+            "p99": 14.095402717590332
+          }
+        }
+      ]
+    },
+    {
+      "layer": 13,
+      "attention_kind": "full_attention",
+      "scale": 1.4902758598327637,
+      "side": "positive",
+      "signed_reference": 1.5008400678634644,
+      "captured_token_position": 140,
+      "analysis_token_position": 137,
+      "nearest_channel": 760,
+      "token_scale_percentiles": {
+        "p01": 1.2674899101257324,
+        "p10": 1.3643629550933838,
+        "p50": 1.4902758598327637,
+        "p90": 1.6152348518371582,
+        "p99": 1.8748829364776611
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 10.812592506408691,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.85328483581543,
+            "p10": 9.640814781188965,
+            "p50": 10.812592506408691,
+            "p90": 12.180182456970215,
+            "p99": 14.766585350036621
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 6.773204803466797,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.59987211227417,
+            "p10": 6.008004665374756,
+            "p50": 6.773204803466797,
+            "p90": 7.944091796875,
+            "p99": 10.514138221740723
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 8.640458106994629,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.76257848739624,
+            "p10": 7.334425926208496,
+            "p50": 8.640458106994629,
+            "p90": 10.62161636352539,
+            "p99": 12.731550216674805
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 8.012053489685059,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.47234582901001,
+            "p10": 6.323612689971924,
+            "p50": 8.012053489685059,
+            "p90": 11.193778038024902,
+            "p99": 13.839828491210938
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 10.22000789642334,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.251233100891113,
+            "p10": 8.831023216247559,
+            "p50": 10.22000789642334,
+            "p90": 11.341741561889648,
+            "p99": 13.28888988494873
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 7.408461570739746,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.794241905212402,
+            "p10": 6.1178436279296875,
+            "p50": 7.408461570739746,
+            "p90": 9.125749588012695,
+            "p99": 10.80614948272705
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 12.325239181518555,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 8.057981491088867,
+            "p10": 10.068920135498047,
+            "p50": 12.325239181518555,
+            "p90": 14.862195014953613,
+            "p99": 16.93533706665039
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 9.376900672912598,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.211922645568848,
+            "p10": 8.308232307434082,
+            "p50": 9.376900672912598,
+            "p90": 11.187623977661133,
+            "p99": 13.235093116760254
+          }
+        }
+      ]
+    },
+    {
+      "layer": 14,
+      "attention_kind": "full_attention",
+      "scale": 1.4308658838272095,
+      "side": "positive",
+      "signed_reference": 1.430567741394043,
+      "captured_token_position": 427,
+      "analysis_token_position": 424,
+      "nearest_channel": 2141,
+      "token_scale_percentiles": {
+        "p01": 1.247299313545227,
+        "p10": 1.3098673820495605,
+        "p50": 1.4308658838272095,
+        "p90": 1.6513975858688354,
+        "p99": 1.9865691661834717
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 512,
+          "scale": 9.768736839294434,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 8.521090507507324,
+            "p10": 8.823786735534668,
+            "p50": 9.768736839294434,
+            "p90": 11.367213249206543,
+            "p99": 13.519430160522461
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 512,
+          "scale": 12.40535831451416,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 10.589988708496094,
+            "p10": 11.181575775146484,
+            "p50": 12.40535831451416,
+            "p90": 13.97769832611084,
+            "p99": 15.350577354431152
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 512,
+          "scale": 12.338441848754883,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 10.202357292175293,
+            "p10": 11.289094924926758,
+            "p50": 12.338441848754883,
+            "p90": 13.61425495147705,
+            "p99": 14.754609107971191
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 512,
+          "scale": 9.303476333618164,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.437263488769531,
+            "p10": 7.528529644012451,
+            "p50": 9.303476333618164,
+            "p90": 11.830656051635742,
+            "p99": 13.783989906311035
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 512,
+          "scale": 14.700368881225586,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 12.770173072814941,
+            "p10": 13.222518920898438,
+            "p50": 14.700368881225586,
+            "p90": 17.441993713378906,
+            "p99": 20.21817398071289
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 512,
+          "scale": 13.966442108154297,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 9.922593116760254,
+            "p10": 12.0852632522583,
+            "p50": 13.966442108154297,
+            "p90": 16.658370971679688,
+            "p99": 19.411840438842773
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 512,
+          "scale": 11.045904159545898,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 9.166390419006348,
+            "p10": 10.166632652282715,
+            "p50": 11.045904159545898,
+            "p90": 12.337057113647461,
+            "p99": 13.551874160766602
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 512,
+          "scale": 12.800088882446289,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 10.18780517578125,
+            "p10": 11.429657936096191,
+            "p50": 12.800088882446289,
+            "p90": 14.40918254852295,
+            "p99": 15.454595565795898
+          }
+        }
+      ]
+    },
+    {
+      "layer": 15,
+      "attention_kind": "full_attention",
+      "scale": 1.2860631942749023,
+      "side": "positive",
+      "signed_reference": 1.2893036603927612,
+      "captured_token_position": 273,
+      "analysis_token_position": 270,
+      "nearest_channel": 317,
+      "token_scale_percentiles": {
+        "p01": 1.1220487356185913,
+        "p10": 1.193060278892517,
+        "p50": 1.2860631942749023,
+        "p90": 1.4419798851013184,
+        "p99": 1.6898910999298096
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 6.77232551574707,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.764631271362305,
+            "p10": 6.0454630851745605,
+            "p50": 6.77232551574707,
+            "p90": 7.372776031494141,
+            "p99": 9.193760871887207
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 9.96817398071289,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.44635009765625,
+            "p10": 8.255843162536621,
+            "p50": 9.96817398071289,
+            "p90": 12.040005683898926,
+            "p99": 14.144244194030762
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 8.345139503479004,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.2878875732421875,
+            "p10": 7.75100040435791,
+            "p50": 8.345139503479004,
+            "p90": 9.141707420349121,
+            "p99": 11.2212495803833
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 6.178401947021484,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.18408203125,
+            "p10": 5.518618583679199,
+            "p50": 6.178401947021484,
+            "p90": 7.724762439727783,
+            "p99": 10.287535667419434
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 4.979698181152344,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 3.6273722648620605,
+            "p10": 4.034072399139404,
+            "p50": 4.979698181152344,
+            "p90": 6.899927616119385,
+            "p99": 9.39600658416748
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 5.597764015197754,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.93556547164917,
+            "p10": 5.087386608123779,
+            "p50": 5.597764015197754,
+            "p90": 6.572569847106934,
+            "p99": 8.702465057373047
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 8.61166763305664,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.4396820068359375,
+            "p10": 7.359599590301514,
+            "p50": 8.61166763305664,
+            "p90": 9.675004959106445,
+            "p99": 10.816187858581543
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 6.896204948425293,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.285635471343994,
+            "p10": 6.47245454788208,
+            "p50": 6.896204948425293,
+            "p90": 8.910407066345215,
+            "p99": 10.687078475952148
+          }
+        }
+      ]
+    },
+    {
+      "layer": 16,
+      "attention_kind": "full_attention",
+      "scale": 1.3424718379974365,
+      "side": "negative",
+      "signed_reference": -1.357696294784546,
+      "captured_token_position": 437,
+      "analysis_token_position": 434,
+      "nearest_channel": 1100,
+      "token_scale_percentiles": {
+        "p01": 1.0631521940231323,
+        "p10": 1.1781659126281738,
+        "p50": 1.3424718379974365,
+        "p90": 1.5668870210647583,
+        "p99": 1.7766830921173096
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 7.475799083709717,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.026045799255371,
+            "p10": 6.373773574829102,
+            "p50": 7.475799083709717,
+            "p90": 9.817294120788574,
+            "p99": 12.606474876403809
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 6.0710906982421875,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.607144832611084,
+            "p10": 5.083624362945557,
+            "p50": 6.0710906982421875,
+            "p90": 8.020392417907715,
+            "p99": 10.212854385375977
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 6.264281749725342,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.475513935089111,
+            "p10": 5.711219310760498,
+            "p50": 6.264281749725342,
+            "p90": 7.4800333976745605,
+            "p99": 9.907296180725098
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 6.759836673736572,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.779575824737549,
+            "p10": 6.172675132751465,
+            "p50": 6.759836673736572,
+            "p90": 7.570235252380371,
+            "p99": 9.084749221801758
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 10.687117576599121,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.320866584777832,
+            "p10": 8.643495559692383,
+            "p50": 10.687117576599121,
+            "p90": 12.46791934967041,
+            "p99": 13.952866554260254
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 7.370213985443115,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.081496715545654,
+            "p10": 5.98040246963501,
+            "p50": 7.370213985443115,
+            "p90": 8.942117691040039,
+            "p99": 10.554537773132324
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 7.275012493133545,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.279059886932373,
+            "p10": 5.965689182281494,
+            "p50": 7.275012493133545,
+            "p90": 9.190573692321777,
+            "p99": 11.848471641540527
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 7.2454118728637695,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.70609712600708,
+            "p10": 6.2529988288879395,
+            "p50": 7.2454118728637695,
+            "p90": 8.691892623901367,
+            "p99": 10.81539249420166
+          }
+        }
+      ]
+    },
+    {
+      "layer": 17,
+      "attention_kind": "full_attention",
+      "scale": 1.2828396558761597,
+      "side": "positive",
+      "signed_reference": 1.285691499710083,
+      "captured_token_position": 93,
+      "analysis_token_position": 90,
+      "nearest_channel": 159,
+      "token_scale_percentiles": {
+        "p01": 1.0090736150741577,
+        "p10": 1.1236708164215088,
+        "p50": 1.2828396558761597,
+        "p90": 1.4529222249984741,
+        "p99": 1.7088898420333862
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 6.7109785079956055,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.783790588378906,
+            "p10": 6.124342918395996,
+            "p50": 6.7109785079956055,
+            "p90": 7.7228546142578125,
+            "p99": 10.174667358398438
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 7.186342716217041,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.842797756195068,
+            "p10": 5.423576354980469,
+            "p50": 7.186342716217041,
+            "p90": 9.419270515441895,
+            "p99": 11.403946876525879
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 7.966920852661133,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.309446811676025,
+            "p10": 7.234591484069824,
+            "p50": 7.966920852661133,
+            "p90": 9.014687538146973,
+            "p99": 11.10716438293457
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 8.080032348632812,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.182056903839111,
+            "p10": 6.3505539894104,
+            "p50": 8.080032348632812,
+            "p90": 9.725015640258789,
+            "p99": 10.912102699279785
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 7.3779683113098145,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.939664840698242,
+            "p10": 6.30161714553833,
+            "p50": 7.3779683113098145,
+            "p90": 8.978416442871094,
+            "p99": 11.390599250793457
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 6.366947174072266,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.1928300857543945,
+            "p10": 5.620051383972168,
+            "p50": 6.366947174072266,
+            "p90": 8.054710388183594,
+            "p99": 9.991557121276855
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 7.357292652130127,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.948700904846191,
+            "p10": 6.073352336883545,
+            "p50": 7.357292652130127,
+            "p90": 8.76611042022705,
+            "p99": 9.944921493530273
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 6.723484992980957,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.419783115386963,
+            "p10": 5.890714168548584,
+            "p50": 6.723484992980957,
+            "p90": 8.583231925964355,
+            "p99": 10.550835609436035
+          }
+        }
+      ]
+    },
+    {
+      "layer": 18,
+      "attention_kind": "full_attention",
+      "scale": 1.323427438735962,
+      "side": "negative",
+      "signed_reference": -1.3260149955749512,
+      "captured_token_position": 385,
+      "analysis_token_position": 382,
+      "nearest_channel": 1612,
+      "token_scale_percentiles": {
+        "p01": 1.1312644481658936,
+        "p10": 1.2105095386505127,
+        "p50": 1.323427438735962,
+        "p90": 1.470819115638733,
+        "p99": 1.8260380029678345
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 6.935812473297119,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.219980716705322,
+            "p10": 5.857280731201172,
+            "p50": 6.935812473297119,
+            "p90": 8.492427825927734,
+            "p99": 10.279207229614258
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 7.193968296051025,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.963947296142578,
+            "p10": 5.688727855682373,
+            "p50": 7.193968296051025,
+            "p90": 8.793200492858887,
+            "p99": 10.350356101989746
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 6.0073933601379395,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.968569755554199,
+            "p10": 5.336039066314697,
+            "p50": 6.0073933601379395,
+            "p90": 6.898269176483154,
+            "p99": 8.909528732299805
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 10.461307525634766,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 8.069727897644043,
+            "p10": 9.030790328979492,
+            "p50": 10.461307525634766,
+            "p90": 12.656280517578125,
+            "p99": 15.088261604309082
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 5.594732761383057,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.03549861907959,
+            "p10": 5.189377307891846,
+            "p50": 5.594732761383057,
+            "p90": 6.355388164520264,
+            "p99": 9.295185089111328
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 5.898308277130127,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.427221298217773,
+            "p10": 4.8816633224487305,
+            "p50": 5.898308277130127,
+            "p90": 7.061153411865234,
+            "p99": 9.160452842712402
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 10.052684783935547,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.327403545379639,
+            "p10": 8.693041801452637,
+            "p50": 10.052684783935547,
+            "p90": 11.50158977508545,
+            "p99": 13.131590843200684
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 8.659029006958008,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.418694972991943,
+            "p10": 7.662458419799805,
+            "p50": 8.659029006958008,
+            "p90": 9.230793952941895,
+            "p99": 9.776305198669434
+          }
+        }
+      ]
+    },
+    {
+      "layer": 19,
+      "attention_kind": "full_attention",
+      "scale": 1.7248424291610718,
+      "side": "negative",
+      "signed_reference": -1.7246952056884766,
+      "captured_token_position": 119,
+      "analysis_token_position": 116,
+      "nearest_channel": 3533,
+      "token_scale_percentiles": {
+        "p01": 1.2526501417160034,
+        "p10": 1.4079855680465698,
+        "p50": 1.7248424291610718,
+        "p90": 2.0624470710754395,
+        "p99": 2.2923357486724854
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 512,
+          "scale": 15.449355125427246,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 8.929348945617676,
+            "p10": 10.518365859985352,
+            "p50": 15.449355125427246,
+            "p90": 18.113523483276367,
+            "p99": 20.154132843017578
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 512,
+          "scale": 15.459732055664062,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 9.718573570251465,
+            "p10": 11.965428352355957,
+            "p50": 15.459732055664062,
+            "p90": 18.486663818359375,
+            "p99": 20.89397621154785
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 512,
+          "scale": 13.20240306854248,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 10.342231750488281,
+            "p10": 11.073824882507324,
+            "p50": 13.20240306854248,
+            "p90": 15.735100746154785,
+            "p99": 18.88867950439453
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 512,
+          "scale": 9.930731773376465,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.8769001960754395,
+            "p10": 8.771270751953125,
+            "p50": 9.930731773376465,
+            "p90": 12.191231727600098,
+            "p99": 15.564501762390137
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 512,
+          "scale": 17.170700073242188,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 11.972922325134277,
+            "p10": 14.280856132507324,
+            "p50": 17.170700073242188,
+            "p90": 19.876813888549805,
+            "p99": 21.413454055786133
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 512,
+          "scale": 8.759778022766113,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.118544101715088,
+            "p10": 7.741233825683594,
+            "p50": 8.759778022766113,
+            "p90": 10.530691146850586,
+            "p99": 12.062418937683105
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 512,
+          "scale": 18.824369430541992,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 12.967947959899902,
+            "p10": 15.654193878173828,
+            "p50": 18.824369430541992,
+            "p90": 22.27421760559082,
+            "p99": 23.816917419433594
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 512,
+          "scale": 13.615169525146484,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 10.37217903137207,
+            "p10": 11.369431495666504,
+            "p50": 13.615169525146484,
+            "p90": 17.81355094909668,
+            "p99": 21.479036331176758
+          }
+        }
+      ]
+    },
+    {
+      "layer": 20,
+      "attention_kind": "full_attention",
+      "scale": 1.6970514059066772,
+      "side": "positive",
+      "signed_reference": 1.6991232633590698,
+      "captured_token_position": 299,
+      "analysis_token_position": 296,
+      "nearest_channel": 226,
+      "token_scale_percentiles": {
+        "p01": 1.2056646347045898,
+        "p10": 1.4220771789550781,
+        "p50": 1.6970514059066772,
+        "p90": 1.908543348312378,
+        "p99": 2.102010488510132
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 11.38963508605957,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.456264972686768,
+            "p10": 6.915943622589111,
+            "p50": 11.38963508605957,
+            "p90": 16.251188278198242,
+            "p99": 20.087804794311523
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 6.361289024353027,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.599687576293945,
+            "p10": 5.916472911834717,
+            "p50": 6.361289024353027,
+            "p90": 11.151934623718262,
+            "p99": 14.737689971923828
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 7.2898077964782715,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.846469402313232,
+            "p10": 6.409411907196045,
+            "p50": 7.2898077964782715,
+            "p90": 9.248148918151855,
+            "p99": 11.493359565734863
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 7.644015312194824,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.344297885894775,
+            "p10": 6.622929573059082,
+            "p50": 7.644015312194824,
+            "p90": 9.447867393493652,
+            "p99": 11.82388973236084
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 6.50685977935791,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.206324100494385,
+            "p10": 5.783841133117676,
+            "p50": 6.50685977935791,
+            "p90": 7.670670986175537,
+            "p99": 10.715557098388672
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 7.662443161010742,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.083024978637695,
+            "p10": 5.3310699462890625,
+            "p50": 7.662443161010742,
+            "p90": 11.484010696411133,
+            "p99": 16.64372444152832
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 11.838006973266602,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.170141696929932,
+            "p10": 7.915194511413574,
+            "p50": 11.838006973266602,
+            "p90": 15.457788467407227,
+            "p99": 18.786277770996094
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 7.5401387214660645,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.366541862487793,
+            "p10": 6.704764366149902,
+            "p50": 7.5401387214660645,
+            "p90": 9.541825294494629,
+            "p99": 12.65086841583252
+          }
+        }
+      ]
+    },
+    {
+      "layer": 21,
+      "attention_kind": "full_attention",
+      "scale": 1.5820280313491821,
+      "side": "positive",
+      "signed_reference": 1.5902812480926514,
+      "captured_token_position": 265,
+      "analysis_token_position": 262,
+      "nearest_channel": 1951,
+      "token_scale_percentiles": {
+        "p01": 1.206299066543579,
+        "p10": 1.3631421327590942,
+        "p50": 1.5820280313491821,
+        "p90": 1.8517897129058838,
+        "p99": 2.213083028793335
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 8.837705612182617,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.786418914794922,
+            "p10": 7.616097450256348,
+            "p50": 8.837705612182617,
+            "p90": 12.09809684753418,
+            "p99": 16.147220611572266
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 9.530593872070312,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.14447546005249,
+            "p10": 7.82357931137085,
+            "p50": 9.530593872070312,
+            "p90": 12.200822830200195,
+            "p99": 16.799571990966797
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 6.647364616394043,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.900547504425049,
+            "p10": 5.518054008483887,
+            "p50": 6.647364616394043,
+            "p90": 8.807724952697754,
+            "p99": 12.14680290222168
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 12.977636337280273,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.195592880249023,
+            "p10": 8.95006275177002,
+            "p50": 12.977636337280273,
+            "p90": 16.50949478149414,
+            "p99": 21.62543296813965
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 8.067704200744629,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.887724876403809,
+            "p10": 6.0089945793151855,
+            "p50": 8.067704200744629,
+            "p90": 11.195459365844727,
+            "p99": 14.102592468261719
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 6.254063606262207,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.476959228515625,
+            "p10": 5.7316765785217285,
+            "p50": 6.254063606262207,
+            "p90": 7.460228443145752,
+            "p99": 10.983797073364258
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 6.288942813873291,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.414124011993408,
+            "p10": 5.665463924407959,
+            "p50": 6.288942813873291,
+            "p90": 7.505678653717041,
+            "p99": 10.733142852783203
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 6.1450724601745605,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.586379051208496,
+            "p10": 5.781861782073975,
+            "p50": 6.1450724601745605,
+            "p90": 6.777388572692871,
+            "p99": 9.737668991088867
+          }
+        }
+      ]
+    },
+    {
+      "layer": 22,
+      "attention_kind": "full_attention",
+      "scale": 1.5187069177627563,
+      "side": "positive",
+      "signed_reference": 1.5223878622055054,
+      "captured_token_position": 290,
+      "analysis_token_position": 287,
+      "nearest_channel": 791,
+      "token_scale_percentiles": {
+        "p01": 1.245166540145874,
+        "p10": 1.361401915550232,
+        "p50": 1.5187069177627563,
+        "p90": 1.7525289058685303,
+        "p99": 2.0983805656433105
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 6.560403347015381,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.959618091583252,
+            "p10": 6.184624671936035,
+            "p50": 6.560403347015381,
+            "p90": 8.573850631713867,
+            "p99": 12.257740020751953
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 9.32800006866455,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.518022060394287,
+            "p10": 7.944668769836426,
+            "p50": 9.32800006866455,
+            "p90": 11.791956901550293,
+            "p99": 16.035327911376953
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 9.63288688659668,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.076855659484863,
+            "p10": 7.287368297576904,
+            "p50": 9.63288688659668,
+            "p90": 12.328266143798828,
+            "p99": 15.669053077697754
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 9.957014083862305,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.644280433654785,
+            "p10": 8.282366752624512,
+            "p50": 9.957014083862305,
+            "p90": 12.487007141113281,
+            "p99": 18.235469818115234
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 8.203787803649902,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.858061790466309,
+            "p10": 6.4411211013793945,
+            "p50": 8.203787803649902,
+            "p90": 12.193174362182617,
+            "p99": 14.829984664916992
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 7.47394323348999,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.717586517333984,
+            "p10": 6.012261867523193,
+            "p50": 7.47394323348999,
+            "p90": 9.002205848693848,
+            "p99": 11.718857765197754
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 5.76815938949585,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.005480766296387,
+            "p10": 5.18080997467041,
+            "p50": 5.76815938949585,
+            "p90": 7.862053394317627,
+            "p99": 10.875064849853516
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 8.457914352416992,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.152774810791016,
+            "p10": 6.81093168258667,
+            "p50": 8.457914352416992,
+            "p90": 10.27991771697998,
+            "p99": 13.325885772705078
+          }
+        }
+      ]
+    },
+    {
+      "layer": 23,
+      "attention_kind": "full_attention",
+      "scale": 1.640431523323059,
+      "side": "negative",
+      "signed_reference": -1.6431896686553955,
+      "captured_token_position": 327,
+      "analysis_token_position": 324,
+      "nearest_channel": 1361,
+      "token_scale_percentiles": {
+        "p01": 1.3521908521652222,
+        "p10": 1.4585334062576294,
+        "p50": 1.640431523323059,
+        "p90": 1.8429381847381592,
+        "p99": 2.1355693340301514
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 8.706064224243164,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.125363349914551,
+            "p10": 6.134704113006592,
+            "p50": 8.706064224243164,
+            "p90": 10.163838386535645,
+            "p99": 13.386343955993652
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 5.665833473205566,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 3.974463939666748,
+            "p10": 4.665497779846191,
+            "p50": 5.665833473205566,
+            "p90": 7.767390251159668,
+            "p99": 9.61004638671875
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 7.494729518890381,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.833279609680176,
+            "p10": 7.001447677612305,
+            "p50": 7.494729518890381,
+            "p90": 8.727577209472656,
+            "p99": 10.187417030334473
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 8.267913818359375,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.434170722961426,
+            "p10": 6.546380519866943,
+            "p50": 8.267913818359375,
+            "p90": 10.133090019226074,
+            "p99": 13.567008972167969
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 9.40914535522461,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.236047267913818,
+            "p10": 6.635326862335205,
+            "p50": 9.40914535522461,
+            "p90": 11.538910865783691,
+            "p99": 14.664346694946289
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 9.006206512451172,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.321616172790527,
+            "p10": 8.027586936950684,
+            "p50": 9.006206512451172,
+            "p90": 10.306441307067871,
+            "p99": 12.451098442077637
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 10.80827522277832,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 8.815595626831055,
+            "p10": 9.478160858154297,
+            "p50": 10.80827522277832,
+            "p90": 12.527320861816406,
+            "p99": 16.180286407470703
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 13.563365936279297,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 8.1544189453125,
+            "p10": 10.040657997131348,
+            "p50": 13.563365936279297,
+            "p90": 16.297306060791016,
+            "p99": 21.607725143432617
+          }
+        }
+      ]
+    },
+    {
+      "layer": 24,
+      "attention_kind": "full_attention",
+      "scale": 1.4606119394302368,
+      "side": "positive",
+      "signed_reference": 1.4605774879455566,
+      "captured_token_position": 147,
+      "analysis_token_position": 144,
+      "nearest_channel": 1347,
+      "token_scale_percentiles": {
+        "p01": 1.0194885730743408,
+        "p10": 1.1913529634475708,
+        "p50": 1.4606119394302368,
+        "p90": 1.7426060438156128,
+        "p99": 2.0565178394317627
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 512,
+          "scale": 9.41171646118164,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.236166477203369,
+            "p10": 7.320528030395508,
+            "p50": 9.41171646118164,
+            "p90": 12.699822425842285,
+            "p99": 15.466650009155273
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 512,
+          "scale": 9.095184326171875,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.760921478271484,
+            "p10": 7.067425727844238,
+            "p50": 9.095184326171875,
+            "p90": 12.741231918334961,
+            "p99": 15.354740142822266
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 512,
+          "scale": 15.108362197875977,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 9.912379264831543,
+            "p10": 11.843667984008789,
+            "p50": 15.108362197875977,
+            "p90": 18.538705825805664,
+            "p99": 21.2177677154541
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 512,
+          "scale": 15.247919082641602,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 8.219127655029297,
+            "p10": 10.308000564575195,
+            "p50": 15.247919082641602,
+            "p90": 18.60462760925293,
+            "p99": 20.919570922851562
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 512,
+          "scale": 9.973258972167969,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.878739833831787,
+            "p10": 8.84184741973877,
+            "p50": 9.973258972167969,
+            "p90": 12.145045280456543,
+            "p99": 15.892716407775879
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 512,
+          "scale": 10.365385055541992,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.692039489746094,
+            "p10": 8.765758514404297,
+            "p50": 10.365385055541992,
+            "p90": 12.723627090454102,
+            "p99": 15.936152458190918
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 512,
+          "scale": 9.223536491394043,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.55402135848999,
+            "p10": 8.047952651977539,
+            "p50": 9.223536491394043,
+            "p90": 12.021388053894043,
+            "p99": 15.801671981811523
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 512,
+          "scale": 10.564202308654785,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.160958290100098,
+            "p10": 8.169758796691895,
+            "p50": 10.564202308654785,
+            "p90": 14.192357063293457,
+            "p99": 17.691999435424805
+          }
+        }
+      ]
+    },
+    {
+      "layer": 25,
+      "attention_kind": "full_attention",
+      "scale": 1.0270780324935913,
+      "side": "positive",
+      "signed_reference": 1.0506720542907715,
+      "captured_token_position": 387,
+      "analysis_token_position": 384,
+      "nearest_channel": 724,
+      "token_scale_percentiles": {
+        "p01": 0.3814648389816284,
+        "p10": 0.5974032282829285,
+        "p50": 1.0270780324935913,
+        "p90": 1.414039969444275,
+        "p99": 1.9763150215148926
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 17.15065574645996,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 8.950511932373047,
+            "p10": 11.456345558166504,
+            "p50": 17.15065574645996,
+            "p90": 20.654264450073242,
+            "p99": 21.467388153076172
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 7.435271739959717,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.419436454772949,
+            "p10": 6.153787612915039,
+            "p50": 7.435271739959717,
+            "p90": 8.91574764251709,
+            "p99": 11.294281959533691
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 5.069888114929199,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.217100620269775,
+            "p10": 4.290775299072266,
+            "p50": 5.069888114929199,
+            "p90": 8.568987846374512,
+            "p99": 13.889217376708984
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 4.7457146644592285,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 3.9320719242095947,
+            "p10": 4.0210723876953125,
+            "p50": 4.7457146644592285,
+            "p90": 7.286545753479004,
+            "p99": 12.994111061096191
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 10.2288179397583,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.351930141448975,
+            "p10": 8.390300750732422,
+            "p50": 10.2288179397583,
+            "p90": 11.740116119384766,
+            "p99": 12.398862838745117
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 5.04179573059082,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 3.4153053760528564,
+            "p10": 3.895970106124878,
+            "p50": 5.04179573059082,
+            "p90": 7.370786190032959,
+            "p99": 14.336405754089355
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 6.4634904861450195,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 3.461113214492798,
+            "p10": 4.000269889831543,
+            "p50": 6.4634904861450195,
+            "p90": 10.192005157470703,
+            "p99": 14.076960563659668
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 7.6884379386901855,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.146390438079834,
+            "p10": 4.885828018188477,
+            "p50": 7.6884379386901855,
+            "p90": 10.801803588867188,
+            "p99": 15.213150024414062
+          }
+        }
+      ]
+    },
+    {
+      "layer": 26,
+      "attention_kind": "full_attention",
+      "scale": 1.4554853439331055,
+      "side": "positive",
+      "signed_reference": 1.4573886394500732,
+      "captured_token_position": 308,
+      "analysis_token_position": 305,
+      "nearest_channel": 27,
+      "token_scale_percentiles": {
+        "p01": 0.721446692943573,
+        "p10": 1.0518878698349,
+        "p50": 1.4554853439331055,
+        "p90": 1.8348162174224854,
+        "p99": 2.2615749835968018
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 13.756991386413574,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.744351863861084,
+            "p10": 8.21353816986084,
+            "p50": 13.756991386413574,
+            "p90": 17.658479690551758,
+            "p99": 20.000125885009766
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 8.517261505126953,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.098527431488037,
+            "p10": 7.549407958984375,
+            "p50": 8.517261505126953,
+            "p90": 11.95615291595459,
+            "p99": 17.138629913330078
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 6.3856306076049805,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.722860336303711,
+            "p10": 6.017475605010986,
+            "p50": 6.3856306076049805,
+            "p90": 7.239053249359131,
+            "p99": 10.621185302734375
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 6.38516092300415,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.8079071044921875,
+            "p10": 5.306454658508301,
+            "p50": 6.38516092300415,
+            "p90": 8.527785301208496,
+            "p99": 10.357431411743164
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 6.187619686126709,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.649176597595215,
+            "p10": 4.84314489364624,
+            "p50": 6.187619686126709,
+            "p90": 11.511141777038574,
+            "p99": 17.556411743164062
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 5.883199691772461,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.2283549308776855,
+            "p10": 5.320376873016357,
+            "p50": 5.883199691772461,
+            "p90": 8.215544700622559,
+            "p99": 11.908985137939453
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 5.5600361824035645,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.50877046585083,
+            "p10": 4.732508659362793,
+            "p50": 5.5600361824035645,
+            "p90": 7.490304470062256,
+            "p99": 10.513036727905273
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 9.109137535095215,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.518523693084717,
+            "p10": 6.104856491088867,
+            "p50": 9.109137535095215,
+            "p90": 13.507624626159668,
+            "p99": 21.123538970947266
+          }
+        }
+      ]
+    },
+    {
+      "layer": 27,
+      "attention_kind": "full_attention",
+      "scale": 0.8486290574073792,
+      "side": "positive",
+      "signed_reference": 0.8521147966384888,
+      "captured_token_position": 54,
+      "analysis_token_position": 51,
+      "nearest_channel": 802,
+      "token_scale_percentiles": {
+        "p01": 0.40772831439971924,
+        "p10": 0.5379558205604553,
+        "p50": 0.8486290574073792,
+        "p90": 1.2156798839569092,
+        "p99": 1.8347004652023315
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 5.138682842254639,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.719959259033203,
+            "p10": 4.840188026428223,
+            "p50": 5.138682842254639,
+            "p90": 5.866222381591797,
+            "p99": 10.771787643432617
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 8.672625541687012,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.861208915710449,
+            "p10": 7.157131671905518,
+            "p50": 8.672625541687012,
+            "p90": 9.420123100280762,
+            "p99": 13.797947883605957
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 7.429348945617676,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.498046398162842,
+            "p10": 5.477994441986084,
+            "p50": 7.429348945617676,
+            "p90": 10.383227348327637,
+            "p99": 12.637874603271484
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 7.401830673217773,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.906503200531006,
+            "p10": 6.366124153137207,
+            "p50": 7.401830673217773,
+            "p90": 8.989619255065918,
+            "p99": 16.899951934814453
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 5.183657169342041,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.89397668838501,
+            "p10": 4.97637939453125,
+            "p50": 5.183657169342041,
+            "p90": 7.568873405456543,
+            "p99": 12.875462532043457
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 7.2770867347717285,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.222268104553223,
+            "p10": 6.575101375579834,
+            "p50": 7.2770867347717285,
+            "p90": 9.62256145477295,
+            "p99": 15.185209274291992
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 5.933238983154297,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.763935089111328,
+            "p10": 5.83131742477417,
+            "p50": 5.933238983154297,
+            "p90": 6.169955730438232,
+            "p99": 7.5923380851745605
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 4.71922492980957,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 3.982243776321411,
+            "p10": 4.168464660644531,
+            "p50": 4.71922492980957,
+            "p90": 7.031579971313477,
+            "p99": 12.97164249420166
+          }
+        }
+      ]
+    },
+    {
+      "layer": 28,
+      "attention_kind": "full_attention",
+      "scale": 1.2338817119598389,
+      "side": "negative",
+      "signed_reference": -1.242599368095398,
+      "captured_token_position": 17,
+      "analysis_token_position": 14,
+      "nearest_channel": 507,
+      "token_scale_percentiles": {
+        "p01": 0.6584026217460632,
+        "p10": 0.9625067114830017,
+        "p50": 1.2338817119598389,
+        "p90": 1.5283515453338623,
+        "p99": 1.9490724802017212
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 3.4953365325927734,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 3.166254758834839,
+            "p10": 3.248875379562378,
+            "p50": 3.4953365325927734,
+            "p90": 4.142527103424072,
+            "p99": 7.060205459594727
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 8.911730766296387,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 3.940627336502075,
+            "p10": 5.700236797332764,
+            "p50": 8.911730766296387,
+            "p90": 12.715984344482422,
+            "p99": 16.572978973388672
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 5.445847988128662,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.2190656661987305,
+            "p10": 5.324839115142822,
+            "p50": 5.445847988128662,
+            "p90": 6.854229927062988,
+            "p99": 15.610580444335938
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 7.391402244567871,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.881507396697998,
+            "p10": 5.8765106201171875,
+            "p50": 7.391402244567871,
+            "p90": 9.634577751159668,
+            "p99": 12.605799674987793
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 6.577643871307373,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.851880073547363,
+            "p10": 6.159527778625488,
+            "p50": 6.577643871307373,
+            "p90": 6.840606689453125,
+            "p99": 7.213651180267334
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 6.807811260223389,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.112262725830078,
+            "p10": 4.8217267990112305,
+            "p50": 6.807811260223389,
+            "p90": 8.763323783874512,
+            "p99": 10.177543640136719
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 7.073689937591553,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.327672958374023,
+            "p10": 5.630649566650391,
+            "p50": 7.073689937591553,
+            "p90": 9.012757301330566,
+            "p99": 11.329967498779297
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 9.101075172424316,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.977213382720947,
+            "p10": 5.915258884429932,
+            "p50": 9.101075172424316,
+            "p90": 13.280129432678223,
+            "p99": 18.78423309326172
+          }
+        }
+      ]
+    },
+    {
+      "layer": 29,
+      "attention_kind": "full_attention",
+      "scale": 1.2495346069335938,
+      "side": "negative",
+      "signed_reference": -1.2492599487304688,
+      "captured_token_position": 373,
+      "analysis_token_position": 370,
+      "nearest_channel": 943,
+      "token_scale_percentiles": {
+        "p01": 0.8681496977806091,
+        "p10": 1.020178198814392,
+        "p50": 1.2495346069335938,
+        "p90": 1.6081432104110718,
+        "p99": 1.9882971048355103
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 512,
+          "scale": 14.62956428527832,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 9.044652938842773,
+            "p10": 11.068988800048828,
+            "p50": 14.62956428527832,
+            "p90": 17.441234588623047,
+            "p99": 21.366676330566406
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 512,
+          "scale": 10.378108978271484,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.353932857513428,
+            "p10": 7.824382781982422,
+            "p50": 10.378108978271484,
+            "p90": 15.276795387268066,
+            "p99": 18.44751739501953
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 512,
+          "scale": 8.643437385559082,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.147945404052734,
+            "p10": 6.371078014373779,
+            "p50": 8.643437385559082,
+            "p90": 12.14239501953125,
+            "p99": 15.394079208374023
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 512,
+          "scale": 8.37883472442627,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.612083911895752,
+            "p10": 6.413508415222168,
+            "p50": 8.37883472442627,
+            "p90": 11.508500099182129,
+            "p99": 16.451269149780273
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 512,
+          "scale": 8.598517417907715,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.609407901763916,
+            "p10": 6.721109390258789,
+            "p50": 8.598517417907715,
+            "p90": 12.26296615600586,
+            "p99": 17.286457061767578
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 512,
+          "scale": 8.930746078491211,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.137421131134033,
+            "p10": 6.433751583099365,
+            "p50": 8.930746078491211,
+            "p90": 13.725523948669434,
+            "p99": 18.24464988708496
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 512,
+          "scale": 9.090985298156738,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.318180561065674,
+            "p10": 7.267603874206543,
+            "p50": 9.090985298156738,
+            "p90": 12.018537521362305,
+            "p99": 17.10252571105957
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 512,
+          "scale": 8.621172904968262,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.74713134765625,
+            "p10": 6.6211748123168945,
+            "p50": 8.621172904968262,
+            "p90": 12.02110481262207,
+            "p99": 15.765378952026367
+          }
+        }
+      ]
+    },
+    {
+      "layer": 30,
+      "attention_kind": "full_attention",
+      "scale": 0.6603696942329407,
+      "side": "negative",
+      "signed_reference": -0.6686925292015076,
+      "captured_token_position": 105,
+      "analysis_token_position": 102,
+      "nearest_channel": 775,
+      "token_scale_percentiles": {
+        "p01": 0.3329853117465973,
+        "p10": 0.4424585998058319,
+        "p50": 0.6603696942329407,
+        "p90": 1.0378525257110596,
+        "p99": 1.5247480869293213
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 3.2439820766448975,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 2.662715435028076,
+            "p10": 2.762051820755005,
+            "p50": 3.2439820766448975,
+            "p90": 5.03693151473999,
+            "p99": 9.861612319946289
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 4.139420986175537,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 3.9830994606018066,
+            "p10": 4.038915157318115,
+            "p50": 4.139420986175537,
+            "p90": 4.380094528198242,
+            "p99": 7.3651299476623535
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 8.699501991271973,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 7.423316955566406,
+            "p10": 8.020830154418945,
+            "p50": 8.699501991271973,
+            "p90": 9.089076042175293,
+            "p99": 9.995389938354492
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 6.311329364776611,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.186214447021484,
+            "p10": 5.05364990234375,
+            "p50": 6.311329364776611,
+            "p90": 8.622159957885742,
+            "p99": 14.476308822631836
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 4.578954219818115,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.27004337310791,
+            "p10": 4.3393025398254395,
+            "p50": 4.578954219818115,
+            "p90": 5.751929759979248,
+            "p99": 8.25174331665039
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 6.811246871948242,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.375634670257568,
+            "p10": 6.017946243286133,
+            "p50": 6.811246871948242,
+            "p90": 7.363563060760498,
+            "p99": 8.735962867736816
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 6.962049961090088,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.366389274597168,
+            "p10": 6.594882965087891,
+            "p50": 6.962049961090088,
+            "p90": 7.397995471954346,
+            "p99": 12.002486228942871
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 6.826927185058594,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.683263778686523,
+            "p10": 6.148617267608643,
+            "p50": 6.826927185058594,
+            "p90": 7.271899700164795,
+            "p99": 9.856246948242188
+          }
+        }
+      ]
+    },
+    {
+      "layer": 31,
+      "attention_kind": "full_attention",
+      "scale": 0.5779749155044556,
+      "side": "positive",
+      "signed_reference": 0.5853984355926514,
+      "captured_token_position": 421,
+      "analysis_token_position": 418,
+      "nearest_channel": 753,
+      "token_scale_percentiles": {
+        "p01": 0.2645098865032196,
+        "p10": 0.3190702795982361,
+        "p50": 0.5779749155044556,
+        "p90": 0.9573096036911011,
+        "p99": 1.5141401290893555
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 7.409124374389648,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.322213649749756,
+            "p10": 5.28269100189209,
+            "p50": 7.409124374389648,
+            "p90": 9.66018009185791,
+            "p99": 10.653464317321777
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 5.212441921234131,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.977823734283447,
+            "p10": 5.0732316970825195,
+            "p50": 5.212441921234131,
+            "p90": 5.625062465667725,
+            "p99": 7.3104424476623535
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 6.7030463218688965,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.376918792724609,
+            "p10": 5.849734306335449,
+            "p50": 6.7030463218688965,
+            "p90": 7.285778045654297,
+            "p99": 10.592610359191895
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 13.59372329711914,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.1058526039123535,
+            "p10": 8.054435729980469,
+            "p50": 13.59372329711914,
+            "p90": 15.891879081726074,
+            "p99": 16.773799896240234
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 5.414010524749756,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.905642986297607,
+            "p10": 5.143921375274658,
+            "p50": 5.414010524749756,
+            "p90": 6.429654121398926,
+            "p99": 12.462823867797852
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 5.380094528198242,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.2656145095825195,
+            "p10": 5.303744792938232,
+            "p50": 5.380094528198242,
+            "p90": 5.608467102050781,
+            "p99": 6.7608513832092285
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 3.353095769882202,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 2.8414416313171387,
+            "p10": 2.952498197555542,
+            "p50": 3.353095769882202,
+            "p90": 4.767323017120361,
+            "p99": 8.380943298339844
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 5.757752895355225,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.5861430168151855,
+            "p10": 4.9572529792785645,
+            "p50": 5.757752895355225,
+            "p90": 7.741737365722656,
+            "p99": 14.6834077835083
+          }
+        }
+      ]
+    },
+    {
+      "layer": 32,
+      "attention_kind": "full_attention",
+      "scale": 1.0259639024734497,
+      "side": "negative",
+      "signed_reference": -1.0302791595458984,
+      "captured_token_position": 205,
+      "analysis_token_position": 202,
+      "nearest_channel": 410,
+      "token_scale_percentiles": {
+        "p01": 0.5025725364685059,
+        "p10": 0.7756701707839966,
+        "p50": 1.0259639024734497,
+        "p90": 1.2741568088531494,
+        "p99": 1.7944878339767456
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 4.813168048858643,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.679007053375244,
+            "p10": 4.7266058921813965,
+            "p50": 4.813168048858643,
+            "p90": 5.224341869354248,
+            "p99": 10.060559272766113
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 9.709980010986328,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.725858211517334,
+            "p10": 7.726143836975098,
+            "p50": 9.709980010986328,
+            "p90": 11.830795288085938,
+            "p99": 14.72950553894043
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 3.298124313354492,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 3.0860235691070557,
+            "p10": 3.1500821113586426,
+            "p50": 3.298124313354492,
+            "p90": 3.680154323577881,
+            "p99": 9.622332572937012
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 5.715911388397217,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.037854194641113,
+            "p10": 5.3444318771362305,
+            "p50": 5.715911388397217,
+            "p90": 6.264318466186523,
+            "p99": 10.183808326721191
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 7.849845886230469,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.291909694671631,
+            "p10": 7.011037826538086,
+            "p50": 7.849845886230469,
+            "p90": 8.600992202758789,
+            "p99": 9.956266403198242
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 5.841882705688477,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.424467086791992,
+            "p10": 5.6026835441589355,
+            "p50": 5.841882705688477,
+            "p90": 7.891796112060547,
+            "p99": 14.449742317199707
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 7.358614444732666,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.506155490875244,
+            "p10": 5.267453670501709,
+            "p50": 7.358614444732666,
+            "p90": 9.151334762573242,
+            "p99": 10.31733226776123
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 4.681588172912598,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.406802654266357,
+            "p10": 4.48708963394165,
+            "p50": 4.681588172912598,
+            "p90": 5.419240951538086,
+            "p99": 8.898221969604492
+          }
+        }
+      ]
+    },
+    {
+      "layer": 33,
+      "attention_kind": "full_attention",
+      "scale": 0.843484103679657,
+      "side": "negative",
+      "signed_reference": -0.8448318243026733,
+      "captured_token_position": 410,
+      "analysis_token_position": 407,
+      "nearest_channel": 1105,
+      "token_scale_percentiles": {
+        "p01": 0.505262553691864,
+        "p10": 0.6382646560668945,
+        "p50": 0.843484103679657,
+        "p90": 1.0916543006896973,
+        "p99": 1.508907437324524
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 256,
+          "scale": 5.595693588256836,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.375402450561523,
+            "p10": 5.446892738342285,
+            "p50": 5.595693588256836,
+            "p90": 6.3112993240356445,
+            "p99": 9.123255729675293
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 256,
+          "scale": 4.066765308380127,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 3.6862633228302,
+            "p10": 3.8108131885528564,
+            "p50": 4.066765308380127,
+            "p90": 4.58376932144165,
+            "p99": 6.34475564956665
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 256,
+          "scale": 6.063811302185059,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.414494514465332,
+            "p10": 5.542947292327881,
+            "p50": 6.063811302185059,
+            "p90": 7.524338722229004,
+            "p99": 10.654252052307129
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 256,
+          "scale": 7.489675521850586,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.770749092102051,
+            "p10": 7.134491920471191,
+            "p50": 7.489675521850586,
+            "p90": 7.7065653800964355,
+            "p99": 10.104276657104492
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 256,
+          "scale": 6.299652576446533,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.983372211456299,
+            "p10": 5.216118812561035,
+            "p50": 6.299652576446533,
+            "p90": 8.770890235900879,
+            "p99": 12.947310447692871
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 256,
+          "scale": 6.477906227111816,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.60862398147583,
+            "p10": 5.932638168334961,
+            "p50": 6.477906227111816,
+            "p90": 7.7243971824646,
+            "p99": 12.375225067138672
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 256,
+          "scale": 4.586711883544922,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 3.3022656440734863,
+            "p10": 3.473963499069214,
+            "p50": 4.586711883544922,
+            "p90": 7.183393478393555,
+            "p99": 10.505656242370605
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 256,
+          "scale": 6.649923801422119,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.896908760070801,
+            "p10": 6.078593730926514,
+            "p50": 6.649923801422119,
+            "p90": 8.24442195892334,
+            "p99": 11.43937873840332
+          }
+        }
+      ]
+    },
+    {
+      "layer": 34,
+      "attention_kind": "full_attention",
+      "scale": 1.2837884426116943,
+      "side": "negative",
+      "signed_reference": -1.2835941314697266,
+      "captured_token_position": 232,
+      "analysis_token_position": 229,
+      "nearest_channel": 3311,
+      "token_scale_percentiles": {
+        "p01": 0.9068498611450195,
+        "p10": 1.049629807472229,
+        "p50": 1.2837884426116943,
+        "p90": 1.6298495531082153,
+        "p99": 1.995524287223816
+      },
+      "head_norm_scales": [
+        {
+          "head": 0,
+          "head_dimension": 512,
+          "scale": 8.068122863769531,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.9510908126831055,
+            "p10": 6.1421403884887695,
+            "p50": 8.068122863769531,
+            "p90": 11.460539817810059,
+            "p99": 15.086112976074219
+          }
+        },
+        {
+          "head": 1,
+          "head_dimension": 512,
+          "scale": 10.05316162109375,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 6.186920642852783,
+            "p10": 7.585021018981934,
+            "p50": 10.05316162109375,
+            "p90": 14.214346885681152,
+            "p99": 19.646455764770508
+          }
+        },
+        {
+          "head": 2,
+          "head_dimension": 512,
+          "scale": 8.399566650390625,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 5.084710121154785,
+            "p10": 6.00501823425293,
+            "p50": 8.399566650390625,
+            "p90": 12.79987907409668,
+            "p99": 17.982601165771484
+          }
+        },
+        {
+          "head": 3,
+          "head_dimension": 512,
+          "scale": 8.487151145935059,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.49217414855957,
+            "p10": 6.285538196563721,
+            "p50": 8.487151145935059,
+            "p90": 12.479375839233398,
+            "p99": 16.421419143676758
+          }
+        },
+        {
+          "head": 4,
+          "head_dimension": 512,
+          "scale": 6.85732889175415,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.395574569702148,
+            "p10": 5.2007012367248535,
+            "p50": 6.85732889175415,
+            "p90": 10.536331176757812,
+            "p99": 14.322783470153809
+          }
+        },
+        {
+          "head": 5,
+          "head_dimension": 512,
+          "scale": 7.162125587463379,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 4.532777786254883,
+            "p10": 5.394335746765137,
+            "p50": 7.162125587463379,
+            "p90": 10.581707000732422,
+            "p99": 14.5592041015625
+          }
+        },
+        {
+          "head": 6,
+          "head_dimension": 512,
+          "scale": 6.4301910400390625,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 3.866410732269287,
+            "p10": 4.589691638946533,
+            "p50": 6.4301910400390625,
+            "p90": 10.227995872497559,
+            "p99": 14.75996208190918
+          }
+        },
+        {
+          "head": 7,
+          "head_dimension": 512,
+          "scale": 6.586450099945068,
+          "analyzed_tokens": 441,
+          "token_norm_percentiles": {
+            "p01": 3.9198522567749023,
+            "p10": 4.786050796508789,
+            "p50": 6.586450099945068,
+            "p90": 9.146734237670898,
+            "p99": 12.20526123046875
+          }
+        }
+      ]
+    }
+  ]
+}
