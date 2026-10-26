@@ -2,7 +2,7 @@
   "name": "llmdbg",
   "displayName": "llmdbg",
   "description": "Step through LLM layers and inspect human-readable internal representations.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "SidaLiu",
   "icon": "assets/icon.png",
   "license": "MIT",
@@ -23,6 +23,7 @@
   ],
   "files": [
     "extension.js",
+    "runtime-profiles.js",
     "assets/**",
     "bundled/**",
     "LICENSE",
@@ -50,26 +51,66 @@
       },
       {
         "command": "llmdbg.plotCurrentVector",
-        "title": "llmdbg: Plot Current Vector",
+        "title": "llmdbg: Open Tensor Plot",
         "icon": {
           "light": "assets/plot-light.svg",
           "dark": "assets/plot-dark.svg"
         }
       },
       {
+        "command": "llmdbg.closeVectorPlot",
+        "title": "llmdbg: Close Tensor Plot",
+        "icon": {
+          "light": "assets/plot-open-light.svg",
+          "dark": "assets/plot-open-dark.svg"
+        }
+      },
+      {
         "command": "llmdbg.showNeuronLens",
-        "title": "Lens",
+        "title": "Open Lens",
         "icon": {
           "light": "assets/lens-light.svg",
           "dark": "assets/lens-dark.svg"
         }
       },
       {
+        "command": "llmdbg.closeNeuronLens",
+        "title": "Close Lens",
+        "icon": {
+          "light": "assets/lens-open-light.svg",
+          "dark": "assets/lens-open-dark.svg"
+        }
+      },
+      {
         "command": "llmdbg.showPromptTokens",
-        "title": "Prompt and Tokens",
+        "title": "Open Prompt and Tokens",
         "icon": {
           "light": "assets/prompt-light.svg",
           "dark": "assets/prompt-dark.svg"
+        }
+      },
+      {
+        "command": "llmdbg.closePromptTokens",
+        "title": "Close Prompt and Tokens",
+        "icon": {
+          "light": "assets/prompt-open-light.svg",
+          "dark": "assets/prompt-open-dark.svg"
+        }
+      },
+      {
+        "command": "llmdbg.decodeExpression",
+        "title": "Open Tensor Expression Decoder",
+        "icon": {
+          "light": "assets/decode-light.svg",
+          "dark": "assets/decode-dark.svg"
+        }
+      },
+      {
+        "command": "llmdbg.closeExpressionDecoder",
+        "title": "Close Tensor Expression Decoder",
+        "icon": {
+          "light": "assets/decode-open-light.svg",
+          "dark": "assets/decode-open-dark.svg"
         }
       },
       {
@@ -92,18 +133,43 @@
       "debug/toolBar": [
         {
           "command": "llmdbg.showNeuronLens",
-          "when": "debugType == llmdbg",
+          "when": "debugType == llmdbg && !llmdbg.neuronLensPanelOpen",
+          "group": "llmdbg@1"
+        },
+        {
+          "command": "llmdbg.closeNeuronLens",
+          "when": "debugType == llmdbg && llmdbg.neuronLensPanelOpen",
           "group": "llmdbg@1"
         },
         {
           "command": "llmdbg.plotCurrentVector",
-          "when": "debugType == llmdbg",
+          "when": "debugType == llmdbg && !llmdbg.vectorPanelOpen",
+          "group": "llmdbg@2"
+        },
+        {
+          "command": "llmdbg.closeVectorPlot",
+          "when": "debugType == llmdbg && llmdbg.vectorPanelOpen",
           "group": "llmdbg@2"
         },
         {
           "command": "llmdbg.showPromptTokens",
-          "when": "debugType == llmdbg",
+          "when": "debugType == llmdbg && !llmdbg.promptTokensPanelOpen",
           "group": "llmdbg@3"
+        },
+        {
+          "command": "llmdbg.closePromptTokens",
+          "when": "debugType == llmdbg && llmdbg.promptTokensPanelOpen",
+          "group": "llmdbg@3"
+        },
+        {
+          "command": "llmdbg.decodeExpression",
+          "when": "debugType == llmdbg && !llmdbg.decoderPanelOpen",
+          "group": "llmdbg@4"
+        },
+        {
+          "command": "llmdbg.closeExpressionDecoder",
+          "when": "debugType == llmdbg && llmdbg.decoderPanelOpen",
+          "group": "llmdbg@4"
         }
       ]
     },
@@ -175,6 +241,12 @@
                 "type": "string",
                 "description": "Hugging Face model ID or local model directory."
               },
+              "runtimeProfile": {
+                "type": "string",
+                "enum": ["auto", "stable", "gemma4-preview"],
+                "default": "auto",
+                "description": "Isolated dependency profile. Auto selects Gemma 4 preview for Gemma 4, stable for other models."
+              },
               "revision": {
                 "type": "string",
                 "description": "Model repository branch, tag, or commit."
@@ -236,100 +308,165 @@
       {
         "title": "llmdbg: General",
         "properties": {
-        "llmdbg.bootstrapPythonPath": {
-          "type": "string",
-          "default": "",
-          "description": "Python executable used only to create llmdbg's private environment. Empty uses python3 (python on Windows)."
-        },
-        "llmdbg.uvPath": {
-          "type": "string",
-          "default": "uv",
-          "description": "uv executable used to create and update llmdbg's private environment."
-        },
-        "llmdbg.torchBackend": {
-          "type": "string",
-          "enum": [
-            "auto",
-            "cu128",
-            "cu126",
-            "cu118",
-            "cpu"
-          ],
-          "default": "auto",
-          "description": "PyTorch backend for llmdbg's private runtime. Auto detects NVIDIA CUDA on Windows/Linux, Apple MPS on macOS, and otherwise uses CPU."
-        },
-        "llmdbg.developmentSourcePath": {
-          "type": "string",
-          "default": "",
-          "description": "Development-only source directory containing the llmdbg Python package. Published use defaults to the bundled adapter."
-        }
+          "llmdbg.bootstrapPythonPath": {
+            "type": "string",
+            "default": "",
+            "description": "Legacy bootstrap interpreter setting.",
+            "deprecationMessage": "Runtime profiles now select their pinned Python version through uv; this setting is no longer used."
+          },
+          "llmdbg.uvPath": {
+            "type": "string",
+            "default": "uv",
+            "description": "uv executable used to create and update llmdbg's private environment."
+          },
+          "llmdbg.torchBackend": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "cu130",
+              "cu128",
+              "cu126",
+              "cu118",
+              "cpu"
+            ],
+            "default": "auto",
+            "description": "PyTorch backend for llmdbg's private runtime. Auto detects NVIDIA CUDA on Windows/Linux, Apple MPS on macOS, and otherwise uses CPU."
+          },
+          "llmdbg.developmentSourcePath": {
+            "type": "string",
+            "default": "",
+            "description": "Development-only source directory containing the llmdbg Python package. Published use defaults to the bundled adapter."
+          }
         }
       },
       {
         "title": "llmdbg: Lens URLs",
         "properties": {
-        "llmdbg.jLensSource": {
-          "type": "string",
-          "default": "hf://datasets/sida/llmdbg",
-          "markdownDescription": "Artifact repository for the built-in **J-Lens** entry. Use a local repository folder, `hf://datasets/owner/repository`, or `hf://models/owner/repository`. Clear this field to disable J-Lens."
-        },
-        "llmdbg.rLensSource": {
-          "type": "string",
-          "default": "hf://datasets/sida/llmdbg",
-          "markdownDescription": "Artifact repository for the built-in **R-Lens** entry. Use a local repository folder, `hf://datasets/owner/repository`, or `hf://models/owner/repository`. Clear this field to disable R-Lens."
-        },
-        "llmdbg.jppLensSource": {
-          "type": "string",
-          "default": "hf://datasets/sida/llmdbg",
-          "markdownDescription": "Artifact repository for the standard **J++ Lens** entry. Use a local repository folder, `hf://datasets/owner/repository`, or `hf://models/owner/repository`. Clear this field to disable this J++ source."
-        },
-        "llmdbg.customResidualToVocabularyLenses": {
-          "type": "array",
-          "markdownDescription": "Additional **Residual-to-Vocabulary Lenses**, separate from the standard J, R, and J++ sources above. Use the command [Manage Custom Residual-to-Vocabulary Lenses](command:llmdbg.manageResidualToVocabularyLenses) to add, edit, enable, disable, or remove entries. Defaults include Official J++ and Neuronpedia's Post-only J and J++ Lenses for compatible checkpoints.",
-          "default": [
-            { "id": "jpp-official", "label": "Official J++ Lens", "method": "jpp", "source": "hf://models/koayon/jpp-lenses", "revision": "237dab6ea0e611d964bf407f13ba1655f1a6ae43", "path": "qwen3.5-9b/lens.pt", "models": ["Qwen/Qwen3.5-9B"], "enabled": true },
-            { "id": "j-neuronpedia", "label": "Neuronpedia J Lens", "method": "j", "source": "hf://models/neuronpedia/jacobian-lens", "enabled": true },
-            { "id": "jpp-neuronpedia", "label": "Neuronpedia J++ Lens", "method": "jpp", "source": "hf://models/neuronpedia/jacobian-lens", "enabled": true }
-          ],
-          "items": {
-            "type": "object",
-            "required": ["id", "label", "method", "source"],
-            "properties": {
-              "id": { "type": "string", "description": "Unique selector and cache ID." },
-              "label": { "type": "string", "description": "Label shown in the Lens selector." },
-              "method": { "type": "string", "enum": ["j", "r", "jpp"], "description": "Artifact/readout implementation." },
-              "source": { "type": "string", "description": "Local repository folder or Hugging Face source such as hf://datasets/sida/llmdbg." },
-              "indexSection": { "type": "string", "description": "Index section for an indexed repository." },
-              "revision": { "type": "string", "description": "Optional pinned repository revision." },
-              "path": { "type": "string", "description": "Optional artifact path inside the repository." },
-              "models": { "type": "array", "items": { "type": "string" }, "description": "Optional compatible model IDs. Use * for all models; artifacts are still validated." },
-              "enabled": { "type": "boolean", "default": true }
+          "llmdbg.jLensSource": {
+            "type": "string",
+            "default": "hf://datasets/sida/llmdbg",
+            "markdownDescription": "Artifact repository for the built-in **J-Lens** entry. Use a local repository folder, `hf://datasets/owner/repository`, or `hf://models/owner/repository`. Clear this field to disable J-Lens."
+          },
+          "llmdbg.rLensSource": {
+            "type": "string",
+            "default": "hf://datasets/sida/llmdbg",
+            "markdownDescription": "Artifact repository for the built-in **R-Lens** entry. Use a local repository folder, `hf://datasets/owner/repository`, or `hf://models/owner/repository`. Clear this field to disable R-Lens."
+          },
+          "llmdbg.jppLensSource": {
+            "type": "string",
+            "default": "hf://datasets/sida/llmdbg",
+            "markdownDescription": "Artifact repository for the standard **J++ Lens** entry. Use a local repository folder, `hf://datasets/owner/repository`, or `hf://models/owner/repository`. Clear this field to disable this J++ source."
+          },
+          "llmdbg.customResidualToVocabularyLenses": {
+            "type": "array",
+            "markdownDescription": "Additional **Residual-to-Vocabulary Lenses**, separate from the standard J, R, and J++ sources above. Use the command [Manage Custom Residual-to-Vocabulary Lenses](command:llmdbg.manageResidualToVocabularyLenses) to add, edit, enable, disable, or remove entries. Defaults include Official J++ and Neuronpedia's Post-only J and J++ Lenses for compatible checkpoints.",
+            "default": [
+              {
+                "id": "jpp-official",
+                "label": "Official J++ Lens",
+                "method": "jpp",
+                "source": "hf://models/koayon/jpp-lenses",
+                "revision": "237dab6ea0e611d964bf407f13ba1655f1a6ae43",
+                "path": "qwen3.5-9b/lens.pt",
+                "models": [
+                  "Qwen/Qwen3.5-9B"
+                ],
+                "enabled": true
+              },
+              {
+                "id": "j-neuronpedia",
+                "label": "Neuronpedia J Lens",
+                "method": "j",
+                "source": "hf://models/neuronpedia/jacobian-lens",
+                "enabled": true
+              },
+              {
+                "id": "jpp-neuronpedia",
+                "label": "Neuronpedia J++ Lens",
+                "method": "jpp",
+                "source": "hf://models/neuronpedia/jacobian-lens",
+                "enabled": true
+              }
+            ],
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "label",
+                "method",
+                "source"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Unique selector and cache ID."
+                },
+                "label": {
+                  "type": "string",
+                  "description": "Label shown in the Lens selector."
+                },
+                "method": {
+                  "type": "string",
+                  "enum": [
+                    "j",
+                    "r",
+                    "jpp"
+                  ],
+                  "description": "Artifact/readout implementation."
+                },
+                "source": {
+                  "type": "string",
+                  "description": "Local repository folder or Hugging Face source such as hf://datasets/sida/llmdbg."
+                },
+                "indexSection": {
+                  "type": "string",
+                  "description": "Index section for an indexed repository."
+                },
+                "revision": {
+                  "type": "string",
+                  "description": "Optional pinned repository revision."
+                },
+                "path": {
+                  "type": "string",
+                  "description": "Optional artifact path inside the repository."
+                },
+                "models": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Optional compatible model IDs. Use * for all models; artifacts are still validated."
+                },
+                "enabled": {
+                  "type": "boolean",
+                  "default": true
+                }
+              }
             }
           }
-        }
         }
       },
       {
         "title": "llmdbg: Interface",
         "properties": {
-        "llmdbg.lensTheme": {
-          "type": "string",
-          "enum": [
-            "dark",
-            "light"
-          ],
-          "enumDescriptions": [
-            "Show the Lens interface in the dark theme.",
-            "Show the Lens interface in the light theme."
-          ],
-          "default": "dark",
-          "description": "Theme for the Lens interface. Saved reports initially preserve this theme and include their own theme switch."
-        },
-        "llmdbg.autoReloadAfterUpdate": {
-          "type": "boolean",
-          "default": true,
-          "description": "Automatically reload the VS Code window when a newly installed llmdbg extension version is detected."
-        }
+          "llmdbg.lensTheme": {
+            "type": "string",
+            "enum": [
+              "dark",
+              "light"
+            ],
+            "enumDescriptions": [
+              "Show the Lens interface in the dark theme.",
+              "Show the Lens interface in the light theme."
+            ],
+            "default": "dark",
+            "description": "Theme for the Lens interface. Saved reports initially preserve this theme and include their own theme switch."
+          },
+          "llmdbg.autoReloadAfterUpdate": {
+            "type": "boolean",
+            "default": true,
+            "description": "Automatically reload the VS Code window when a newly installed llmdbg extension version is detected."
+          }
         }
       }
     ]

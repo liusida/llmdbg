@@ -52,6 +52,7 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn("llmdbg.rLensSource", settings)
         self.assertIn("llmdbg.jppLensSource", settings)
         source = (root / "vscode-extension" / "extension.js").read_text()
+        self.assertNotIn("registerWebviewPanelSerializer", source)
         self.assertIn('method: "jpp", source: jppSource, indexSection: "workspace_lenses"', source)
         self.assertNotIn("llmdbg.residualToVocabularyLenses", settings)
         custom = settings["llmdbg.customResidualToVocabularyLenses"]
@@ -64,14 +65,23 @@ class ExtensionManifestTest(unittest.TestCase):
             command["command"]: command for command in manifest["contributes"]["commands"]
         }
         self.assertEqual(commands["llmdbg.showNeuronLens"]["icon"]["dark"], "assets/lens-dark.svg")
+        self.assertEqual(commands["llmdbg.closeNeuronLens"]["icon"]["dark"], "assets/lens-open-dark.svg")
         self.assertEqual(commands["llmdbg.plotCurrentVector"]["icon"]["dark"], "assets/plot-dark.svg")
+        self.assertEqual(commands["llmdbg.closeVectorPlot"]["icon"]["dark"], "assets/plot-open-dark.svg")
+        self.assertEqual(commands["llmdbg.decodeExpression"]["icon"]["dark"], "assets/decode-dark.svg")
+        self.assertEqual(commands["llmdbg.closeExpressionDecoder"]["icon"]["dark"], "assets/decode-open-dark.svg")
         toolbar = manifest["contributes"]["menus"]["debug/toolBar"]
         self.assertEqual(
             [(item["command"], item["group"]) for item in toolbar],
             [
                 ("llmdbg.showNeuronLens", "llmdbg@1"),
+                ("llmdbg.closeNeuronLens", "llmdbg@1"),
                 ("llmdbg.plotCurrentVector", "llmdbg@2"),
+                ("llmdbg.closeVectorPlot", "llmdbg@2"),
                 ("llmdbg.showPromptTokens", "llmdbg@3"),
+                ("llmdbg.closePromptTokens", "llmdbg@3"),
+                ("llmdbg.decodeExpression", "llmdbg@4"),
+                ("llmdbg.closeExpressionDecoder", "llmdbg@4"),
             ],
         )
 
@@ -82,8 +92,11 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn("context.globalStorageUri.fsPath", source)
         self.assertIn('["-m", "llmdbg.host"', source)
         self.assertIn('new vscode.DebugAdapterServer(port, "127.0.0.1")', source)
-        self.assertIn('"gb10-load-llm==0.1.2"', source)
-        self.assertIn('["venv", "--python", bootstrapPython(), runtimeRoot]', source)
+        self.assertIn('`gb10-load-llm==${recipe.loader}`', source)
+        self.assertIn('["venv", "--python", recipe.python, runtimeRoot]', source)
+        self.assertIn('path.join(runtimesRoot, recipe.key)', source)
+        self.assertIn('hostPython === python', source)
+        self.assertIn('"runtime-profiles.js"', (root / "vscode-extension" / "package.json").read_text())
         self.assertIn('"pip", "install"', source)
         self.assertIn('get("uvPath", "uv")', source)
         self.assertIn("session.configuration.adapterSource", source)
@@ -98,7 +111,8 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn("def plot(vector, vector_name, plt, np):", source)
         self.assertIn("vscode.workspace.openTextDocument", source)
         self.assertIn("viewColumn: vectorPanel?.viewColumn || vscode.ViewColumn.Beside", source)
-        self.assertIn('"matplotlib>=3.10,<4"', source)
+        self.assertIn('customRequest("llmdbg/decodeExpression"', source)
+        self.assertIn('`matplotlib==${recipe.matplotlib}`', source)
         self.assertIn('registerCommand("llmdbg.plotCurrentVector"', source)
         self.assertIn('registerCommand("llmdbg.initializeProject"', source)
         self.assertIn('registerCommand("llmdbg.showRuntimeDiagnostics"', source)
@@ -114,7 +128,8 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn('config: "${file}"', source)
         self.assertNotIn('config: `\\${workspaceFolder}/${file}`', source)
         self.assertIn("Left existing", source)
-        self.assertIn('cu128: { id: "cu128", torch: "2.10.0"', source)
+        self.assertIn('profileRecipe(profile, backend, process.platform, process.arch)', source)
+        self.assertIn('capability >= 12.1 && cuda >= 13.0', source)
         self.assertIn("async function detectedCudaComputeCapability()", source)
         self.assertIn("capability < 7.0 && cuda >= 12.6", source)
         self.assertIn('process.platform === "darwin"', source)
@@ -135,6 +150,7 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn("createStatusBarItem", source)
         self.assertIn('get("autoReloadAfterUpdate", true)', source)
         self.assertIn('executeCommand("workbench.action.reloadWindow")', source)
+        self.assertNotIn("function disposeToolPanels()", source)
         self.assertIn("vscode.extensions.onDidChange", source)
         self.assertIn("newestInstalledVersion(context)", source)
         self.assertIn("fs.promises.readdir(extensionParent", source)

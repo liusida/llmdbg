@@ -1,0 +1,107 @@
+"use strict";
+const test = require("node:test"), assert = require("node:assert/strict"), fs = require("fs"), vm = require("vm"), path = require("path");
+test("decoder page has independent controls, safe rendering, and valid embedded JS", () => {
+  const source = fs.readFileSync(path.join(__dirname, "../extension.js"), "utf8");
+  const start = source.indexOf("const LENS_READOUT_CSS =");
+  const end = source.indexOf("function promptTokensHtml(", start);
+  const context = {};
+  vm.runInNewContext(source.slice(start, end), context);
+  const html = context.expressionDecoderHtml({ cspSource: "test-source" });
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1];
+  assert.doesNotThrow(() => new vm.Script(script));
+  assert.match(script, /form\.onsubmit/);
+  assert.match(script, /textContent/);
+  assert.doesNotMatch(script, /innerHTML/);
+  assert.match(html, /<label for="expression">Tensor<\/label>/);
+  assert.doesNotMatch(html.match(/<input id="expression"[^>]*>/)[0], /value=/);
+  assert.doesNotMatch(script, /getState/);
+  assert.match(html, /not causal effects/);
+  assert.doesNotMatch(html, /id="site"|id="layer"/);
+  assert.match(html, /paused line/);
+  assert.match(script, /requestId/);
+  assert.match(html, /<details class="loop"><summary>Loop/);
+  assert.doesNotMatch(html, /<details class="loop"[^>]*open/);
+  assert.match(html, /To \(exclusive\)/);
+  assert.match(script, /loopValue/);
+  assert.match(source, /loop: message.loop/);
+  assert.match(html, /readout-logit \.token-chip/);
+  assert.match(html, /readout-j-lens \.token-chip/);
+  assert.match(script, /readouts\.append\(tokensFor/);
+  assert.equal(source.split('${tokensFor.toString()}').length - 1, 2);
+  assert.match(context.expressionDecoderHtml({ cspSource: "test-source" }, "light"), /body class="light-report"/);
+});
+
+test("Lens head outputs use existing readouts and valid panel script", () => {
+  const source = fs.readFileSync(path.join(__dirname, "../extension.js"), "utf8");
+  const context = {};
+  vm.runInNewContext(source.slice(source.indexOf("const LENS_READOUT_CSS ="), source.indexOf("async function createRuntime(")), context);
+  const html = context.neuronLensHtml({ cspSource: "test-source" });
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1];
+  assert.doesNotThrow(() => new vm.Script(script));
+  assert.match(script, /Attention Head Lens/);
+  assert.doesNotMatch(script, /OV-projected Attention Head Lens/);
+  assert.match(script, /projection into residual space \(OV-projected\)/);
+  function element() { return { style: { setProperty(key,value){this[key]=value} }, classList:{toggle(){return true}}, setAttribute(){}, removeAttribute(){}, children: [], append(...children) { this.children.push(...children); } }; }
+  const renderContext = { document: { createElement: element }, styleCard(){}, renderSnapshot(item,target){target.rendered=item}, tokensFor: (kind, label) => ({ kind, label }) };
+  vm.runInNewContext(script.slice(script.indexOf("function renderHeadCards("), script.indexOf("function updateLensButton(")), renderContext);
+  const card = element();
+  renderContext.renderHeadCards({ heads: [0, 1].map(index => ({ index, channels:[0,1,2].map(offset=>({index:index*64+offset})), vectorNorm: 2, relativeNorm:2, normScale:1, headDimension: 64, residualVocabularyReadouts: [{kind: "logit", label: "Logit Lens", tokens: []}] })) },card);
+  assert.equal(card.children.length, 4);
+  assert.equal(card.children[2].children[0].children[0].textContent, "Head 1");
+  assert.equal(card.children[0].children[1].children[0].label, "Logit Lens");
+  assert.match(source, /\["neurons", "icaComponents", "heads", "channels"\]/);
+  assert.match(script, /orderedViews\.splice\(2,0,headView\)/);
+  assert.match(script, /head.relativeNorm/);
+  assert.equal(card.children[0].className, 'card full-width');
+  assert.equal(card.children[0].children[0].children[0].className, 'neuron-badge');
+  assert.equal(card.children[0].children[0].children[0].style.width, '90px');
+  assert.equal(card.children[0].children[0].children[0].style.whiteSpace, 'nowrap');
+  assert.equal(card.children[0].children[0].children[0].style['--meter-fill'], '20%');
+  assert.equal(card.children[0].children.length, 2);
+  assert.equal(card.children[1].className, 'head-channels');
+  assert.equal(card.children[3].rendered.neurons.length, 3);
+  assert.equal(card.children[3].rendered.neurons[0].index, 64);
+  card.children[0].children[0].children[0].onclick();
+  assert.equal(card.children[1].style.display, 'grid');
+  const missing=element();renderContext.renderHeadCards({heads:[{index:0,vectorNorm:2,headDimension:64,calibrationError:'Missing calibrated head reference (× unavailable)'}]},missing);
+  assert.match(missing.children[0].children[0].children[2].textContent, /unavailable/);
+  assert.doesNotMatch(script, /▸ Channels/);
+  assert.match(script, /DeltaNet Memory Write Lens/);
+  assert.doesNotMatch(script, /selectedViews\.add\(memoryWriteView\[0\]\)/);
+  for(const defaults of source.matchAll(/neuronLensViews = \[([\s\S]*?)\];/g))assert.doesNotMatch(defaults[1],/delta-memory-write/);
+  const write=element();renderContext.renderHeadCards({view:'delta-memory-write',heads:[{index:0,valueHead:0,vectorNorm:2,headDimension:128,calibrationError:null}]},write);
+  assert.match(write.children[0].textContent,/write content only/);
+  assert.equal(write.children[1].children[0].children[0].style['--meter-fill'],'100%');
+  assert.match(write.children[1].children[0].children[1].children[0].textContent,/\|write W_o\| 2.00/);
+  assert.equal(write.children[1].children[0].children.length,2);
+  const value=element();renderContext.renderHeadCards({view:'attention-head-values',heads:[{index:12,valueHead:12,vectorNorm:.4,relativeNorm:3,normScale:.4/3,headDimension:128}]},value);
+  assert.equal(value.children[0].children[0].children[0].style['--meter-fill'],'30%');
+  assert.match(value.children[0].children[0].children[0].title,/value reference median/);
+  const sent=[];renderContext.vscode={postMessage:message=>sent.push(message)};
+  const memory=element();renderContext.renderHeadCards({heads:[{index:12,vectorNorm:1,headDimension:128,
+    memoryTokenContributions:{layer:'model.layers.17.gated_linear_attention',head:12,tokenPosition:281}}]},memory);
+  const button=memory.children[0].children[0].children[2];
+  button.onclick({stopPropagation(){}});
+  assert.equal(sent[0].type,'deltaMemoryContributions');
+  assert.equal(sent[0].head,12);
+  assert.equal(sent[0].tokenPosition,281);
+});
+
+test('nested channels merge the correct per-head lens readouts',()=>{
+  const source=fs.readFileSync(path.join(__dirname,'../extension.js'),'utf8');
+  const context={structuredClone};
+  vm.runInNewContext(source.slice(source.indexOf('  function mergeLensSnapshots('),source.indexOf('  async function refreshNeuronLens(')),context);
+  const snapshot=(key,id)=>({view:'attention-heads',transformerLayer:0,heads:[{index:0,channels:[{index:1,[key]:[{id,text:'token'+id,logit:1}]}]}]});
+  const merged=context.mergeLensSnapshots([{mode:'logit',item:snapshot('logitTokens',11)},{mode:'lens:test',item:snapshot('jLensTokens',22)}],[{id:'test',method:'j',label:'J Lens'}]);
+  const rows=merged.heads[0].channels[0].residualVocabularyReadouts;
+  assert.equal(rows[0].tokens[0].id,11);assert.equal(rows[1].tokens[0].id,22);
+});
+
+test('rendered Lens request order puts values before head outputs regardless of selection order',()=>{
+  const source=fs.readFileSync(path.join(__dirname,'../extension.js'),'utf8');
+  const start=source.indexOf('      const targets = new Map([');
+  const end=source.indexOf('      const items = [];',start);
+  const context={views:['attention-heads','attention-head-values','delta-memory-write'],support:{supported:false}};
+  vm.runInNewContext(source.slice(start,end)+'\nglobalThis.result=allowedViews;',context);
+  assert.deepEqual(Array.from(context.result),['attention-head-values','delta-memory-write','attention-heads']);
+});
