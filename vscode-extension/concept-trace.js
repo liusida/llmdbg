@@ -9,20 +9,22 @@ function conceptTraceHtml(webview) {
 <style>
 *{box-sizing:border-box}body{margin:0;padding:16px;font:13px/1.45 var(--vscode-font-family);color:var(--vscode-foreground);background:var(--vscode-editor-background)}
 h1{font-size:18px;margin:0 0 12px}form,.controls{display:flex;align-items:center;flex-wrap:wrap;gap:8px 14px;margin-bottom:10px}label{display:inline-flex;align-items:center;gap:6px}input,select,button{font:inherit;color:var(--vscode-input-foreground);background:var(--vscode-input-background);border:1px solid var(--vscode-panel-border);padding:5px 8px}input:focus,select:focus,button:focus-visible{outline:1px solid var(--vscode-focusBorder)}button{cursor:pointer}button.primary{background:var(--vscode-button-background);color:var(--vscode-button-foreground)}button:disabled{opacity:.5;cursor:default}#target{width:180px}input[type=number]{width:76px}input[type=range]{width:110px;padding:0;accent-color:#e5b63b}#status,#context,.hint{color:var(--vscode-descriptionForeground)}#status.error{color:var(--vscode-errorForeground)}#context{white-space:pre-wrap;margin:8px 0}.legend{display:flex;flex-wrap:wrap;gap:8px 18px;margin:8px 0;font-size:12px;color:var(--vscode-descriptionForeground)}.positive{color:#e5b63b}.negative{color:#6aa4da}#viewport{position:relative;overflow:auto;height:56vh;min-height:280px;max-height:680px;border:1px solid var(--vscode-panel-border);margin:10px 0;background:var(--vscode-editor-background)}#surface{position:relative;min-width:100%;min-height:100%}canvas{position:sticky;top:0;left:0;display:block;outline:none}canvas:focus-visible{box-shadow:inset 0 0 0 1px var(--vscode-focusBorder)}#hover{white-space:pre-wrap;min-height:36px;color:var(--vscode-descriptionForeground);font-size:12px}#inspector{border:1px solid var(--vscode-panel-border);padding:12px;margin-top:8px}#selection{font-weight:600;white-space:pre-wrap}.readout{display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin:10px 0}.chip{font-family:var(--vscode-editor-font-family);white-space:pre-wrap;padding:3px 7px;border:1px solid rgba(164,111,211,.55);border-radius:3px;background:rgba(55,35,78,.5)}.readout.logit .chip{border-color:rgba(82,148,214,.55);background:rgba(24,54,86,.5)}.readout.r .chip{border-color:rgba(63,164,139,.55);background:rgba(20,64,54,.5)}.readout.jpp .chip{border-color:rgba(222,176,65,.55);background:rgba(76,57,18,.5)}#edgeNote{white-space:pre-wrap;margin:8px 0;font-size:12px;color:var(--vscode-descriptionForeground)}table{border-collapse:collapse;width:100%;font-size:12px}td,th{border-bottom:1px solid var(--vscode-panel-border);padding:4px 7px;text-align:left}td.num{font-variant-numeric:tabular-nums}td button{padding:1px 5px}.hint{font-size:12px}[hidden]{display:none!important}
-#viewport{min-height:100px;max-height:none;overflow-x:auto;overflow-y:hidden}
+#viewport{min-height:100px;max-height:680px;overflow-x:hidden;overflow-y:auto}
 .positive{color:#00ff41}
+#generation{margin:16px 0;border:1px solid var(--vscode-panel-border);border-radius:5px;overflow:hidden;background:var(--vscode-sideBar-background)}#generation h2{font-size:14px;margin:0;padding:9px 12px;border-bottom:1px solid var(--vscode-panel-border)}#generatedText{position:relative;margin:0;padding:12px;max-height:45vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.6 var(--vscode-editor-font-family);background:var(--vscode-editor-background)}.generated-token.selected{background:var(--vscode-editor-selectionBackground,#664f13);outline:2px solid #ffcc33;outline-offset:1px;border-radius:2px}#generatedCaption{padding:7px 12px;color:var(--vscode-descriptionForeground);font-size:12px;white-space:pre-wrap}
 </style></head><body>
 <h1>Concept Trace</h1>
-<form id="form"><label>Target <input id="target" placeholder="Exact token text, e.g.  cat" autocomplete="off" spellcheck="false"></label><label>Lens <select id="lens"></select></label><label id="pieceLabel" hidden>Token <select id="piece"></select></label><button id="run" class="primary" type="submit">Replay</button></form>
-<div class="controls"><label>Start <input id="start" type="number" min="0" value="0"></label><label>Stop <input id="stop" type="number" min="1" placeholder="all"></label><span class="hint">Stop is exclusive · up to 1024 displayed positions</span><label>Brightness threshold <input id="threshold" type="range" min="0" max="0.95" step="0.01" value="0.05"><output id="thresholdValue">0.05</output></label><label>Zoom <input id="zoom" type="range" min="2" max="40" step="2" value="22"></label></div>
+<form id="form"><label>Target <input id="target" placeholder="Exact token text, e.g.  cat" autocomplete="off" spellcheck="false"></label><label>Lens <select id="lens"></select></label><label id="pieceLabel" hidden>Token <select id="piece"></select></label><button id="run" class="primary" type="submit">Replay</button><button id="regenerate" type="button" title="Bypass saved generation and activations for a fresh replay">Regenerate</button></form>
+<div class="controls"><label>Start <input id="start" type="number" min="0" value="0"></label><label>Stop <input id="stop" type="number" min="1" placeholder="all"></label><span class="hint">Stop is exclusive · up to 5000 displayed positions</span><label>Brightness threshold <input id="threshold" type="range" min="0" max="0.95" step="0.01" value="0.05"><output id="thresholdValue">0.05</output></label><label>Zoom <input id="zoom" type="range" min="4" max="24" step="1" value="12"><output id="zoomValue">12px</output></label></div>
 <div id="candidates" hidden aria-label="Candidate vocabulary tokens" style="display:flex;flex-wrap:wrap;gap:5px;margin:8px 0"></div>
-<div id="status">Start and pause a model session to prepare a snapshot.</div><div id="context"></div><details id="generation" hidden><summary>Generated continuation</summary><pre id="generatedText"></pre></details>
+<div id="status">Start and pause a model session to prepare a snapshot.</div><div id="context"></div>
 <div class="controls"><label>Full-brightness cosine ± <input id="colorScale" type="range" min="0.01" max="1" step="0.01" value="1"><output id="colorScaleValue">1.00</output></label><span class="hint">Set 0.2 to saturate colors at |cosine| ≥ 0.2. Applies to all points; no replay needed.</span></div>
 <div class="legend"><span class="positive">● Positive cosine</span><span class="negative">● Negative cosine</span><span>○ Missing fitted map</span><span id="scaleLegend">Shared scale: −1 … 0 … +1 · not probabilities</span></div>
-<div class="hint">Embedding at top; token positions run left to right. Click a layer label to expand Value/Output heads. Click a point to inspect it. Arrow keys move the selected point.</div>
+<div class="hint">Embedding at top; token positions run left to right and wrap into stacked bands to fit the panel. Click a layer label to expand Value/Output heads. Click a point to inspect it. Arrow keys move the selected point.</div>
 <div id="viewport"><div id="surface"><canvas id="lattice" tabindex="0" role="img" aria-label="Concept Trace lattice. No snapshot yet."></canvas></div></div><div id="hover"></div>
 <section id="inspector" hidden><div id="selection"></div><div id="readout" class="readout"></div><button id="edges" type="button" disabled>Trace target contributions</button><label>Show edges <select id="edgeCount"><option value="12">Top 12</option><option value="30">Top 30</option><option value="10000">All</option></select></label><div id="edgeNote"></div><table id="edgeTable" hidden><thead><tr><th>Source / write position</th><th>Token</th><th>Signed target support</th><th>Projected magnitude</th></tr></thead><tbody></tbody></table></section>
 <figure id="patchPreview" hidden style="margin:16px 0"><div style="position:relative;display:inline-block;max-width:100%"><img id="patchImage" alt="Selected image token location" style="display:block;max-width:100%;max-height:65vh"><span id="patchRegion" style="position:absolute;border:2px solid #ffcc33;background:rgba(255,204,51,.22);pointer-events:none"></span></div><figcaption id="patchCaption"></figcaption></figure>
+<section id="generation" hidden aria-label="Generated text and selected token"><h2>Generated continuation</h2><pre id="generatedText"></pre><div id="generatedCaption">Click a generated-token point to locate it in the text.</div></section>
 <p class="hint">This is a saved replay snapshot. Lens alignment is not proof of semantic content or causal use. Edges are computed only on request; gates, queries and normalization statistics are held fixed. Image-token positions are spatial anchors, not exclusive pixel origins.</p>
 <script nonce="${nonce}">(${browserMain.toString()})();</script></body></html>`;
 }
@@ -32,9 +34,46 @@ function browserMain() {
   const $ = id => document.getElementById(id);
   const canvas=$('lattice'), viewport=$('viewport'), surface=$('surface'), ctx=canvas.getContext('2d');
   let snapshot=null, expanded=null, headRows=new Map(), displayed=[], selected=null, edgeData=null;
-  let requestId=0, pending=new Map(), inspectionVersion=0, encodedTarget=null, busy=false, ended=false;
+  let requestId=0, pending=new Map(), inspectionVersion=0, encodedTarget=null, busy=false, ended=false, regenerateNext=false;
   const labelWidth=150, headerHeight=36;
   let candidate=null,candidateTimer,candidateVersion=0;
+  let generatedSpans=new Map(),selectedTextToken=null;
+  function renderGenerated(){
+    generatedSpans.clear();selectedTextToken=null;$('generatedText').replaceChildren();
+    const tokens=Array.isArray(snapshot.generatedTokens)?snapshot.generatedTokens:Number.isInteger(snapshot.promptTokenCount)?snapshot.tokens.slice(Math.max(0,snapshot.promptTokenCount-snapshot.start)):[];
+    const first=Number.isInteger(snapshot.generatedTokenStart)?snapshot.generatedTokenStart:Math.max(snapshot.promptTokenCount,snapshot.start);
+    $('generation').hidden=!tokens.length;
+    $('generatedCaption').textContent='Generated tokens '+first+'–'+(first+tokens.length-1)+' · Click text to focus its previous-token prediction state; click a dot to locate its token.';
+    for(let index=0;index<tokens.length;index++){
+      const position=first+index,token=document.createElement('span');token.className='generated-token';
+      token.textContent=tokens[index];token.title='Token '+position+' · '+JSON.stringify(tokens[index]);
+      token.setAttribute('data-token-position',String(position));
+      token.style.cursor='pointer';token.tabIndex=0;token.setAttribute('role','button');
+      token.title+=' · Show previous token’s final-layer prediction state';
+      token.onclick=()=>focusPrediction(position);
+      token.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();focusPrediction(position);}};
+      generatedSpans.set(position,token);$('generatedText').append(token);
+    }
+  }
+  function focusPrediction(position){
+    if(busy||ended||!snapshot)return;
+    const column=position-1-snapshot.start;
+    const row=displayed.filter(row=>row.id.startsWith('post:')).sort((a,b)=>b.layer-a.layer)[0];
+    if(column<0||column>=snapshot.tokens.length||!row){status('Prediction state for token '+position+' is outside this snapshot. Include token '+(position-1)+' in the replay range.',true);return;}
+    const r=displayed.findIndex(item=>item.id===row.id),p=pitch();
+    viewport.scrollLeft=0;
+    viewport.scrollTop=Math.max(0,Math.floor(column/columnsPerBand())*bandHeight()+headerHeight+(r+.5)*p-viewport.clientHeight/2);
+    void select({row,column,predictionPosition:position});
+  }
+  function highlightGenerated(position){
+    if(selectedTextToken){selectedTextToken.className='generated-token';selectedTextToken.removeAttribute('aria-current');}
+    selectedTextToken=generatedSpans.get(position)||null;
+    if(!selectedTextToken){$('generatedCaption').textContent='Click a generated-token dot to locate it in the text.';return;}
+    selectedTextToken.className='generated-token selected';selectedTextToken.setAttribute('aria-current','true');
+    $('generatedCaption').textContent='Token '+position+' · '+JSON.stringify(selectedTextToken.textContent);
+    const box=$('generatedText'),top=selectedTextToken.offsetTop,bottom=top+selectedTextToken.offsetHeight;
+    if(top<box.scrollTop||bottom>box.scrollTop+box.clientHeight)box.scrollTop=Math.max(0,top-box.clientHeight/2);
+  }
   $('target').oninput=()=>{
     candidate=null;encodedTarget=null;$('pieceLabel').hidden=true;
     const version=++candidateVersion,text=$('target').value;
@@ -57,13 +96,16 @@ function browserMain() {
     },180);
   };
   function status(text,error=false){$('status').textContent=text;$('status').className=error?'error':'';}
-  function setBusy(value){busy=value;$('run').disabled=value||ended;}
+  function setBusy(value){busy=value;$('run').disabled=value||ended;$('regenerate').disabled=value||ended;}
   function request(action,args={}){
     const id=++requestId;
     return new Promise((resolve,reject)=>{pending.set(id,{resolve,reject});vscode.postMessage({type:'conceptTrace',action,...args,requestId:id});});
   }
   function snapshotArgs(){return {snapshotId:snapshot.snapshotId};}
   function pitch(){return Number($('zoom').value);}
+  function columnsPerBand(){return Math.max(1,Math.floor((viewport.clientWidth-labelWidth-12)/pitch()));}
+  function bandHeight(){return headerHeight+displayed.length*pitch()+18;}
+  function bandCount(){return snapshot?Math.ceil(snapshot.tokens.length/columnsPerBand()):1;}
   function rows(){
     displayed=[];
     if(!snapshot)return;
@@ -73,22 +115,23 @@ function browserMain() {
     }
   }
   function layout(){
-    if(snapshot)viewport.style.height=Math.max(100,headerHeight+displayed.length*pitch()+14)+'px';
+    if(snapshot)viewport.style.height=Math.min(680,Math.max(100,bandCount()*bandHeight()+2))+'px';
     // Clear the old canvas footprint before measuring: a newly visible vertical
     // scrollbar must not leave a viewport-wide canvas overflowing horizontally.
     canvas.style.width='0px';canvas.style.height='0px';
-    surface.style.width=snapshot?(labelWidth+snapshot.tokens.length*pitch()+12)+'px':'100%';
-    surface.style.height=(headerHeight+displayed.length*pitch()+12)+'px';
+    surface.style.width='100%';
+    surface.style.height=(bandCount()*bandHeight())+'px';
     if(snapshot){
       const chrome=Math.max(2,(viewport.offsetHeight-viewport.clientHeight)||2);
-      viewport.style.height=Math.max(100,headerHeight+displayed.length*pitch()+12+chrome)+'px';
+      viewport.style.height=Math.min(680,Math.max(100,bandCount()*bandHeight()+chrome))+'px';
     }
+    surface.style.height=(bandCount()*bandHeight())+'px';viewport.scrollLeft=0;
     const width=viewport.clientWidth,height=viewport.clientHeight,dpr=window.devicePixelRatio||1;
     canvas.style.width=width+'px';canvas.style.height=height+'px';canvas.width=Math.round(width*dpr);canvas.height=Math.round(height*dpr);
     ctx.setTransform(dpr,0,0,dpr,0,0);
     draw();
   }
-  function cell(rowIndex,column){return {x:labelWidth+(column+.5)*pitch()-viewport.scrollLeft,y:headerHeight+(rowIndex+.5)*pitch()-viewport.scrollTop};}
+  function cell(rowIndex,column){const n=columnsPerBand();return {x:labelWidth+(column%n+.5)*pitch(),y:Math.floor(column/n)*bandHeight()+headerHeight+(rowIndex+.5)*pitch()-viewport.scrollTop};}
   function draw(){
     const width=viewport.clientWidth,height=viewport.clientHeight,p=pitch();
     const css=getComputedStyle(document.body),bg=css.getPropertyValue('--vscode-editor-background').trim()||'#1e1e1e',fg=css.getPropertyValue('--vscode-foreground').trim()||'#ccc';
@@ -96,16 +139,12 @@ function browserMain() {
     if(!snapshot)return;
     ctx.font='11px sans-serif';
     const threshold=Number($('threshold').value);
-    ctx.save();ctx.beginPath();ctx.rect(labelWidth,headerHeight,width-labelWidth,height-headerHeight);ctx.clip();
-    if(Number.isInteger(snapshot.promptTokenCount)&&snapshot.stop>snapshot.promptTokenCount){
-      const boundary=labelWidth+(snapshot.promptTokenCount-snapshot.start)*p-viewport.scrollLeft;
-      ctx.strokeStyle='rgba(128,128,128,.6)';ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(boundary,headerHeight);ctx.lineTo(boundary,height);ctx.stroke();ctx.setLineDash([]);
-    }
-    for(let r=Math.max(0,Math.floor(viewport.scrollTop/p)-1);r<displayed.length;r++){
-      const row=displayed[r],y=cell(r,0).y;if(y>height)break;
-      if(row.layer===expanded){ctx.fillStyle='rgba(128,128,128,.045)';ctx.fillRect(labelWidth,y-p/2,width-labelWidth,p);}
-      for(let c=Math.max(0,Math.floor(viewport.scrollLeft/p)-1);c<snapshot.tokens.length;c++){
-        const point=cell(r,c);if(point.x>width)break;
+    ctx.save();ctx.beginPath();ctx.rect(labelWidth,0,width-labelWidth,height);ctx.clip();
+    const n=columnsPerBand(),firstBand=Math.max(0,Math.floor(viewport.scrollTop/bandHeight())),lastBand=Math.min(bandCount()-1,Math.floor((viewport.scrollTop+height)/bandHeight()));
+    for(let r=0;r<displayed.length;r++){
+      const row=displayed[r];
+      for(let c=firstBand*n;c<Math.min(snapshot.tokens.length,(lastBand+1)*n);c++){
+        const point=cell(r,c);if(point.y<0||point.y>height)continue;
         const value=row.scores[c];ctx.beginPath();ctx.arc(point.x,point.y,Math.min(p*.4,Math.max(2,p*.16)),0,Math.PI*2);
         if(value===null){ctx.strokeStyle='rgba(130,130,130,.5)';ctx.stroke();}
         else{
@@ -132,35 +171,52 @@ function browserMain() {
     }
     if(selected){const r=displayed.findIndex(row=>row.id===selected.row.id);if(r>=0){const point=cell(r,selected.column);ctx.strokeStyle=fg;ctx.lineWidth=2;ctx.strokeRect(point.x-p*.35,point.y-p*.35,p*.7,p*.7);ctx.lineWidth=1;}}
     ctx.restore();
-    ctx.fillStyle=bg;ctx.fillRect(0,0,labelWidth,height);ctx.fillRect(0,0,width,headerHeight);
-    ctx.fillStyle=fg;ctx.font='11px sans-serif';ctx.fillText('Layer / token position →',8,18);
-    if(Number.isInteger(snapshot.promptTokenCount)&&snapshot.stop>snapshot.promptTokenCount){
-      const boundary=labelWidth+(snapshot.promptTokenCount-snapshot.start)*p-viewport.scrollLeft;
-      if(boundary<width)ctx.fillText('Generated',Math.max(labelWidth+4,boundary+4),12);
+    ctx.fillStyle=bg;ctx.fillRect(0,0,labelWidth,height);
+    for(let band=firstBand;band<=lastBand;band++){
+    const top=band*bandHeight()-viewport.scrollTop;
+    ctx.fillStyle=bg;ctx.fillRect(0,top,width,headerHeight);
+    ctx.fillStyle=fg;ctx.font='11px sans-serif';ctx.fillText('Layer / token position →',8,top+18);
+    const begin=band*n,end=Math.min(snapshot.tokens.length,begin+n);
+    if(Number.isInteger(snapshot.promptTokenCount)&&snapshot.start+end>snapshot.promptTokenCount){
+      const boundary=labelWidth+Math.max(0,snapshot.promptTokenCount-snapshot.start-begin)*p;
+      ctx.fillText('Generated',boundary+4,top+12);
     }
     const rowFont=Math.min(11,p*.8);
     ctx.font=rowFont+'px sans-serif';
     for(let r=0;r<displayed.length;r++){
-      const y=cell(r,0).y;if(y<headerHeight||y>height)continue;
+      const y=cell(r,begin).y;if(y<0||y>height)continue;
       const row=displayed[r];ctx.fillStyle=fg;ctx.fillText((row.id.startsWith('post:')?(expanded===row.layer?'− ':'+ '):'')+row.label,8,y+rowFont*.35,labelWidth-16);
     }
     ctx.font='11px sans-serif';
-    const step=p<20?10:5;
-    for(let c=0;c<snapshot.tokens.length;c++){
+    const labelWidthPx=ctx.measureText(String(snapshot.stop-1))?.width||String(snapshot.stop-1).length*7;
+    const minimumStep=Math.ceil((labelWidthPx+16)/p);
+    const power=10**Math.floor(Math.log10(Math.max(1,minimumStep)));
+    const step=[1,2,5,10].map(value=>value*power).find(value=>value>=minimumStep);
+    let previousRight=-Infinity;
+    for(let c=begin;c<end;c++){
       const x=cell(0,c).x;if(x<labelWidth||x>width)continue;
-      if((snapshot.start+c)%step===0){ctx.fillStyle=fg;ctx.fillText(String(snapshot.start+c),x-7,28);}
+      if(c===begin||(snapshot.start+c)%step===0){
+        const text=String(snapshot.start+c),textWidth=ctx.measureText(text)?.width||text.length*7;
+        const left=Math.max(labelWidth,x-textWidth/2);
+        if(left<previousRight+12||left+textWidth>width-4)continue;
+        ctx.fillStyle=fg;ctx.fillText(text,left,top+28);previousRight=left+textWidth;
+      }
+    }
     }
     canvas.setAttribute('aria-label','Concept Trace for '+JSON.stringify(snapshot.target)+', '+snapshot.lensLabel+', '+displayed.length+' rows, positions '+snapshot.start+' to '+(snapshot.stop-1)+'.');
   }
   function hit(event){
     const rect=canvas.getBoundingClientRect(),x=event.clientX-rect.left,y=event.clientY-rect.top;
-    if(y<headerHeight)return null;
-    const r=Math.floor((y+viewport.scrollTop-headerHeight)/pitch());
-    const c=Math.floor((x+viewport.scrollLeft-labelWidth)/pitch());
+    const absoluteY=y+viewport.scrollTop,band=Math.floor(absoluteY/bandHeight()),localY=absoluteY-band*bandHeight();
+    if(localY<headerHeight)return null;
+    const r=Math.floor((localY-headerHeight)/pitch());
+    const localColumn=Math.floor((x-labelWidth)/pitch());
+    if(x>=labelWidth&&(localColumn<0||localColumn>=columnsPerBand()))return null;
+    const c=band*columnsPerBand()+localColumn;
     if(r<0||r>=displayed.length)return null;
     return {row:displayed[r],column:c,label:x<labelWidth};
   }
-  function describe(point){const score=point.row.scores[point.column];return point.row.label+' · token '+(snapshot.start+point.column)+' '+JSON.stringify(snapshot.tokens[point.column])+' · '+(score===null?'Missing fitted lens map':'cosine '+score.toFixed(4));}
+  function describe(point){const score=point.row.scores[point.column];return point.row.label+' · token '+(snapshot.start+point.column)+' '+JSON.stringify(snapshot.tokens[point.column])+(Number.isInteger(point.predictionPosition)?' · predicts token '+point.predictionPosition+' '+JSON.stringify(generatedSpans.get(point.predictionPosition)?.textContent||''):'')+' · '+(score===null?'Missing fitted lens map':'cosine '+score.toFixed(4));}
   async function expand(layer){
     if(busy)return;
     const snapshotId=snapshot.snapshotId;
@@ -176,6 +232,8 @@ function browserMain() {
     if(!snapshot||point.column<0||point.column>=snapshot.tokens.length)return;
     const version=++inspectionVersion;selected=point;edgeData=null;draw();
     const position=snapshot.start+point.column;
+    highlightGenerated(point.predictionPosition??position);
+    if(Number.isInteger(point.predictionPosition))$('generatedCaption').textContent+=' · Predicted from token '+position+' · '+point.row.label;
     const image=(snapshot.images||[]).find(image=>Number.isInteger(image.startToken)&&position>=image.startToken&&position<=image.endToken);
     $('patchPreview').hidden=!image;
     if(image){
@@ -220,6 +278,7 @@ function browserMain() {
   };
   $('form').onsubmit=async event=>{
     event.preventDefault();if(busy)return;
+    const regenerate=regenerateNext;regenerateNext=false;
     const target=$('target').value;if(!target){status('Enter a target token. Leading spaces are significant.',true);return;}
     setBusy(true);
     try{
@@ -229,14 +288,16 @@ function browserMain() {
         $('pieceLabel').hidden=false;encodedTarget=target;status('The text splits into multiple tokens. Choose one token, then Replay.');return;
       }
       $('pieceLabel').hidden=pieces.tokens.length===1;
-      status('Replaying the prompt into an independent cache and scoring the target direction…');
-      const result=await request('run',{target,mode:$('lens').value,tokenId:pieces.tokens.length===1?pieces.tokens[0].id:Number($('piece').value),start:Number($('start').value||0),...($('stop').value?{stop:Number($('stop').value)}:{})});
+      status(regenerate?'Generating a fresh continuation and capturing activations…':'Checking cached generation/activations and scoring the target direction…');
+      const result=await request('run',{target,mode:$('lens').value,tokenId:pieces.tokens.length===1?pieces.tokens[0].id:Number($('piece').value),start:Number($('start').value||0),...($('stop').value?{stop:Number($('stop').value)}:{}),...(regenerate?{regenerate:true}:{})});
       snapshot=result;expanded=null;headRows.clear();selected=null;edgeData=null;inspectionVersion++;$('inspector').hidden=true;
       rows();layout();$('context').textContent='Saved snapshot · '+result.model+' · target '+JSON.stringify(result.target)+' (#'+result.targetId+') · '+result.lensLabel+' · positions '+result.start+'–'+(result.stop-1)+'\n'+result.metric+(Number.isInteger(result.maxNewTokens)?'\nPrompt '+result.promptTokenCount+' tokens · generated '+result.generatedTokenCount+' / max_new_tokens='+result.maxNewTokens+(result.stoppedAtEos?' · stopped at EOS':'')+' · private greedy replay':'');
-      $('generation').hidden=!result.generatedText;$('generatedText').textContent=result.generatedText||'';
+      renderGenerated();$('patchPreview').hidden=true;
+      $('context').textContent+='\n'+(result.activationsReused?'Reused activations · no generation or model replay':result.generationCache==='disk'?'Disk cache: reused '+result.reusedGeneratedTokens+' generated token IDs · activations recaptured':result.persistentCacheEnabled?'Local generation cache enabled':'Persistent cache unavailable for unpinned checkpoints, interventions, or conflicting live continuations');
       status(result.warning);
     }catch(error){status(error.message,true);}finally{setBusy(false);}
   };
+  $('regenerate').onclick=()=>{if(busy||ended)return;regenerateNext=true;void $('form').onsubmit({preventDefault(){}});};
   canvas.onmousemove=event=>{const point=hit(event);$('hover').textContent=point&&!point.label&&point.column>=0&&snapshot&&point.column<snapshot.tokens.length?describe(point):'';};
   canvas.onclick=event=>{const point=hit(event);if(busy||ended||!point||!snapshot)return;if(point.label){if(point.row.id.startsWith('post:'))void expand(point.row.layer);return;}void select(point);};
   canvas.onkeydown=event=>{
@@ -245,15 +306,13 @@ function browserMain() {
     if(event.key==='ArrowLeft')c--;if(event.key==='ArrowRight')c++;if(event.key==='ArrowUp')r--;if(event.key==='ArrowDown')r++;
     r=Math.max(0,Math.min(displayed.length-1,r));c=Math.max(0,Math.min(snapshot.tokens.length-1,c));
     const point=cell(r,c);
-    if(point.x<labelWidth+10)viewport.scrollLeft=Math.max(0,viewport.scrollLeft+point.x-labelWidth-10);
-    if(point.x>viewport.clientWidth-10)viewport.scrollLeft+=point.x-viewport.clientWidth+10;
-    if(point.y<headerHeight+10)viewport.scrollTop=Math.max(0,viewport.scrollTop+point.y-headerHeight-10);
+    if(point.y<10)viewport.scrollTop=Math.max(0,viewport.scrollTop+point.y-10);
     if(point.y>viewport.clientHeight-10)viewport.scrollTop+=point.y-viewport.clientHeight+10;
     void select({row:displayed[r],column:c});
   };
   $('threshold').oninput=()=>{$('thresholdValue').textContent=Number($('threshold').value).toFixed(2);draw();};
   $('colorScale').oninput=()=>{const scale=Number($('colorScale').value);if(!Number.isFinite(scale)||scale<=0||scale>1)return;$('colorScaleValue').textContent=scale.toFixed(2);$('scaleLegend').textContent='Shared scale: −'+scale+' … 0 … +'+scale+' · saturated beyond endpoints · not probabilities';draw();};
-  $('zoom').oninput=layout;$('edgeCount').onchange=draw;viewport.onscroll=draw;
+  $('zoom').oninput=()=>{$('zoomValue').textContent=pitch()+'px';layout();};$('edgeCount').onchange=draw;viewport.onscroll=draw;
   window.addEventListener('resize',layout);
   window.addEventListener('message',event=>{
     const data=event.data;

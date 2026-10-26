@@ -510,6 +510,7 @@ class LLMDebugAdapter:
                     add_generation_prompt=bool(
                         arguments.get("addGenerationPrompt", True)
                     ),
+                    enable_thinking=bool(arguments.get('enableThinking', False)),
                     device=str(arguments.get("device", "auto")),
                     dtype=str(arguments.get("dtype", "auto")),
                     progress=lambda output: self.send_event(

@@ -193,6 +193,28 @@ class ModelRuntimeCacheTest(unittest.TestCase):
         self.assertEqual(execution.input_ids.tolist(), [[10, 11, 12]])
         self.assertEqual(execution.tokens, ("a", "b", "token-12"))
 
+    def test_append_embedded_tokens_with_implicit_and_explicit_positions(self) -> None:
+        import torch
+        from types import SimpleNamespace
+        embedding = torch.nn.Embedding(32, 4)
+        for positions in (None, torch.tensor([[5,6]]), torch.tensor([[[5,6]],[[7,8]],[[9,10]]])):
+            original = positions.clone() if positions is not None else None
+            execution = model_runtime.ModelExecution(
+                runtime=SimpleNamespace(text_model=SimpleNamespace(get_input_embeddings=lambda:embedding),
+                                        tokenizer=SimpleNamespace(decode=lambda ids:str(ids[0]))),
+                input_ids=torch.tensor([[10,11]]), tokens=('a','b'),device='cpu',progress=lambda _:None,
+                inputs_embeds=embedding(torch.tensor([[10,11]])).detach(),position_ids=positions)
+            execution.append_generated_token(12)
+            execution.append_generated_token(13)
+            self.assertEqual(execution.input_ids.tolist(),[[10,11,12,13]])
+            self.assertEqual(execution.inputs_embeds.shape,(1,4,4))
+            torch.testing.assert_close(execution.inputs_embeds[:,2:],embedding(torch.tensor([[12,13]])))
+            if original is None:
+                self.assertIsNone(execution.position_ids)
+            else:
+                torch.testing.assert_close(execution.position_ids,
+                    torch.cat((original,original[...,-1:]+1,original[...,-1:]+2),dim=-1))
+
     def test_auto_device_prefers_cuda_and_selects_supported_dtype(self) -> None:
         import torch
 

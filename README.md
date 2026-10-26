@@ -495,6 +495,29 @@ selected token from its KV-cache prefix, and refreshes all downstream values.
 Rank-based `top_neurons[0]` may identify a different neuron after mutation;
 use `mlp_expansion[neuron_id]` when targeting a fixed neuron.
 
+## Concept Trace cache
+
+Concept Trace stores generated token IDs (including thinking and special tokens)
+in private JSON files under `$XDG_CACHE_HOME/llmdbg/generations`, defaulting to
+`~/.cache/llmdbg/generations`. `LLMDBG_GENERATION_CACHE_DIR` overrides the location.
+These files survive debug sessions and VS Code restarts. They contain generated
+content in token-ID form; treat them as sensitive data. Writes are atomic with
+owner-only file permissions. Invalid or unreadable entries are ignored.
+
+The key hashes the checkpoint revision, tokenizer/template, actual prompt IDs,
+image-derived inputs, precision, runtime versions, and greedy generation policy.
+It does not hash the pseudo-code file: comments, local names and stepping-only
+edits do not invalidate generated text. Targets and vocabulary lenses are also
+excluded. Larger generation budgets can extend a matching cached continuation.
+Unpinned checkpoints and intervention runs do not use the persistent cache.
+
+Across sessions, cached IDs need only a batched activation capture. Within a
+session, one matching token-range capture is retained in memory; changing the
+target or lens recomputes scores without generation or model replay. Activations
+and KV caches are not persisted to disk. **Regenerate** bypasses both caches and
+starts a fresh continuation from the authored prompt (unless interventions pin
+the live history). The panel reports which cache was reused.
+
 ## License
 
 MIT

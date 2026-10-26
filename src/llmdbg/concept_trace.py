@@ -119,8 +119,8 @@ class Snapshot:
         if not 0 <= self.start < self.stop <= limit:
             raise ValueError(f'Token range must satisfy 0 ≤ start < stop ≤ {limit}: '
                              f'{self.prompt_count} prompt tokens + max_new_tokens={self.max_new_tokens} (stop is exclusive).')
-        if self.stop - self.start > 1024:
-            raise ValueError('Display at most 1024 token positions per snapshot; narrow the range.')
+        if self.stop - self.start > 5000:
+            raise ValueError('Display at most 5000 token positions per snapshot; narrow the range.')
         self.eos_stopped = False
         self.newly_generated = 0
         self.model = str(adapter.model_name)
@@ -133,10 +133,45 @@ class Snapshot:
             vector_patches=dict(self.execution.vector_patches), ica_observations={})
         self.intervened = bool(self.replay.interventions or self.replay.ica_interventions or self.replay.vector_patches)
         self.current_token = adapter.token_index
+        from llmdbg import generation_cache
+        self.generation_key, self.persistent_cache, self.cache_metadata = generation_cache.identity(adapter,self.prompt_count)
+        self.regenerate = bool(args.get('regenerate',False))
+        if self.regenerate and not self.intervened:
+            # A fresh generation starts at the authored prompt, not after a
+            # continuation already generated in the live debugger.
+            self.replay.input_ids = self.replay.input_ids[:,:self.prompt_count].clone()
+            self.replay.tokens = self.replay.tokens[:self.prompt_count]
+            for name in ('inputs_embeds','visual_pos_masks','per_layer_inputs'):
+                value = getattr(self.replay,name)
+                if value is not None: setattr(self.replay,name,value[:,:self.prompt_count].clone())
+            if self.replay.position_ids is not None:
+                self.replay.position_ids = self.replay.position_ids[...,:self.prompt_count].clone()
+        self.reused_generated = 0
+        self.generation_cache_source = 'none'
+        self.activations_reused = False
+        requested_stop = self.stop
+        activation_key = (id(self.execution),self.generation_key,self.start,requested_stop,
+                          generation_cache.fingerprint(self.execution.input_ids))
+        previous = getattr(adapter,'_concept_trace_capture_cache',None)
         with _runtime_lock, torch.inference_mode(), activate(self.selected['id'] if self.selected else None):
-            self._complete_tokens()
-            self.tokens = tuple(self.replay.tokens[:self.stop])
-            self._capture()
+            if not self.regenerate and previous and previous[0] == activation_key:
+                data = previous[1]
+                self.vectors,self.mixed,self.values = data['vectors'],data['mixed'],data['values']
+                self.replay,self.tokens,self.stop = data['replay'],data['tokens'],data['stop']
+                self.eos_stopped = data['eos']
+                self.activations_reused = True
+                self.generation_cache_source = 'memory'
+                self.reused_generated = max(0,self.stop-max(self.prompt_count,self.execution.token_count))
+                self._score_rows()
+            else:
+                self._complete_tokens()
+                self.tokens = tuple(self.replay.tokens[:self.stop])
+                self._capture()
+                # A single entry bounds retained activation memory. Scores/maps
+                # belong to the new target/lens, not to the shared raw captures.
+                adapter._concept_trace_capture_cache = (activation_key,{
+                    'vectors':self.vectors,'mixed':self.mixed,'values':self.values,
+                    'replay':self.replay,'tokens':self.tokens,'stop':self.stop,'eos':self.eos_stopped})
         self.replay.past_key_values = None  # Retain scores/vectors, not another model cache.
 
     def _next_token(self, hidden):
@@ -154,6 +189,27 @@ class Snapshot:
         import torch
         if self.stop <= self.replay.token_count:
             return
+        from llmdbg import generation_cache
+        if self.persistent_cache and not self.regenerate:
+            entry = generation_cache.load(self.generation_key,self.cache_metadata['vocabulary_size'])
+            prefix = self.replay.input_ids[0,self.prompt_count:].tolist()
+            if entry and entry['ids'][:len(prefix)] != prefix:
+                # Do not overwrite the canonical entry with a conflicting live
+                # continuation. The user can explicitly Regenerate instead.
+                self.persistent_cache = False
+            if entry and entry['ids'][:len(prefix)] == prefix:
+                remaining = entry['ids'][len(prefix):max(0,self.stop-self.prompt_count)]
+                for token_id in remaining:
+                    self.replay.append_generated_token(token_id)
+                self.reused_generated = len(remaining)
+                self.generation_cache_source = 'disk'
+                if entry['eos'] and self.replay.token_count >= self.prompt_count+len(entry['ids']):
+                    self.eos_stopped = True
+                    self.stop = min(self.stop,self.replay.token_count)
+                if self.start >= self.stop:
+                    raise ValueError('Cached generation reached EOS before the selected token range. Choose an earlier start position.')
+                if self.eos_stopped or self.replay.token_count >= self.stop:
+                    return
         runtime = self.execution.runtime
         eos = getattr(runtime.tokenizer, 'eos_token_id', None)
         if eos is None:
@@ -184,6 +240,9 @@ class Snapshot:
                     else:
                         self.replay._prefill(self.replay.token_count)
             self.stop = min(self.stop, self.replay.token_count)
+            if self.persistent_cache:
+                generation_cache.save(self.generation_key,self.replay.input_ids[0,self.prompt_count:].tolist(),
+                                      self.eos_stopped,self.cache_metadata,force=self.regenerate)
             if self.start >= self.stop:
                 raise ValueError('Generation reached EOS before the selected token range. Choose an earlier start position.')
         finally:
@@ -288,6 +347,10 @@ class Snapshot:
                 with self.capture_heads(): self.replay._prefill(self.stop)
             finally:
                 for handle in handles: handle.remove()
+        self._score_rows()
+
+    def _score_rows(self):
+        runtime = self.execution.runtime
         for index in range(-1, len(runtime.layers)):
             key = 'embed' if index == -1 else f'post:{index}'
             if key not in self.vectors or len(self.vectors[key]) != self.stop - self.start:
@@ -306,6 +369,12 @@ class Snapshot:
                 'generatedTokenCount': max(0, self.stop-self.prompt_count),
                 'newlyGeneratedTokens': self.newly_generated, 'stoppedAtEos': self.eos_stopped,
                 'generatedText': ''.join(self.tokens[self.prompt_count:]),
+                'generatedTokenStart': self.prompt_count,
+                'generatedTokens': list(self.tokens[self.prompt_count:self.stop]),
+                'generationCache': self.generation_cache_source,
+                'reusedGeneratedTokens': self.reused_generated,
+                'activationsReused': self.activations_reused,
+                'persistentCacheEnabled': self.persistent_cache,
                 'metric': 'cosine(FinalNorm(lens(vector)), target unembedding)',
                 'warning': 'Lens readout, not probability or causal evidence. Embedding means the input to layer 0, including model-specific position/scaling operations.'}
 

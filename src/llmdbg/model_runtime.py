@@ -405,8 +405,11 @@ class ModelExecution:
                 token.to(self.device)
             )
             self.inputs_embeds = torch.cat((self.inputs_embeds, embedding), dim=1)
-            next_position = self.position_ids[..., -1:] + 1
-            self.position_ids = torch.cat((self.position_ids, next_position), dim=-1)
+            # Text-only inputs may use embeddings while leaving positions to
+            # the model's cache-based inference. Only extend explicit positions.
+            if self.position_ids is not None:
+                next_position = self.position_ids[..., -1:] + 1
+                self.position_ids = torch.cat((self.position_ids, next_position), dim=-1)
             if self.per_layer_inputs is not None:
                 per_layer = self.runtime.text_model.get_per_layer_inputs(token.to(self.device), None)
                 self.per_layer_inputs = torch.cat((self.per_layer_inputs, per_layer), dim=1)
@@ -1453,6 +1456,7 @@ def prepare_model_execution(
     prompt: str | None = None,
     messages: list[dict[str, Any]] | None = None,
     add_generation_prompt: bool = True,
+    enable_thinking: bool = False,
     device: str = "auto",
     dtype: str = "auto",
     progress: Callable[[str], None] | None = None,
@@ -1504,16 +1508,19 @@ def prepare_model_execution(
         image_grids = ()
         image_merge_size = 1
         visual_inputs = {}
+        template_kwargs = {'enable_thinking': True} if enable_thinking else {}
         if messages and runtime.is_multimodal:
             multimodal_messages = _normalize_multimodal_messages(messages)
             rendered_prompt = runtime.processor.apply_chat_template(
                 multimodal_messages,
                 add_generation_prompt=add_generation_prompt,
                 tokenize=False,
+                **template_kwargs,
             )
             processed = runtime.processor.apply_chat_template(
                 multimodal_messages,
                 add_generation_prompt=add_generation_prompt, tokenize=True,
+                **template_kwargs,
                 return_dict=True, return_tensors="pt",
                 # Keep interactive debugging practical: Qwen otherwise preserves
                 # enough pixels from a large photograph to create >10k tokens.
@@ -1544,10 +1551,11 @@ def prepare_model_execution(
                 )
         elif messages:
             rendered_prompt = runtime.tokenizer.apply_chat_template(
-                messages, add_generation_prompt=add_generation_prompt, tokenize=False
+                messages, add_generation_prompt=add_generation_prompt, tokenize=False, **template_kwargs
             )
             input_ids = runtime.tokenizer.apply_chat_template(
                 messages, add_generation_prompt=add_generation_prompt, tokenize=True,
+                **template_kwargs,
                 return_tensors="pt",
             )
         else:

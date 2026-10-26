@@ -235,6 +235,7 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
     prompt: str | None = None
     messages: list[dict[str, str]] | None = None
     add_generation_prompt = True
+    enable_thinking = False
     max_new_tokens = 0
     token: int | None = None
     stop_on_entry = False
@@ -357,6 +358,10 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
                             add_generation_prompt = bool(
                                 _literal(keyword.value, "add_generation_prompt")
                             )
+                        elif keyword.arg == "enable_thinking":
+                            enable_thinking = _literal(keyword.value, 'enable_thinking')
+                            if type(enable_thinking) is not bool:
+                                raise ValueError('enable_thinking must be a boolean')
                         elif keyword.arg == "max_new_tokens":
                             max_new_tokens = int(
                                 _literal(keyword.value, "max_new_tokens")
@@ -407,6 +412,7 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
         "device": keywords.get("device", "auto"), "dtype": keywords.get("dtype", "auto"),
         "prompt": prompt or "", "messages": messages,
         "addGenerationPrompt": add_generation_prompt,
+        "enableThinking": enable_thinking,
         "maxNewTokens": max_new_tokens,
         "defaultToken": token if token is not None else globals_.get("token"),
         "stopOnEntry": globals_.get("stop_on_entry", stop_on_entry),

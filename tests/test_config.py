@@ -79,6 +79,17 @@ with debug(model, tokens):
         self.assertTrue(any(part["type"] == "text" for part in content))
         self.assertEqual(config["maxNewTokens"], 20)
 
+    def test_qwen35_thinking_example_is_text_only_and_enables_thinking(self) -> None:
+        from llmdbg.program import qwen35
+        source = Path(__file__).parents[2] / 'llmdbg-usecase' / 'Qwen35-2B-Thinking.llmdbg.py'
+        config = load_debug_config(str(source))
+        self.assertTrue(config['enableThinking'])
+        self.assertEqual(config['maxNewTokens'], 4096)
+        self.assertTrue(all(isinstance(message['content'],str) for message in config['messages']))
+        prompt = qwen35('Qwen/Qwen3.5-2B').chat(config['messages'],enable_thinking=True,max_new_tokens=config['maxNewTokens'])
+        self.assertTrue(prompt.enable_thinking)
+        self.assertFalse(qwen35('Qwen/Qwen3.5-2B').chat(config['messages']).enable_thinking)
+
     def test_loads_qwen3vl_full_attention_vision_example(self) -> None:
         source = Path(__file__).parents[2] / "llmdbg-usecase" / "Qwen3-VL-2B-Instruct.llmdbg.py"
         config = load_debug_config(str(source))

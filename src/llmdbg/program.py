@@ -26,6 +26,7 @@ class ChatPrompt:
     messages: tuple[dict[str, Any], ...]
     add_generation_prompt: bool = True
     max_new_tokens: int = 20
+    enable_thinking: bool = False
 
 
 class TensorHandle(Sequence[float]):
@@ -217,11 +218,13 @@ class RemoteModel:
         *,
         add_generation_prompt: bool = True,
         max_new_tokens: int = 20,
+        enable_thinking: bool = False,
     ) -> ChatPrompt:
         return ChatPrompt(
             tuple(dict(message) for message in messages),
             add_generation_prompt,
             max_new_tokens,
+            enable_thinking,
         )
 
     @property
@@ -264,6 +267,7 @@ class DebugSession:
             prompt=self.prompt.text if isinstance(self.prompt, Prompt) else None,
             messages=(list(self.prompt.messages) if isinstance(self.prompt, ChatPrompt) else None),
             add_generation_prompt=(self.prompt.add_generation_prompt if isinstance(self.prompt, ChatPrompt) else True),
+            enable_thinking=(self.prompt.enable_thinking if isinstance(self.prompt, ChatPrompt) else False),
             device=self.model.device, dtype=self.model.dtype,
         )
         self.model._session = self
