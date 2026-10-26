@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import json
+import keyword
 import ast
 import base64
 import hashlib
 import importlib.metadata
 import io
 import platform
+import os
+import operator
 import re
 import sys
+import traceback
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +23,7 @@ from typing import Any, BinaryIO
 from llmdbg.config import load_debug_config
 from llmdbg.activation_scales import (
     attention_channel_activation_scale,
+    attention_head_norm_scale,
     mlp_activation_scale,
 )
 from llmdbg.demo_model import FEATURES, Layer, LayerState, run_demo
@@ -34,6 +39,18 @@ class SourceBreakpoint:
     transformer_layer: int | None = None
     token_operator: str = "=="
     layer_operator: str = "=="
+
+
+class DebugActionError(ValueError):
+    """Expected validation or availability failure for a debugger action."""
+
+
+class LensUnavailable(DebugActionError):
+    """A requested Lens vector has not been produced at the current step."""
+
+
+class PlotShapeError(DebugActionError):
+    """A one-dimensional heatmap requires the user to choose an orientation."""
 
 
 class ProtocolStream:
@@ -83,6 +100,8 @@ class LLMDebugAdapter:
     NEURON_REFERENCE = 1100
     TOKEN_REFERENCE = 1200
     LOCAL_VECTOR_REFERENCE = 2000
+    TENSOR_REFERENCE = 10000
+    SOURCE_FRAME_REFERENCE = 6000
     DETAIL_SCOPES = {
         500: ("normalized_input", "LayerNorm output"),
         600: ("mlp_expansion_pre_activation", "MLP expansion (pre-activation)"),
@@ -95,8 +114,15 @@ class LLMDebugAdapter:
         1600: ("full_attention_mixing", "Full-attention mixing"),
         1700: ("gated_delta_mixing", "Gated DeltaNet mixing"),
         1800: ("mlp_gate_pre_activation", "MLP gate (pre-activation)"),
-        1900: ("mlp_gate_activation", "MLP gate (after SiLU)"),
+        1900: ("mlp_gate_activation", "MLP gate (after activation)"),
+        1257: ("attention_projection_raw", "Attention projection before output normalization"),
         1950: ("mlp_up_projection", "MLP value branch"),
+        1251: ("attention_query", "Current-token query (all heads)"),
+        1252: ("attention_key", "Current-token key (all KV heads)"),
+        1253: ("attention_value", "Current-token value (all KV heads)"),
+        1254: ("attention_cached_keys", "Cached keys through the current token"),
+        1255: ("attention_cached_values", "Cached values through the current token"),
+        1256: ("attention_weights", "Attention weights by head and source position"),
     }
     SOURCE_REFERENCE = 1
     MLP_FRAME_ID = 2
@@ -116,7 +142,19 @@ class LLMDebugAdapter:
     )
     FULL_ATTENTION_STEPS = (
         ("input_layernorm", "normalized_input", "RMS-normalize the residual stream."),
-        ("full_attention", "full_attention_mixing", "Apply causal multi-head attention and its output gate."),
+        ("query_projection", "attention_query", "Project the current token into one query per attention head."),
+        ("key_projection", "attention_key", "Project the current token into keys for the KV heads."),
+        ("value_projection", "attention_value", "Project the current token into values for the KV heads."),
+        ("cached_keys", "attention_cached_keys", "Append the current keys to keys cached from earlier positions."),
+        ("cached_values", "attention_cached_values", "Append the current values to values cached from earlier positions."),
+        ("attention_weights", "attention_weights", "Compare each query with cached keys and apply softmax."),
+        ("mix_values", "full_attention_mixing", "Mix cached values using attention weights; Qwen3.5 also applies its output gate."),
+        ("output_projection", "attention_projection", "Project the mixed attention heads to model width."),
+        ("residual_add", "output", "Add the full-attention update to the residual stream."),
+    )
+    LEGACY_FULL_ATTENTION_STEPS = (
+        ("input_layernorm", "normalized_input", "RMS-normalize the residual stream."),
+        ("full_attention", "full_attention_mixing", "Apply causal attention over the cached sequence."),
         ("output_projection", "attention_projection", "Project the mixed attention heads to model width."),
         ("residual_add", "output", "Add the full-attention update to the residual stream."),
     )
@@ -151,6 +189,17 @@ class LLMDebugAdapter:
         ("down_projection", "mlp_projection", "Project active features back to model width."),
         ("post_feedforward_layernorm", "mlp_projection", "RMS-normalize the MLP update."),
         ("residual_add", "output", "Add the MLP update to the residual stream."),
+    )
+    GEMMA4_ATTENTION_STEPS = (
+        ("input_layernorm", "normalized_input", "Normalize the attention input."),
+        ("query_projection", "attention_query", "Project and normalize the current query heads."),
+        ("cached_keys", "attention_cached_keys", "Read the actual keys, including KV sharing and the sliding window."),
+        ("cached_values", "attention_cached_values", "Read the actual normalized values used by this layer."),
+        ("attention_weights", "attention_weights", "Compute masked softmax weights over the source positions."),
+        ("mix_values", "full_attention_mixing", "Mix source values using the attention weights."),
+        ("output_projection", "attention_projection_raw", "Project attention heads back to model width."),
+        ("post_attention_layernorm", "attention_projection", "Normalize the attention output."),
+        ("residual_add", "output", "Add the attention update to the residual."),
     )
 
     def __init__(self, stream: ProtocolStream) -> None:
@@ -196,15 +245,24 @@ class LLMDebugAdapter:
     @property
     def internal_steps(self) -> tuple[tuple[str, str, str], ...]:
         function_name = self._function_name_for_path(self.outer_state.layer.name)
+        configured = getattr(self, "configured_internal_steps", {}).get(function_name)
+        if configured:
+            return configured
         architecture = getattr(
             getattr(getattr(self, "execution", None), "runtime", None),
             "architecture", "",
         )
-        if architecture == "gemma2":
+        if architecture == "gemma4" and function_name == "full_attention":
+            return self.GEMMA4_ATTENTION_STEPS
+        if architecture in {"gemma2", "gemma4"}:
             if function_name == "full_attention":
                 return self.GEMMA_ATTENTION_STEPS
             if function_name == "mlp":
                 return self.GEMMA_MLP_STEPS
+        if function_name == "full_attention" and len(
+            self._internal_source_lines(self.outer_state.layer.name)
+        ) == len(self.LEGACY_FULL_ATTENTION_STEPS):
+            return self.LEGACY_FULL_ATTENTION_STEPS
         return {
             "attention": self.ATTENTION_STEPS,
             "full_attention": self.FULL_ATTENTION_STEPS,
@@ -214,7 +272,7 @@ class LLMDebugAdapter:
 
     @staticmethod
     def _function_name_for_path(path: str) -> str:
-        for name in ("gated_linear_attention", "full_attention", "attention", "mlp"):
+        for name in ("gated_linear_attention", "full_attention", "attention", "mlp", "per_layer_residual", "layer_scale"):
             if path.endswith("." + name):
                 return name
         return ""
@@ -230,6 +288,36 @@ class LLMDebugAdapter:
         if function_name == "attention":
             return getattr(self, "attention_source_lines", ())
         return ()
+
+    def _core_info(self):
+        if not self.inside_internal:
+            return None
+        root = self._function_name_for_path(self.outer_state.layer.name)
+        if root in getattr(self,'source_plan_steps',{}):
+            calls = getattr(self,'source_calls',{}).get(root,{})
+            active = [info for info in calls.values() if info['start'] <= self.mlp_step_index <= info['end']]
+            return max(active,key=lambda info:info['call']) if active else None
+        info = getattr(self, "nested_cores", {}).get(self._function_name_for_path(self.outer_state.layer.name))
+        return info if info and info["start"] <= self.mlp_step_index <= info["end"] else None
+
+    def _active_function_name(self):
+        frame = self._source_frame()
+        if frame is not None:
+            return frame['name']
+        info = self._core_info()
+        return info["name"] if info else self._function_name_for_path(self.outer_state.layer.name)
+
+    def _source_frames(self):
+        if not self.inside_internal:
+            return []
+        root = self._function_name_for_path(self.outer_state.layer.name)
+        steps = getattr(self,'source_plan_steps',{}).get(root,())
+        return steps[self.mlp_step_index]['frames'] if self.mlp_step_index < len(steps) else []
+
+    def _source_frame(self):
+        frames = self._source_frames()
+        index = getattr(self,'inspection_frame_index',-1)
+        return frames[index] if frames and -len(frames) <= index < len(frames) else None
 
     @property
     def inside_internal(self) -> bool:
@@ -261,9 +349,15 @@ class LLMDebugAdapter:
             if self.mlp_step_index == 0:
                 return None
             outer = self.trace[self.layer_index]
-            step_name, vector_name, meaning = self.internal_steps[self.mlp_step_index - 1]
+            previous_index = self.mlp_step_index - 1
+            core = self._core_info()
+            if core and self.mlp_step_index == core["start"]:
+                previous_index = core["call"] - 1
+            if previous_index < 0:
+                return None
+            step_name, vector_name, meaning = self.internal_steps[previous_index]
             output = self._mlp_vector(vector_name)
-            input_vector = self._mlp_step_input(self.mlp_step_index - 1)
+            input_vector = self._mlp_step_input(previous_index)
             details = {} if vector_name == "output" else {vector_name: output}
             return LayerState(
                 layer=outer.layer.__class__(
@@ -288,12 +382,20 @@ class LLMDebugAdapter:
 
     def _mlp_vector(self, vector_name: str) -> tuple[float, ...]:
         outer = self.outer_state
+        if vector_name == 'input':
+            return outer.input_vector
         return outer.output_vector if vector_name == "output" else outer.details[vector_name]
 
     def _mlp_step_input(self, step_index: int) -> tuple[float, ...]:
         if step_index == 0:
             return self.outer_state.input_vector
-        return self._mlp_vector(self.internal_steps[step_index - 1][1])
+        previous_index = step_index - 1
+        core = self._core_info()
+        if core and step_index == core["start"]:
+            previous_index = core["call"] - 1
+        if previous_index < 0:
+            return self.outer_state.input_vector
+        return self._mlp_vector(self.internal_steps[previous_index][1])
 
     def send_response(
         self,
@@ -316,6 +418,7 @@ class LLMDebugAdapter:
             response["message"] = message
         self.sequence += 1
         self.stream.write(response)
+        self._last_response_request = request["seq"]
 
     def send_event(self, event: str, body: dict[str, Any] | None = None) -> None:
         message: dict[str, Any] = {
@@ -328,16 +431,17 @@ class LLMDebugAdapter:
         self.sequence += 1
         self.stream.write(message)
 
-    def _console(self, message: str) -> None:
+    def _console(self, message: str, *, warning: bool = False) -> None:
         """Write one actionable progress line to the Debug Console."""
         if not hasattr(self, "stream") or not hasattr(self, "sequence"):
             return
         self.send_event(
             "output",
-            {"category": "console", "output": f"llmdbg: {message.rstrip()}\n"},
+            {"category": "console" if warning else "stdout", "output": f"llmdbg: {message.rstrip()}\n"},
         )
 
     def stop(self, reason: str) -> None:
+        self.inspection_references = {}
         getattr(self, "lens_snapshot_cache", {}).clear()
         self.send_event(
             "stopped",
@@ -356,7 +460,7 @@ class LLMDebugAdapter:
         )
 
     def terminate(self) -> None:
-        self.send_event("output", {"category": "console", "output": "llmdbg: model trace complete\n"})
+        self.send_event("output", {"category": "stdout", "output": "llmdbg: model trace complete\n"})
         self.send_event("terminated")
 
     def handle(self, request: dict[str, Any]) -> bool:
@@ -378,6 +482,9 @@ class LLMDebugAdapter:
                 },
             )
         elif command == "launch":
+            runtime_profile = os.environ.get("LLMDBG_RUNTIME_PROFILE")
+            if runtime_profile:
+                self.send_event("output", {"category": "stdout", "output": f"llmdbg: Runtime profile: {runtime_profile}; Python: {sys.executable}\n"})
             if arguments.get("config"):
                 file_arguments = load_debug_config(str(arguments["config"]))
                 arguments = {**file_arguments, **arguments}
@@ -393,7 +500,7 @@ class LLMDebugAdapter:
             if model:
                 self.send_event(
                     "output",
-                    {"category": "console", "output": f"llmdbg: loading {model}\n"},
+                    {"category": "stdout", "output": f"llmdbg: loading {model}\n"},
                 )
                 self.execution = prepare_model_execution(
                     str(model),
@@ -406,7 +513,7 @@ class LLMDebugAdapter:
                     device=str(arguments.get("device", "auto")),
                     dtype=str(arguments.get("dtype", "auto")),
                     progress=lambda output: self.send_event(
-                        "output", {"category": "console", "output": f"llmdbg: {output}"}
+                        "output", {"category": "stdout", "output": f"llmdbg: {output}"}
                     ),
                 )
                 self.prompt = self.execution.rendered_prompt
@@ -449,7 +556,7 @@ class LLMDebugAdapter:
             self.send_event(
                 "output",
                 {
-                    "category": "console",
+                    "category": "stdout",
                     "output": (
                         f"llmdbg: prepared {trace_name}; waiting for VS Code to finish "
                         "configuring breakpoints\n"
@@ -504,7 +611,20 @@ class LLMDebugAdapter:
                     "line": self.source_lines[self.layer_index],
                     "column": 1,
                 }
-                self.send_response(request, {"stackFrames": [frame, parent], "totalFrames": 2})
+                frames = [frame, parent]
+                core = self._core_info()
+                source_frames = self._source_frames()
+                if source_frames:
+                    frame['name'] = source_frames[-1]['name']+' · '+self.internal_steps[self.mlp_step_index][0]
+                    frames = [frame]
+                    for depth,index in enumerate(range(len(source_frames)-2,-1,-1),1):
+                        frames.append({'id':self.MLP_FRAME_ID+100*depth,'name':source_frames[index]['name'],
+                                       'source':source,'line':source_frames[index+1]['callLine'],'column':1})
+                    frames.append(parent)
+                elif core:
+                    frames.insert(1, {"id": self.MLP_FRAME_ID + 100, "name": self._function_name_for_path(self.outer_state.layer.name),
+                                      "source": source, "line": self._internal_source_lines()[core["call"]], "column": 1})
+                self.send_response(request, {"stackFrames": frames, "totalFrames": len(frames)})
             else:
                 self.send_response(request, {"stackFrames": [frame], "totalFrames": 1})
         elif command == "source":
@@ -517,13 +637,19 @@ class LLMDebugAdapter:
                     {"content": self.source_content, "mimeType": "text/plain"},
                 )
         elif command == "scopes":
+            source_frames = self._source_frames()
+            frame_id = int(arguments.get('frameId',self.MLP_FRAME_ID))
+            frame_index = len(source_frames)-1-(frame_id-self.MLP_FRAME_ID)//100
+            local_reference = (self.SOURCE_FRAME_REFERENCE+frame_index
+                               if source_frames and frame_id >= self.MLP_FRAME_ID and 0 <= frame_index < len(source_frames)
+                               else self.SCOPE_TOKEN)
             scopes = [
                 {
                     "name": "Breakpoint Conditions",
                     "variablesReference": self.SCOPE_BREAKPOINT_CONDITIONS,
                     "expensive": False,
                 },
-                {"name": "Local variables", "variablesReference": self.SCOPE_TOKEN, "expensive": False},
+                {"name": "Local variables", "variablesReference": local_reference, "expensive": False},
             ]
             result_state = self.previous_state
             if result_state is not None:
@@ -566,7 +692,17 @@ class LLMDebugAdapter:
             self.send_response(request, {"scopes": scopes})
         elif command == "variables":
             reference = int(arguments.get("variablesReference", 0))
-            self.send_response(request, {"variables": self._variables(reference)})
+            frame_reference = self.SOURCE_FRAME_REFERENCE <= reference < self.SOURCE_FRAME_REFERENCE+16
+            if frame_reference:
+                self.inspection_frame_index = reference-self.SOURCE_FRAME_REFERENCE
+            try:
+                variables = (
+                    self._tensor_variables(reference, arguments)
+                    if reference >= self.TENSOR_REFERENCE else self._local_variables() if frame_reference else self._variables(reference)
+                )
+            finally:
+                self.inspection_frame_index = -1
+            self.send_response(request, {"variables": variables})
         elif command == "setVariable":
             reference = int(arguments.get("variablesReference", 0))
             name = str(arguments.get("name", ""))
@@ -579,8 +715,15 @@ class LLMDebugAdapter:
             )
             self.send_event("invalidated", {"areas": ["variables", "watch"]})
         elif command == "evaluate":
-            expression = str(arguments.get("expression", "")).strip().lower()
-            body = self._evaluate_body(expression)
+            expression = str(arguments.get("expression", "")).strip()
+            source_frames = self._source_frames()
+            frame_id = int(arguments.get('frameId',self.MLP_FRAME_ID))
+            if source_frames and frame_id >= self.MLP_FRAME_ID:
+                self.inspection_frame_index = len(source_frames)-1-(frame_id-self.MLP_FRAME_ID)//100
+            try:
+                body = self._evaluate_body(expression)
+            finally:
+                self.inspection_frame_index = -1
             if body is None:
                 self.send_response(request, success=False, message=f"Unknown expression: {expression}")
             else:
@@ -612,8 +755,15 @@ class LLMDebugAdapter:
                 self._render_plot(
                     str(arguments.get("expression", "residual_stream")),
                     str(arguments.get("code", "")),
+                    shape_action=arguments.get("shapeAction"),
                 ),
             )
+
+        elif command == "llmdbg/decodeExpression":
+            self.send_response(request, self._decode_expressions(
+                str(arguments.get("expression", "x")),
+                arguments.get("loop"),
+            ))
 
         elif command == "llmdbg/neuronLens":
             mode = str(arguments.get("mode", "logit"))
@@ -666,6 +816,16 @@ class LLMDebugAdapter:
                 self.lens_snapshot_cache[cache_key] = snapshot
                 self._console(f"Finished computing {mode} readouts for {view}.")
             self.send_response(request, snapshot)
+        elif command == "llmdbg/deltaMemoryContributions":
+            self.send_response(request, self._delta_memory_contributions(
+                str(arguments.get('layer', '')), int(arguments.get('head', -1)),
+                int(arguments.get('tokenPosition', -1))))
+        elif command == "llmdbg/attentionTokenContributions":
+            self.send_response(request, self._attention_token_contributions(
+                str(arguments.get("layer", "")),
+                int(arguments.get("channel", -1)),
+                int(arguments.get("tokenPosition", -1)),
+            ))
         elif command == "llmdbg/measureCosine":
             self.send_response(
                 request,
@@ -684,7 +844,7 @@ class LLMDebugAdapter:
                 )
             targets = arguments.get("targets", [])
             if not isinstance(targets, list):
-                raise ValueError("cosine comparison targets must be a list")
+                raise DebugActionError("cosine comparison targets must be a list")
             available = [
                 str(target)
                 for target in targets
@@ -707,7 +867,7 @@ class LLMDebugAdapter:
         elif command == "llmdbg/getMeasurementVector":
             vector_id = str(arguments.get("vector", ""))
             if vector_id not in self.measurement_vectors:
-                raise ValueError("the selected vector is no longer available")
+                raise DebugActionError("the selected vector is no longer available")
             label, vector = self.measurement_vectors[vector_id]
             norm = sum(value * value for value in vector) ** 0.5
             match = re.match(r"^t(\d+)-", vector_id)
@@ -842,8 +1002,25 @@ class LLMDebugAdapter:
                 self.stop("step")
             elif command == "next" and not self.inside_internal and self._stop_at_internal_breakpoint():
                 pass
+            elif self.inside_internal and self._core_info() and command == "stepOut":
+                self.mlp_step_index = self._core_info()["end"] + 1
+                if self.mlp_step_index < len(self.internal_steps):
+                    self.stop("step")
+                else:
+                    self.inside_mlp = self.inside_attention = False
+                    self.mlp_step_index = 0
+                    self._advance_outer()
             elif self.inside_internal and command != "stepOut" and self.mlp_step_index + 1 < len(self.internal_steps):
-                self.mlp_step_index += 1
+                core = (getattr(self,'source_calls',{}).get(function_name,{}).get(self.mlp_step_index)
+                        if function_name in getattr(self,'source_plan_steps',{}) else getattr(self, "nested_cores", {}).get(function_name))
+                if core and self.mlp_step_index == core["call"] and command == "next":
+                    self.mlp_step_index = core["end"] + 1
+                    for index in range(core["start"], core["end"] + 1):
+                        if any(bp.line == self._internal_source_lines()[index] and self._breakpoint_matches(bp, self.token_index, self.layer_index) for bp in self.breakpoints):
+                            self.mlp_step_index = index
+                            break
+                else:
+                    self.mlp_step_index += 1
                 self.stop("step")
             else:
                 self.inside_mlp = False
@@ -982,9 +1159,12 @@ class LLMDebugAdapter:
                         sources.append(source)
 
         spans: list[tuple[int, int]] = []
+        runtime = getattr(getattr(self, "execution", None), "runtime", None)
+        image_id = getattr(getattr(getattr(runtime, "model", None), "config", None), "image_token_id", None)
+        image_token = runtime.tokenizer.decode([image_id]) if image_id is not None else None
         start: int | None = None
         for index, token in enumerate((*self.tokens, "")):
-            visual = "image_pad" in token
+            visual = "image_pad" in token or (image_token is not None and token == image_token)
             if visual and start is None:
                 start = index
             elif not visual and start is not None:
@@ -993,6 +1173,7 @@ class LLMDebugAdapter:
         return [
             {
                 "source": source,
+                **self._image_grid_metadata(index, spans),
                 "startToken": spans[index][0] if index < len(spans) else None,
                 "endToken": spans[index][1] if index < len(spans) else None,
                 "tokenCount": (
@@ -1002,6 +1183,18 @@ class LLMDebugAdapter:
             }
             for index, source in enumerate(sources)
         ]
+
+    def _image_grid_metadata(self, index: int, spans: list[tuple[int, int]]) -> dict[str, Any]:
+        grids = getattr(getattr(self, "execution", None), "image_grids", ())
+        merge = getattr(getattr(self, "execution", None), "image_merge_size", 1)
+        if index >= len(grids) or index >= len(spans) or merge <= 0:
+            return {}
+        frames, height, width = grids[index]
+        rows, columns = height // merge, width // merge
+        if height % merge or width % merge or frames * rows * columns != spans[index][1] - spans[index][0] + 1:
+            return {}
+        return {"gridRows": rows, "gridColumns": columns, "gridFrames": frames,
+                "regionMapping": "merged-row-major"}
 
     def _build_virtual_source(
         self,
@@ -1070,6 +1263,10 @@ class LLMDebugAdapter:
                     state_name(index, "mlp"),
                 ]
             )
+            if index < getattr(runtime, "visual_layer_count", 0):
+                available.append(state_name(index, "visual_residual"))
+            if getattr(runtime, "has_per_layer_inputs", False):
+                available.extend([state_name(index, "per_layer_residual"), state_name(index, "layer_scale")])
         available.extend(
             [final_norm_name, "vocabulary_projection", "predictions", "end"]
         )
@@ -1090,7 +1287,10 @@ class LLMDebugAdapter:
             for index in range(len(runtime_layers)):
                 mixer_kind = layer_kind(index)
                 layer_entries: list[tuple[int, str]] = []
-                for kind in (mixer_kind, "mlp"):
+                kinds = (mixer_kind, "mlp", "visual_residual") if index < getattr(runtime, "visual_layer_count", 0) else (mixer_kind, "mlp")
+                if getattr(runtime, "has_per_layer_inputs", False):
+                    kinds += ("per_layer_residual", "layer_scale")
+                for kind in kinds:
                     if kind in call_lines:
                         name = state_name(index, kind)
                         step_lines[name] = int(call_lines[kind])
@@ -1135,7 +1335,7 @@ class LLMDebugAdapter:
         executable_paths = [path for path in step_paths if not path.startswith("nop:")]
         selected = [path for path in available if path in set(executable_paths)]
         if selected != executable_paths:
-            raise ValueError(
+            raise DebugActionError(
                 "submodules must be a valid subsequence of model execution; "
                 f"available paths are {available!r}"
             )
@@ -1145,25 +1345,98 @@ class LLMDebugAdapter:
         self.source_lines = tuple(int(step_lines[name]) for name in step_paths)
         self.step_paths = tuple(step_paths)
         functions = arguments.get("functions", {})
+        if self.execution is not None:
+            self.execution.capture_delta_core = "gated_delta" in functions
         self.function_bindings = dict(arguments.get("functionBindings", {}))
+        self.source_plan_steps = {}
+        self.source_calls = {}
+        source_plans = arguments.get('sourcePlans',{})
+        if source_plans:
+            self.function_source_lines = {}
+            self.configured_internal_steps = {}
+            self.nested_cores = {}
+            for root, plan in source_plans.items():
+                steps = plan['steps']
+                self.source_plan_steps[root] = steps
+                self.configured_internal_steps[root] = tuple((step['operation'],step['vector'],
+                    f"{step['frames'][-1]['name']}: {step['operation']}") for step in steps)
+                self.function_source_lines[root] = tuple(step['line'] for step in steps)
+                calls = {int(index):info for index,info in plan['calls'].items()}
+                self.source_calls[root] = calls
+                if calls:
+                    self.nested_cores[root] = calls[min(calls)]  # legacy introspection compatibility
+            if self.execution is not None:
+                self.execution.capture_delta_core = any(step['operation']=='convolved_qkv'
+                    for steps in self.source_plan_steps.values() for step in steps)
+            self.mlp_source_lines = self.function_source_lines.get('mlp',())
+            self.attention_source_lines = self.function_source_lines.get('attention',())
+            return
         step_sets = {
             "attention": self.ATTENTION_STEPS,
             "full_attention": (
-                self.GEMMA_ATTENTION_STEPS
+                self.GEMMA4_ATTENTION_STEPS
+                if runtime_architecture == "gemma4" else self.GEMMA_ATTENTION_STEPS
                 if runtime_architecture == "gemma2" else self.FULL_ATTENTION_STEPS
             ),
             "gated_linear_attention": self.GATED_LINEAR_ATTENTION_STEPS,
             "mlp": (
                 self.GEMMA_MLP_STEPS
-                if runtime_architecture == "gemma2"
+                if runtime_architecture in {"gemma2", "gemma4"}
                 else self.QWEN_MLP_STEPS
-                if runtime_architecture == "qwen3_5"
+                if runtime_architecture in {"qwen3_5", "qwen3_vl"}
                 else self.MLP_STEPS
             ),
         }
+        if runtime_architecture not in {"gemma2", "gemma4"} and isinstance(functions, dict):
+            full_attention_lines = functions.get("full_attention", {})
+            if isinstance(full_attention_lines, dict) and "query_projection" not in full_attention_lines:
+                step_sets["full_attention"] = self.LEGACY_FULL_ATTENTION_STEPS
         self.function_source_lines = {}
+        self.configured_internal_steps = {}
+        self.nested_cores = {}
+        core_steps = {
+            "attention": self.FULL_ATTENTION_STEPS[1:-2],
+            "gated_delta": (
+                ("convolved_qkv", "delta_qkv", "Causal convolution, Q/K normalization, head expansion and query scaling."),
+                ("gates", "delta_beta", "Compute decay, beta update strength, and SiLU output gate input."),
+                ("cached_memory", "delta_previous_memory", "Read the previous recurrent memory, or zeros for the first token."),
+                ("update_memory", "delta_updated_memory", "Decay memory and correct its prediction using the current key and value; save to cache."),
+                ("read_memory", "delta_readout", "Read the updated memory with the current scaled query."),
+                ("gated_output_norm", "gated_delta_mixing", "RMS-normalize each head and multiply by SiLU(gate)."),
+            ),
+        }
+        for outer, core_name in (("full_attention", "attention"), ("gated_linear_attention", "gated_delta")):
+            outer_lines = functions.get(outer, {}) if isinstance(functions, dict) else {}
+            nested_lines = functions.get(core_name, {}) if isinstance(functions, dict) else {}
+            if core_name not in outer_lines or not nested_lines:
+                continue
+            # The four-line outer function stays readable; insert the authored
+            # core locations in execution order for stepping and breakpoints.
+            outer_steps = (self.LEGACY_FULL_ATTENTION_STEPS if outer == "full_attention" else self.GATED_LINEAR_ATTENTION_STEPS)
+            outer_steps = (outer_steps[0], (core_name, outer_steps[1][1], outer_steps[1][2]), *outer_steps[2:])
+            nested_steps = core_steps[core_name]
+            return_info = arguments.get('functionReturns', {}).get(core_name)
+            # A named return is a real pause after the final assignment, with
+            # the core frame and its newly assigned locals still in scope.
+            return_binding = next((binding for binding in reversed(self.function_bindings.get(core_name, []))
+                                   if return_info and binding['name'] == return_info['name']), None)
+            return_line = None
+            if return_binding and return_binding['operation'] == nested_steps[-1][0]:
+                return_line = int(return_info['line'])
+                nested_steps = (*nested_steps, ('return', nested_steps[-1][1], 'Return the completed mixer output to the caller.'))
+            steps = (*outer_steps[:2], *nested_steps, *outer_steps[2:])
+            lines = [outer_lines[outer_steps[0][0]], outer_lines[core_name]]
+            lines.extend(nested_lines[operation] for operation, _, _ in core_steps[core_name])
+            if return_line is not None:
+                lines.append(return_line)
+            lines.extend(outer_lines[operation] for operation, _, _ in outer_steps[2:])
+            self.configured_internal_steps[outer] = steps
+            self.function_source_lines[outer] = tuple(lines)
+            self.nested_cores[outer] = {"name": core_name, "call": 1, "start": 2, "end": 1 + len(nested_steps)}
         if isinstance(functions, dict):
             for function_name, steps in step_sets.items():
+                if function_name in self.configured_internal_steps:
+                    continue
                 operation_lines = functions.get(function_name, {})
                 lines = tuple(int(operation_lines.get(name, 0)) for name, _, _ in steps)
                 if lines and all(line > 0 for line in lines):
@@ -1201,7 +1474,7 @@ class LLMDebugAdapter:
         if prediction.token_id in eos_ids:
             self.send_event(
                 "output",
-                {"category": "console", "output": "llmdbg: generation reached EOS\n"},
+                {"category": "stdout", "output": "llmdbg: generation reached EOS\n"},
             )
             return False
         text = self.execution.append_generated_token(prediction.token_id)
@@ -1260,7 +1533,7 @@ class LLMDebugAdapter:
         for path in self.step_paths:
             if path.startswith("nop:"):
                 if previous is None:
-                    raise ValueError("nop() requires an earlier model operation")
+                    raise DebugActionError("nop() requires an earlier model operation")
                 states_by_name[path] = LayerState(
                     Layer(
                         path, "nop", "No operation; stable breakpoint location.",
@@ -1269,6 +1542,8 @@ class LLMDebugAdapter:
                     previous.output_vector,
                     previous.output_vector,
                     "Preserves the current value without executing a model operation.",
+                    tensors={key: previous.tensors["output"] for key in ("input", "output")
+                             if "output" in previous.tensors},
                 )
             previous = states_by_name[path]
         self.trace = tuple(states_by_name[path] for path in self.step_paths)
@@ -1331,14 +1606,14 @@ class LLMDebugAdapter:
         if function_name in {"attention", "full_attention", "gated_linear_attention"}:
             if (
                 self.inside_internal
-                and self.internal_steps[self.mlp_step_index][0] == "residual_add"
+                and any(step[0]=='residual_add' for step in self.internal_steps[:self.mlp_step_index+1])
             ):
                 return 2
             return 1 if self.inside_internal else 0
         if function_name == "mlp":
             if (
                 self.inside_internal
-                and self.internal_steps[self.mlp_step_index][0] == "residual_add"
+                and any(step[0]=='residual_add' for step in self.internal_steps[:self.mlp_step_index+1])
             ):
                 return 4
             return 3 if self.inside_internal else 2
@@ -1376,6 +1651,9 @@ class LLMDebugAdapter:
             "residual-input": 0,
             "residual-stream": 0,
             "attention-neurons": 1,
+            "attention-heads": 1,
+            "attention-head-values": 1,
+            "delta-memory-write": 1,
             "attention-output": 1,
             "residual-mid": 2,
             "neurons": 3,
@@ -1539,6 +1817,9 @@ class LLMDebugAdapter:
 
     def _local_vector_names(self) -> list[str]:
         """Return vector-valued names that exist at the current source line."""
+        frame = self._source_frame()
+        if frame is not None:
+            return list(frame['bindings'])
         names: list[str] = []
         path = (
             self.step_paths[self.layer_index]
@@ -1552,11 +1833,13 @@ class LLMDebugAdapter:
         if self.inside_internal or self.layer_index > 0 or path != "token_embedding":
             names.append("x")
         if self.inside_internal:
-            function_name = self._function_name_for_path(self.outer_state.layer.name)
+            function_name = self._active_function_name()
             completed = {
                 operation for operation, _vector, _meaning in self.internal_steps[: self.mlp_step_index]
             }
             latest: dict[str, str] = {}
+            if self._core_info():
+                names.append("normalized")
             for binding in self.function_bindings.get(function_name, []):
                 if binding.get("operation") in completed:
                     latest[str(binding["name"])] = str(binding["operation"])
@@ -1610,6 +1893,15 @@ class LLMDebugAdapter:
                 ]
             )
         for offset, name in enumerate(self._local_vector_names()):
+            try:
+                inspection = self._inspect_expression(name)
+            except DebugActionError as error:
+                variables.append({'name':name,'evaluateName':name,'value':str(error),'type':'expression error','variablesReference':0})
+                continue
+            if inspection is not None:
+                variables.append({"name": name, "evaluateName": name,
+                                  **self._tensor_description(inspection, name, variable=True)})
+                continue
             vector = self._vector(self._source_expression(name))
             variables.append(
                 {
@@ -1873,15 +2165,15 @@ class LLMDebugAdapter:
             and name == "activation"
         ):
             return f"top_neurons[{reference - self.NEURON_REFERENCE}].activation"
-        raise ValueError(f"{name!r} cannot be changed in this scope")
+        raise DebugActionError(f"{name!r} cannot be changed in this scope")
 
     def _set_expression(self, expression: str, value: float) -> float:
         """Record an intervention and replay the token to refresh downstream values."""
         if self.execution is None:
-            raise ValueError("vector intervention requires a loaded model")
+            raise DebugActionError("vector intervention requires a loaded model")
         result_state = self.previous_state
         if result_state is None:
-            raise ValueError("step over an operation before changing its output")
+            raise DebugActionError("step over an operation before changing its output")
 
         expression = self._source_expression(expression)
         neuron_match = re.fullmatch(r"top_neurons\[(\d+)\]\.activation", expression)
@@ -1889,7 +2181,7 @@ class LLMDebugAdapter:
             rank = int(neuron_match.group(1))
             neurons = self._top_neurons()
             if rank >= len(neurons):
-                raise ValueError(f"top neuron rank must be in 0..{len(neurons) - 1}")
+                raise DebugActionError(f"top neuron rank must be in 0..{len(neurons) - 1}")
             vector_name = "mlp_expansion"
             index = neurons[rank].index
         else:
@@ -1903,7 +2195,7 @@ class LLMDebugAdapter:
                 expression,
             )
             if indexed is None:
-                raise ValueError(
+                raise DebugActionError(
                     "set a vector dimension such as output[42], mlp_expansion[10], "
                     "or top_neurons[0].activation"
                 )
@@ -1925,9 +2217,9 @@ class LLMDebugAdapter:
             else result_state.details.get(vector_name)
         )
         if source_vector is None:
-            raise ValueError(f"{vector_name} is not available for {result_state.layer.name}")
+            raise DebugActionError(f"{vector_name} is not available for {result_state.layer.name}")
         if index < 0 or index >= len(source_vector):
-            raise ValueError(
+            raise DebugActionError(
                 f"dimension {index} is outside {vector_name} range 0..{len(source_vector) - 1}"
             )
 
@@ -1954,13 +2246,13 @@ class LLMDebugAdapter:
     def _remove_ica_component(self, view: str, component: int) -> dict[str, Any]:
         """Ablate one residual ICA component and replay the current token."""
         if self.execution is None:
-            raise ValueError("ICA intervention requires a loaded model")
+            raise DebugActionError("ICA intervention requires a loaded model")
         if view not in {
             "ica-residual-pre", "ica-residual-mid", "ica-residual-post"
         }:
-            raise ValueError("ICA removal is available only for residual vectors")
+            raise DebugActionError("ICA removal is available only for residual vectors")
         if component < 0:
-            raise ValueError("ICA component must be non-negative")
+            raise DebugActionError("ICA component must be non-negative")
         snapshot = self._neuron_lens_snapshot(
             view=view,
             include_logit_lens=False,
@@ -1968,7 +2260,7 @@ class LLMDebugAdapter:
             include_r_lens=False,
         )
         if snapshot.get("saved"):
-            raise ValueError(
+            raise DebugActionError(
                 "ICA intervention is unavailable because this block has already executed"
             )
         layer = str(snapshot["layer"])
@@ -2009,7 +2301,7 @@ class LLMDebugAdapter:
         self.send_event(
             "output",
             {
-                "category": "console",
+                "category": "stdout",
                 "output": f"llmdbg: ICA intervention log: {log_paths['note']}\n",
             },
         )
@@ -2027,7 +2319,7 @@ class LLMDebugAdapter:
     ) -> dict[str, Any]:
         """Replace an active model-width vector and replay the current token."""
         if self.execution is None:
-            raise ValueError("vector patch requires a loaded model")
+            raise DebugActionError("vector patch requires a loaded model")
         normalized_view = view.removeprefix("ica-")
         targets = {
             "residual-pre": "input",
@@ -2038,7 +2330,7 @@ class LLMDebugAdapter:
         }
         vector_name = targets.get(normalized_view)
         if vector_name is None:
-            raise ValueError(f"Patch: Paste to replace is unavailable for {view!r}")
+            raise DebugActionError(f"Patch: Paste to replace is unavailable for {view!r}")
         snapshot = self._neuron_lens_snapshot(
             view=normalized_view,
             include_logit_lens=False,
@@ -2047,15 +2339,15 @@ class LLMDebugAdapter:
             include_jpp_lens=False,
         )
         if snapshot.get("saved"):
-            raise ValueError(
+            raise DebugActionError(
                 "vector patch is unavailable because this block has already executed"
             )
         measurement_id = str(snapshot.get("measurementId", ""))
         if measurement_id not in self.measurement_vectors:
-            raise ValueError("target vector is unavailable")
+            raise DebugActionError("target vector is unavailable")
         _label, before = self.measurement_vectors[measurement_id]
         if len(replacement) != len(before):
-            raise ValueError(
+            raise DebugActionError(
                 f"copied vector has {len(replacement)} dimensions but target has {len(before)}"
             )
         layer = str(snapshot["layer"])
@@ -2080,7 +2372,7 @@ class LLMDebugAdapter:
         )
         self.send_event(
             "output",
-            {"category": "console", "output": f"llmdbg: vector patch log: {log_paths['note']}\n"},
+            {"category": "stdout", "output": f"llmdbg: vector patch log: {log_paths['note']}\n"},
         )
         return {
             "patched": True,
@@ -2159,13 +2451,13 @@ class LLMDebugAdapter:
     ) -> tuple[float, ...]:
         """Resolve the effective residual at an ICA intervention boundary."""
         if self.execution is None:
-            raise ValueError("ICA intervention requires a loaded model")
+            raise DebugActionError("ICA intervention requires a loaded model")
         state = next(
             (candidate for candidate in self.trace if candidate.layer.name == layer),
             None,
         )
         if state is None:
-            raise ValueError(f"residual state {layer} is unavailable")
+            raise DebugActionError(f"residual state {layer} is unavailable")
         if view != "ica-residual-pre":
             return tuple(float(value) for value in state.output_vector)
         active = sorted(
@@ -2192,7 +2484,7 @@ class LLMDebugAdapter:
     ) -> dict[str, str]:
         """Write a reproducible JSON record and readable experiment note."""
         if self.execution is None:
-            raise ValueError("ICA intervention requires a loaded model")
+            raise DebugActionError("ICA intervention requires a loaded model")
         def vector_record(values: tuple[float, ...]) -> dict[str, Any]:
             encoded = json.dumps(values, separators=(",", ":")).encode("utf-8")
             return {
@@ -2372,11 +2664,11 @@ class LLMDebugAdapter:
     ) -> dict[str, Any]:
         """Zero one MLP neuron or attention channel and replay the token."""
         if self.execution is None:
-            raise ValueError("component intervention requires a loaded model")
+            raise DebugActionError("component intervention requires a loaded model")
         if view not in {"neurons", "attention-neurons"}:
-            raise ValueError("component removal requires a neuron or channel view")
+            raise DebugActionError("component removal requires a neuron or channel view")
         if component < 0:
-            raise ValueError("component must be non-negative")
+            raise DebugActionError("component must be non-negative")
         snapshot = self._neuron_lens_snapshot(
             view=view,
             include_logit_lens=False,
@@ -2384,7 +2676,7 @@ class LLMDebugAdapter:
             include_r_lens=False,
         )
         if snapshot.get("saved"):
-            raise ValueError(
+            raise DebugActionError(
                 "component intervention is unavailable because this block has already executed"
             )
         selected = next(
@@ -2392,7 +2684,7 @@ class LLMDebugAdapter:
             None,
         )
         if selected is None:
-            raise ValueError(f"component {component} is not available in this Lens")
+            raise DebugActionError(f"component {component} is not available in this Lens")
         layer = str(snapshot["layer"])
         function_name = self._function_name_for_path(layer)
         vector_name = (
@@ -2446,7 +2738,7 @@ class LLMDebugAdapter:
         self.send_event(
             "output",
             {
-                "category": "console",
+                "category": "stdout",
                 "output": f"llmdbg: component intervention log: {log_paths['note']}\n",
             },
         )
@@ -2475,7 +2767,7 @@ class LLMDebugAdapter:
     ) -> dict[str, str]:
         """Record a neuron/channel ablation and its downstream result."""
         if self.execution is None:
-            raise ValueError("component intervention requires a loaded model")
+            raise DebugActionError("component intervention requires a loaded model")
 
         def digest(values: tuple[float, ...]) -> str:
             return hashlib.sha256(
@@ -2663,6 +2955,7 @@ class LLMDebugAdapter:
         include_j_lens: bool = False,
         include_r_lens: bool = False,
         include_jpp_lens: bool = False,
+        head_index: int | None = None,
     ) -> tuple[NeuronProjection, ...]:
         """Return the strongest mixed-attention channels and their W_O directions."""
         function_names = {"attention", "full_attention", "gated_linear_attention"}
@@ -2684,8 +2977,8 @@ class LLMDebugAdapter:
             "gated_linear_attention": "gated_delta_mixing",
         }[function_name]
         mixing_complete = not inside_attention or any(
-            detail == vector_name
-            for _operation, detail, _meaning in self.internal_steps[: self.mlp_step_index]
+            detail == vector_name and not (self._core_info() and operation == self._core_info()["name"])
+            for operation, detail, _meaning in self.internal_steps[: self.mlp_step_index]
         )
         activation = result_state.details.get(vector_name)
         if not mixing_complete or activation is None:
@@ -2695,13 +2988,15 @@ class LLMDebugAdapter:
             layer_name, vector_name
         )
         key = (
-            self.token_index, "attention:" + layer_name,
+            self.token_index, "attention:" + layer_name, head_index,
             include_logit_lens, include_j_lens, include_r_lens, include_jpp_lens,
             removed_indices,
         )
         if key not in self.neuron_cache:
+            selection = {"head_index": head_index, "channel_count": 3} if head_index is not None else {}
             self.neuron_cache[key] = self.execution.top_attention_channels(
                 layer_name, activation,
+                **selection,
                 output=result_state.details.get("attention_projection"),
                 residual=result_state.input_vector,
                 include_logit_lens=include_logit_lens,
@@ -2711,6 +3006,98 @@ class LLMDebugAdapter:
                 include_indices=removed_indices,
             )
         return self.neuron_cache[key]
+
+    @staticmethod
+    def _attention_channel_head(state: Any, channel: int) -> dict[str, int]:
+        weights = state.tensors.get("attention_weights")
+        values = state.tensors.get("attention_cached_values")
+        if weights is None or values is None or weights.ndim != 4 or values.ndim != 4:
+            return {}
+        query_heads, kv_heads, width = int(weights.shape[1]), int(values.shape[1]), int(values.shape[3])
+        if kv_heads <= 0 or width <= 0 or query_heads % kv_heads or not 0 <= channel < query_heads * width:
+            return {}
+        head, dimension = divmod(channel, width)
+        return {"queryHead": head, "kvHead": head // (query_heads // kv_heads),
+                "dimension": dimension, "headDimension": width}
+
+    def _delta_memory_contributions(self, layer: str, head: int, token_position: int) -> dict[str, Any]:
+        if token_position != self.token_index:
+            raise DebugActionError('This head belongs to another token. Refresh the Lens panel and try again.')
+        state = next((s for s in self.trace if s.layer.name == layer), None)
+        if state is None or self.execution is None or not layer.endswith('.gated_linear_attention'):
+            raise DebugActionError('Memory contributions require a captured DeltaNet head')
+        try:
+            data = self.execution.delta_memory_contributions(self._transformer_layer_index(layer), head, token_position)
+        except ValueError as error:
+            raise DebugActionError(str(error)) from error
+        # Do not present a replay of a different numerical/intervention history
+        # as an attribution of the paused snapshot.
+        import torch
+        mixed = state.tensors.get('gated_delta_mixing')
+        if mixed is not None:
+            width = data['headDimension']
+            weight = self._attention_output_weight(self._transformer_layer_index(layer))[head*width:(head+1)*width].float()
+            actual = mixed.flatten()[head*width:(head+1)*width].float() @ weight
+            reproduced = torch.tensor(data['outputVector'], device=actual.device)
+            if float((actual-reproduced).norm()) > .03*float(actual.norm())+.001:
+                raise DebugActionError('Replay differs from this paused head snapshot. Restart at this token with a fresh prefix cache before requesting memory contributions.')
+        return {**{k:v for k,v in data.items() if k != 'outputVector'}, 'layer':layer, 'transformerLayer':self._transformer_layer_index(layer),
+                'tokenPosition':token_position, 'token':self.tokens[token_position], 'images':self._prompt_images()}
+
+    def _attention_token_contributions(
+        self, layer: str, channel: int, token_position: int
+    ) -> dict[str, Any]:
+        """Decompose one full-attention input channel by cached source token."""
+        if token_position != self.token_index:
+            raise DebugActionError("This channel belongs to another token. Refresh the Lens panel and try again.")
+        state = next((state for state in self.trace if state.layer.name == layer), None)
+        if state is None or not layer.endswith(".full_attention"):
+            raise DebugActionError("Token contributions require a captured full-attention layer.")
+        weights = state.tensors.get("attention_weights")
+        values = state.tensors.get("attention_cached_values")
+        if weights is None or values is None:
+            raise DebugActionError("Attention weights and cached values are unavailable for this layer.")
+        if weights.ndim != 4 or values.ndim != 4:
+            raise DebugActionError("Unsupported attention tensor layout for token contributions.")
+        query_heads, kv_heads, width = int(weights.shape[1]), int(values.shape[1]), int(values.shape[3])
+        if kv_heads <= 0 or query_heads % kv_heads:
+            raise DebugActionError("Unsupported query/KV head grouping for token contributions.")
+        if not 0 <= channel < query_heads * width:
+            raise DebugActionError(f"Channel must be in 0..{query_heads * width - 1}.")
+        count = int(values.shape[2])
+        source_positions = state.tensors.get("attention_source_positions")
+        if source_positions is None:
+            positions = list(range(count))
+        else:
+            positions = [int(position) for position in source_positions.tolist()]
+        if int(weights.shape[3]) != count or len(positions) != count or (source_positions is None and count != token_position + 1):
+            raise DebugActionError("Cached source-token positions are unavailable for this attention layout.")
+        head, dimension = divmod(channel, width)
+        kv_head = head // (query_heads // kv_heads)
+        selected_weights = weights[0, head, -1, :].detach().float().cpu().tolist()
+        selected_values = values[0, kv_head, :, dimension].detach().float().cpu().tolist()
+        rows = [
+            {"position": index, "token": self.tokens[index], "weight": weight,
+             "value": value, "contribution": weight * value}
+            for index, weight, value in zip(positions, selected_weights, selected_values)
+        ]
+        mixed = state.tensors.get("full_attention_mixing")
+        mixed_value = float(mixed[0, -1, channel].item()) if mixed is not None else None
+        has_output_gate = getattr(getattr(self.execution, "runtime", None), "architecture", "qwen3_5") == "qwen3_5"
+        return {
+            "layer": layer, "transformerLayer": self._transformer_layer_index(layer),
+            "tokenPosition": token_position, "token": self.tokens[token_position],
+            "channel": channel, "queryHead": head, "kvHead": kv_head,
+            "dimension": dimension, "headDimension": width,
+            "weightsShape": list(weights.shape), "valuesShape": list(values.shape),
+            "rows": rows, "sum": sum(row["contribution"] for row in rows),
+            "positiveSum": sum(max(0., row["contribution"]) for row in rows),
+            "negativeSum": sum(min(0., row["contribution"]) for row in rows),
+            "mixedValue": mixed_value,
+            "images": self._prompt_images(),
+            "stage": "before-output-gate" if has_output_gate else "before-output-projection",
+            "outputGate": has_output_gate,
+        }
 
     def _removed_projected_components(
         self, layer_name: str, vector_name: str
@@ -2793,7 +3180,7 @@ class LLMDebugAdapter:
             vector = self._vector(vector_name)
             index = int(raw_index)
             if index >= len(vector):
-                raise ValueError(
+                raise DebugActionError(
                     f"dimension {index} is outside the vector range 0..{len(vector) - 1}"
                 )
             return f"{vector[index]:+.8f}"
@@ -2816,10 +3203,14 @@ class LLMDebugAdapter:
 
     def _source_expression(self, expression: str) -> str:
         """Resolve Python frame locals and debugger aliases to runtime vectors."""
+        frame = self._source_frame()
+        if frame is not None:
+            aliases = {name:value if value.isidentifier() else '('+value+')' for name,value in frame['bindings'].items()}
+            return self._replace_expression_name(expression, aliases)
         aliases = {"x": "x", "residual_stream": "x"}
         if not getattr(self, "inside_internal", False):
             return self._replace_expression_name(expression, aliases)
-        function_name = self._function_name_for_path(self.outer_state.layer.name)
+        function_name = self._active_function_name()
         bindings = getattr(self, "function_bindings", {}).get(function_name, [])
         operation_vectors = {
             operation: vector for operation, vector, _meaning in self.internal_steps
@@ -2829,7 +3220,9 @@ class LLMDebugAdapter:
         }
         for binding in bindings:
             if binding.get("operation") in completed:
-                aliases[str(binding["name"])] = operation_vectors[str(binding["operation"])]
+                aliases[str(binding["name"])] = binding.get("vector", operation_vectors[str(binding["operation"])])
+        if self._core_info():
+            aliases["normalized"] = "normalized_input"
         if not bindings and function_name == "attention":
             aliases.update({
                 "normalized": "normalized_input",
@@ -2853,12 +3246,15 @@ class LLMDebugAdapter:
     @staticmethod
     def _replace_expression_name(expression: str, aliases: dict[str, str]) -> str:
         for alias, vector in aliases.items():
-            if expression == alias or expression.startswith(alias + "["):
+            if expression == alias or expression.startswith(alias + "[") or expression.startswith(alias + "."):
                 return vector + expression[len(alias):]
         return expression
 
     def _evaluate_body(self, expression: str) -> dict[str, Any] | None:
         """Build a DAP evaluate result, including expandable synthetic values."""
+        inspection = self._inspect_expression(expression)
+        if inspection is not None:
+            return self._tensor_description(inspection, expression)
         step_paths = getattr(self, "step_paths", ())
         path = step_paths[self.layer_index] if self.layer_index < len(step_paths) else ""
         if expression == "predictions":
@@ -2965,12 +3361,157 @@ class LLMDebugAdapter:
             return None
         return {"result": result, "variablesReference": 0}
 
+    def _attention_output_weight(self, layer: int | None = None) -> Any:
+        """Current layer's bias-free output map, oriented input × residual width."""
+        if self.execution is None:
+            raise DebugActionError("W_o requires a paused model debug session.")
+        if layer is None:
+            layer = self._transformer_layer_index(self.outer_state.layer.name)
+        runtime = self.execution.runtime
+        if layer is None or not 0 <= layer < len(runtime.layers):
+            raise DebugActionError("W_o is available inside a transformer layer.")
+        block = runtime.layers[layer]
+        if runtime.architecture == "gpt2":
+            weight = block.attn.c_proj.weight
+        else:
+            mixer = block.self_attn if runtime.layer_kind(layer) == "full_attention" else block.linear_attn
+            projection = mixer.o_proj if hasattr(mixer, "o_proj") else mixer.out_proj
+            weight = projection.weight.T
+        # Never expose a live parameter to inspection clients.
+        return weight.detach().clone()
+
+    def _inspect_expression(self, expression: str) -> Any:
+        """Evaluate a restricted tensor expression against captured snapshots."""
+        try:
+            tree = ast.parse(expression, mode="eval").body
+        except SyntaxError:
+            return None
+
+        def resolve(node, captured=False):
+            if isinstance(node, ast.Constant) and type(node.value) in {int, float}:
+                return node.value
+            if isinstance(node, (ast.Tuple,ast.List)):
+                return tuple(resolve(item,captured) for item in node.elts)
+            if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+                value = resolve(node.operand,captured)
+                return value if isinstance(node.op, ast.UAdd) else -value
+            if isinstance(node, ast.BinOp):
+                operation = {ast.Add: operator.add, ast.Sub: operator.sub,
+                             ast.Mult: operator.mul, ast.Div: operator.truediv,
+                             ast.MatMult: operator.matmul}.get(type(node.op))
+                if operation is None:
+                    raise DebugActionError("Supported tensor operators: +, -, *, /, @, and parentheses")
+                return operation(resolve(node.left,captured), resolve(node.right,captured))
+            if isinstance(node, ast.Name):
+                if node.id == "W_o":
+                    return self._attention_output_weight()
+                frame = self._source_frame() if not captured else None
+                if frame is not None:
+                    if node.id in frame['bindings']:
+                        return resolve(ast.parse(frame['bindings'][node.id],mode='eval').body,True)
+                    if node.id in frame['localNames']:
+                        raise LookupError
+                name = node.id if captured else self._source_expression(node.id)
+                if name in {"x", "input", "residual", "residual_stream"}:
+                    name = "input"
+                state = self.outer_state if self.inside_internal or name == "input" else self.previous_state
+                if state is None:
+                    raise LookupError
+                tensor = state.tensors.get(name)
+                if tensor is None:
+                    raise LookupError
+                return tensor
+            if isinstance(node, ast.Attribute) and node.attr in {"shape", "dtype", "device", "ndim", "requires_grad"}:
+                return getattr(resolve(node.value,captured), node.attr)
+            if isinstance(node, ast.Subscript):
+                return resolve(node.value,captured)[index(node.slice,captured)]
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                if node.func.attr in {"size", "numel", "dim"} and not node.keywords:
+                    args = [resolve(arg,captured) for arg in node.args]
+                    if any(not isinstance(arg, int) for arg in args):
+                        raise DebugActionError("tensor method arguments must be integers")
+                    return getattr(resolve(node.func.value,captured), node.func.attr)(*args)
+            raise LookupError
+
+        def index(node,captured=False):
+            if isinstance(node, ast.Slice):
+                return slice(*(index(part,captured) if part is not None else None
+                               for part in (node.lower, node.upper, node.step)))
+            if isinstance(node, ast.Tuple):
+                return tuple(index(part,captured) for part in node.elts)
+            if isinstance(node, (ast.BinOp, ast.UnaryOp,ast.Name)):
+                value = resolve(node,captured)
+                if type(value) is not int:
+                    raise DebugActionError("Slice arithmetic must produce an integer.")
+                return value
+            return ast.literal_eval(node)
+
+        try:
+            return resolve(tree)
+        except IndexError as error:
+            raise DebugActionError(str(error)) from error
+        except (LookupError, AttributeError):
+            return None
+        except (ValueError, TypeError, RuntimeError, ZeroDivisionError, OverflowError) as error:
+            raise DebugActionError(str(error)) from error
+
+    def _tensor_description(self, value: Any, expression: str, *, variable: bool = False) -> dict[str, Any]:
+        is_tensor = hasattr(value, "detach") and hasattr(value, "shape")
+        is_sequence = isinstance(value, (tuple, list))
+        expandable = is_tensor or is_sequence
+        reference = 0
+        if expandable:
+            references = getattr(self, "inspection_references", None)
+            if references is None:
+                references = self.inspection_references = {}
+            reference = self.TENSOR_REFERENCE + len(references)
+            references[reference] = (value, expression)
+        if is_tensor:
+            preview = (
+                repr(value.item()) if value.ndim == 0 else
+                f"tensor(shape={tuple(value.shape)}, dtype={value.dtype}, device='{value.device}')"
+            )
+            type_name = "torch.Tensor"
+        else:
+            preview, type_name = str(value), type(value).__name__
+        result = {"value" if variable else "result": preview,
+                  "type": type_name, "variablesReference": reference}
+        if expandable:
+            result["indexedVariables"] = int(value.shape[0]) if is_tensor and value.ndim else (len(value) if is_sequence else 0)
+            if is_tensor:
+                result["namedVariables"] = 6
+        return result
+
+    def _tensor_variables(self, reference: int, arguments: dict[str, Any]) -> list[dict[str, Any]]:
+        entry = getattr(self, "inspection_references", {}).get(reference)
+        if entry is None:
+            return []
+        value, expression = entry
+        is_tensor = hasattr(value, "detach")
+        variables = []
+        if is_tensor and arguments.get("filter") != "indexed":
+            for name, item in (("shape", value.shape), ("dtype", value.dtype),
+                               ("device", value.device), ("ndim", value.ndim),
+                               ("requires_grad", value.requires_grad), ("numel", value.numel())):
+                child = f"{expression}.{name}" + ("()" if name == "numel" else "")
+                variables.append({"name": name, "evaluateName": child,
+                                  **self._tensor_description(item, child, variable=True)})
+        if arguments.get("filter") != "named":
+            length = int(value.shape[0]) if is_tensor and value.ndim else (len(value) if not is_tensor else 0)
+            start = max(0, int(arguments.get("start", 0)))
+            count = min(256, max(0, int(arguments.get("count", 100))))
+            for position in range(start, min(length, start + count)):
+                child = f"{expression}[{position}]"
+                variables.append({"name": f"[{position}]", "evaluateName": child,
+                                  **self._tensor_description(value[position], child, variable=True)})
+        return variables
+
     def _vector(self, name: str) -> tuple[float, ...]:
         if name == "logits":
             for state in self.trace:
                 if state.layer.name == "vocabulary_projection":
                     return state.output_vector
-            raise ValueError("logits are not available before vocabulary projection")
+            raise DebugActionError("logits are not available before vocabulary projection")
         if name == "x":
             return self.outer_state.input_vector
         if name == "input":
@@ -2998,7 +3539,7 @@ class LLMDebugAdapter:
             return self.outer_state.details[name]
         if self.previous_state is not None and name in self.previous_state.details:
             return self.previous_state.details[name]
-        raise ValueError(f"unknown vector: {name}")
+        raise DebugActionError(f"unknown vector: {name}")
 
     def _vector_snapshot(self) -> dict[str, Any]:
         input_vector = self._vector("input")
@@ -3029,14 +3570,14 @@ class LLMDebugAdapter:
         if expression.startswith("[") or expression.startswith("("):
             value = ast.literal_eval(expression)
             if not isinstance(value, (list, tuple)):
-                raise ValueError("pasted vector must be a list or tuple")
+                raise DebugActionError("pasted vector must be a list or tuple")
             return tuple(float(item) for item in value)
         match = re.fullmatch(
             r"([a-z_][a-z0-9_]*)(?:\[(\d*)?:(\d*)?(?::(\d+))?\])?",
             expression,
         )
         if match is None:
-            raise ValueError("vector must be a vector name, slice, list, or tuple")
+            raise DebugActionError("vector must be a vector name, slice, list, or tuple")
         name, raw_start, raw_stop, raw_step = match.groups()
         vector = self._vector(name)
         if "[" not in expression:
@@ -3049,37 +3590,153 @@ class LLMDebugAdapter:
             )
         ]
 
-    def _render_plot(self, expression: str, code: str) -> dict[str, Any]:
+    def _decode_expressions(self, expression: str, loop: Any = None) -> dict[str, Any]:
+        if loop is None:
+            return self._decode_expression(expression)
+        if not isinstance(loop, dict):
+            raise DebugActionError("Loop settings must contain a variable, start, and stop.")
+        variable = loop.get("variable", "i")
+        if not isinstance(variable, str) or not variable.isidentifier() or keyword.iskeyword(variable):
+            raise DebugActionError("Loop variable must be a valid Python identifier.")
+        start, stop = loop.get("start", 0), loop.get("stop")
+        if type(start) is not int or type(stop) is not int or not 1 <= stop - start <= 64:
+            raise DebugActionError("Loop needs integer bounds and 1–64 iterations; stop is exclusive.")
+        try:
+            tree = ast.parse(expression, mode="eval")
+        except SyntaxError as error:
+            raise DebugActionError("Invalid tensor expression.") from error
+        if not any(isinstance(node, ast.Name) and node.id == variable for node in ast.walk(tree)):
+            raise DebugActionError(f"Use the loop variable {variable} in the tensor expression.")
+        results = []
+        for value in range(start, stop):
+            class BindVariable(ast.NodeTransformer):
+                def visit_Name(self, node):
+                    return ast.copy_location(ast.Constant(value=value), node) if node.id == variable else node
+            bound = ast.unparse(BindVariable().visit(ast.parse(expression, mode="eval")))
+            try:
+                result = self._decode_expression(bound)
+            except DebugActionError as error:
+                result = {"expression": bound, "error": str(error)}
+            results.append({**result, "loopValue": value})
+        return {"expression": expression, "loop": {"variable": variable, "start": start, "stop": stop}, "results": results}
+
+    def _decode_expression(self, expression: str) -> dict[str, Any]:
+        """Read a model-width expression through every configured vocabulary lens."""
+        import torch
+        from llmdbg.residual_vocabulary_lenses import activate, configured_lenses
+        from llmdbg.workspace_lens import resolve_view_site
+        if self.execution is None:
+            raise DebugActionError("Start and pause a model debug session first.")
+        tensor = self._inspect_expression(expression)
+        if tensor is None or not torch.is_tensor(tensor):
+            raise DebugActionError("Enter a tensor expression, for example normalized - x.")
+        vector = tensor.detach().squeeze()
+        width = int(self.execution.runtime.model.get_output_embeddings().weight.shape[1])
+        if vector.ndim != 1 or vector.numel() != width:
+            raise DebugActionError(f"Decoder needs one model-width vector ({width} values); got shape {tuple(tensor.shape)}. Select a slice or project it into residual space; tensors are not flattened automatically.")
+        if not bool(torch.isfinite(vector).all()):
+            raise DebugActionError("Vector contains NaN or infinity.")
+        current_layer = self._transformer_layer_index(self.outer_state.layer.name)
+        layer = current_layer
+        layer = (0 if self.outer_state.layer.name == "token_embedding" else len(self.execution.runtime.layers) - 1) if layer is None else layer
+        if not 0 <= layer < len(self.execution.runtime.layers):
+            raise DebugActionError("Layer is outside the model's layer range.")
+        phase = self._current_lens_phase()
+        site = "embed" if self.outer_state.layer.name == "token_embedding" else "pre" if phase <= 1 else "mid" if phase <= 3 else "post"
+        source_site, source_layer = ("embed", None) if site == "embed" else resolve_view_site("residual-" + site, layer)
+        values = tuple(vector.float().cpu().tolist())
+        entries = [{"id": "logit", "label": "Logit Lens", "method": "logit"}]
+        entries.extend(item for item in configured_lenses() if item.get("enabled", True))
+        rows = []
+        for item in entries:
+            method = item["method"]
+            row = {"id": item["id"], "label": item["label"], "method": method}
+            self._console(f"Decoding expression with {item['label']}; uncached lens artifacts may be downloaded and loaded.")
+            try:
+                if item.get("models") and self.model_name not in item["models"]:
+                    raise LensUnavailable("This lens is not configured for the current model.")
+                with activate(None if method == "logit" else item["id"]):
+                    projection = self.execution.vector_lens(
+                        self.outer_state.layer.name, values, source_site=source_site, source_layer=source_layer,
+                        include_logit_lens=method == "logit", include_j_lens=method == "j",
+                        include_r_lens=method == "r", include_jpp_lens=method == "jpp",
+                    )
+                tokens = getattr(projection, {"logit": "vocabulary", "j": "j_lens", "r": "r_lens", "jpp": "jpp_lens"}[method])
+                if not tokens:
+                    raise LensUnavailable(f"No fitted map for {self.model_name} at the current context (layer {layer}).")
+                metadata = getattr(projection, method + "_lens_metadata", None) if method != "logit" else None
+                row.update(tokens=[{"id": t.token_id, "text": t.text, "score": t.score} for t in tokens], metadata=metadata)
+            except (LensUnavailable, FileNotFoundError):
+                continue  # A lens without a fitted map has no row in this panel.
+            except Exception as error:
+                row["error"] = " ".join(str(error).splitlines())
+            rows.append(row)
+        lines = self._internal_source_lines() if self.inside_internal else self.source_lines
+        line_index = self.mlp_step_index if self.inside_internal else self.layer_index
+        return {"expression": expression, "shape": list(tensor.shape), "norm": float(vector.float().norm()),
+                "tokenPosition": self.token_index, "token": self.tokens[self.token_index], "layer": layer,
+                "site": site, "sourceSite": source_site, "sourceLayer": source_layer,
+                "sourceLine": lines[line_index] if line_index < len(lines) else None,
+                "rows": rows}
+
+    def _render_plot(self, expression: str, code: str, *, shape_action: str | None = None) -> dict[str, Any]:
         """Run an explicitly user-selected Matplotlib snippet and return a PNG."""
         if not code.strip():
-            raise ValueError("plot code is empty")
+            raise DebugActionError("plot code is empty")
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         import numpy as np
 
-        vector = self._plot_vector(expression)
+        tensor = self._inspect_expression(expression)
+        if tensor is not None and hasattr(tensor, "detach"):
+            original_shape = list(tensor.shape)
+            vector = tensor.detach().reshape(-1).float().cpu().numpy()
+        else:
+            vector = self._plot_vector(expression)
+            original_shape = [len(vector)]
         plt.close("all")
         namespace: dict[str, Any] = {
             "plt": plt,
             "np": np,
             "vector": np.asarray(vector, dtype=float),
             "vector_name": expression,
+            "original_shape": tuple(original_shape),
+            "PlotInputError": DebugActionError,
+            "PlotShapeError": PlotShapeError,
+            "heatmap_axis": {"prepend": 0, "append": -1}.get(shape_action),
         }
         exec(compile(code, "<llmdbg plot snippet>", "exec"), namespace, namespace)
         plot = namespace.get("plot")
         if callable(plot):
-            figure = plot(namespace["vector"], expression, plt, np) or plt.gcf()
+            try:
+                figure = plot(namespace["vector"], expression, plt, np) or plt.gcf()
+            except PlotShapeError as error:
+                plt.close("all")
+                self._console(f"Warning: {error}", warning=True)
+                return {
+                    "error": str(error),
+                    "shapeActions": [
+                        {"action": "prepend", "label": f"Add dimension at front → [1, {len(vector)}]"},
+                        {"action": "append", "label": f"Add dimension at end → [{len(vector)}, 1]"},
+                    ],
+                }
         else:
             # Keep old snippets usable when sent by an older extension.
             figure = namespace.get("fig") or plt.gcf()
         output = io.BytesIO()
         figure.savefig(output, format="png", dpi=120, bbox_inches="tight")
+        plot_shape = getattr(figure, "_llmdbg_plot_shape", None)
+        shape_description = (
+            f"shape {original_shape} → heatmap {list(plot_shape)} · {len(vector)} values"
+            if plot_shape is not None else
+            f"shape {original_shape} · {len(vector)} values (flattened)"
+        )
         plt.close("all")
         return {
             "image": base64.b64encode(output.getvalue()).decode("ascii"),
             "meta": (
-                f"{expression} · {len(vector)}D · token {self.token_index} "
+                f"{expression} · {shape_description} · token {self.token_index} "
                 f"{self.tokens[self.token_index]!r} · {self.state.layer.name}"
             ),
         }
@@ -3101,15 +3758,15 @@ class LLMDebugAdapter:
     def _measure_cosine(self, vector_a: str, vector_b: str) -> dict[str, Any]:
         """Measure the exact cosine and angle between two retained Lens vectors."""
         if vector_a not in self.measurement_vectors or vector_b not in self.measurement_vectors:
-            raise ValueError("one or both selected vectors are no longer available")
+            raise DebugActionError("one or both selected vectors are no longer available")
         label_a, a = self.measurement_vectors[vector_a]
         label_b, b = self.measurement_vectors[vector_b]
         if len(a) != len(b):
-            raise ValueError("selected vectors have different dimensions")
+            raise DebugActionError("selected vectors have different dimensions")
         norm_a = sum(value * value for value in a) ** 0.5
         norm_b = sum(value * value for value in b) ** 0.5
         if norm_a == 0.0 or norm_b == 0.0:
-            raise ValueError("cosine is undefined for a zero-length vector")
+            raise DebugActionError("cosine is undefined for a zero-length vector")
         cosine = max(
             -1.0,
             min(1.0, sum(x * y for x, y in zip(a, b, strict=True)) / (norm_a * norm_b)),
@@ -3126,6 +3783,108 @@ class LLMDebugAdapter:
             "dimensions": len(a),
         }
 
+    @staticmethod
+    def _delta_memory_write(state: Any) -> Any:
+        """Beta-scaled value correction before the key-addressed outer product."""
+        required = ('delta_previous_memory', 'delta_key', 'delta_value', 'delta_decay', 'delta_beta')
+        if any(name not in state.tensors for name in required):
+            raise LensUnavailable("DeltaNet Memory Write Lens requires expanded DeltaNet memory captures; restart the debug run with convolved_qkv and update_memory")
+        memory, key, value, decay, beta = (state.tensors[name].detach().float() for name in required)
+        key, value = key[:, 0], value[:, 0]
+        decayed = memory * decay[:, 0, :, None, None]
+        predicted = (decayed * key.unsqueeze(-1)).sum(-2)
+        return (beta[:, 0, :, None] * (value - predicted)).flatten()
+
+    def _attention_head_lens_snapshot(self, value_mode: bool = False, write_mode: bool = False, **lens_flags: bool) -> dict[str, Any]:
+        """Decode each mixed head after its bias-free output projection."""
+        import torch
+        names = {"attention", "full_attention", "gated_linear_attention"}
+        inside = self.inside_internal and self._function_name_for_path(self.outer_state.layer.name) in names
+        state = self.outer_state if inside else self._prior_operation_state(*names)
+        if self.execution is None or state is None:
+            raise LensUnavailable("Attention head outputs are available after attention mixing completes")
+        function = self._function_name_for_path(state.layer.name)
+        delta = function == "gated_linear_attention"
+        if write_mode and not delta:
+            raise LensUnavailable("DeltaNet Memory Write Lens requires a DeltaNet layer")
+        raw_mode = value_mode or write_mode
+        detail = "gated_delta_mixing" if delta else "attention_mixing" if function == "attention" else "full_attention_mixing"
+        if value_mode:
+            detail = "delta_value" if delta else "attention_qkv" if function == "attention" else "attention_value"
+        if write_mode:
+            detail = "delta_updated_memory"
+        complete = not inside or any(
+            captured == ("delta_qkv" if value_mode and delta else detail) and not (self._core_info() and operation == self._core_info()["name"])
+            for operation, captured, _meaning in self.internal_steps[:self.mlp_step_index]
+        )
+        if not complete or detail not in state.details:
+            if write_mode:
+                raise LensUnavailable("DeltaNet Memory Write Lens is available after update_memory completes and requires expanded DeltaNet captures")
+            raise LensUnavailable("Head values are available after value projection (DeltaNet requires expanded convolved_qkv capture)" if value_mode
+                                  else "Attention head outputs are available after attention mixing completes")
+        layer = self._transformer_layer_index(state.layer.name)
+        runtime = self.execution.runtime
+        weights = self._attention_output_weight(layer)
+        config = runtime.model.config
+        config = getattr(config, "text_config", config)
+        heads = int(config.linear_num_value_heads if delta else config.n_head if runtime.architecture == "gpt2" else config.num_attention_heads)
+        mixed = (self._delta_memory_write(state).to(weights.device) if write_mode else
+                 torch.tensor(state.details[detail], device=weights.device, dtype=weights.dtype).flatten())
+        value_heads = heads
+        if value_mode:
+            if function == "attention":
+                mixed = mixed.chunk(3)[2]
+            elif not delta:
+                value_heads = int(config.num_key_value_heads)
+                if heads % value_heads:
+                    raise LensUnavailable("Unsupported grouped-query value head layout")
+                mixed = mixed.reshape(value_heads, -1).repeat_interleave(heads // value_heads, dim=0).flatten()
+        if heads <= 0 or mixed.numel() != weights.shape[0] or mixed.numel() % heads:
+            raise LensUnavailable("Unsupported attention head layout")
+        width = mixed.numel() // heads
+        results = []
+        def tokens(items):
+            return [{"rank": rank, "id": item.token_id, "text": item.text, "logit": item.score}
+                    for rank, item in enumerate(items[:5], 1)]
+        projected_heads = []
+        for head in range(heads):
+            start, stop = head * width, (head + 1) * width
+            vector = mixed[start:stop].float() @ weights[start:stop].float()
+            norm = float(vector.norm())
+            reference = None if write_mode else attention_head_norm_scale(self.model_name, state.layer.name, head, **({'value': True} if value_mode else {}))
+            scale = float(reference["scale"]) if reference else None
+            projected_heads.append((head, norm, tuple(vector.cpu().tolist()), scale))
+        calibrated = all(item[3] is not None for item in projected_heads)
+        projected_heads.sort(key=lambda item: (-(item[1] / item[3] if calibrated else item[1]), item[0]))
+        for head, norm, vector, scale in projected_heads[:5]:
+            projection = self.execution.vector_lens(
+                state.layer.name, vector, source_site="mid", source_layer=layer, token_count=5, **lens_flags,
+            )
+            result = {"index": head, "headDimension": width, "vectorNorm": norm,
+                      "normScale": scale, "relativeNorm": norm / scale if scale else None,
+                      "calibrationError": None if scale or write_mode else "Missing calibrated value-head reference (× unavailable)" if value_mode else "Missing calibrated head reference (× unavailable)",
+                      "measurementId": self._register_measurement_vector(f"{'Memory write' if write_mode else 'Head value' if value_mode else 'Attention head'} {head} [layer {layer}]", tuple(vector))}
+            if raw_mode:
+                result['valueHead'] = head // (heads // value_heads)
+            if delta and not raw_mode:
+                result['memoryTokenContributions'] = {'layer':state.layer.name, 'head':head, 'tokenPosition':self.token_index}
+            for method, attribute, key in (("logit", "vocabulary", "logit"), ("j", "j_lens", "jLens"), ("r", "r_lens", "rLens"), ("jpp", "jpp_lens", "jppLens")):
+                result[key + "Tokens"] = tokens(getattr(projection, attribute, ()))
+                metadata = getattr(projection, method + "_lens_metadata", None)
+                result[key + "Fallback"] = bool(metadata and metadata.get("fallback"))
+            results.append(result)
+            result['channels'] = [] if raw_mode else self._neuron_lens_snapshot(
+                view='attention-neurons', attention_head=head, **lens_flags,
+            )['neurons'][:3]
+        view = "delta-memory-write" if write_mode else "attention-head-values" if value_mode else "attention-heads"
+        return {"view": view, "label": "DeltaNet Memory Write Lens" if write_mode else "Attention Head Value Lens" if value_mode else "Attention Head Lens",
+                "tokenPosition": self.token_index, "token": self.tokens[self.token_index],
+                "layer": state.layer.name, "transformerLayer": layer,
+                "isFinalLayer": self._is_final_transformer_layer(state.layer.name),
+                "saved": self._lens_result_is_saved(view, state.layer.name),
+                "ranking": "raw-write-norm" if write_mode else "calibrated-value-norm" if value_mode and calibrated else "calibrated-norm" if calibrated else "raw-norm-missing-calibration",
+                "heads": results}
+
     def _neuron_lens_snapshot(
         self,
         view: str = "neurons",
@@ -3133,11 +3892,19 @@ class LLMDebugAdapter:
         include_j_lens: bool = False,
         include_r_lens: bool = False,
         include_jpp_lens: bool = False,
+        attention_head: int | None = None,
     ) -> dict[str, Any]:
         """Describe top MLP neurons through direct and residual-transport lenses."""
         if not self.trace:
-            raise ValueError(
+            raise LensUnavailable(
                 "Lens data is not available until execution reaches its first breakpoint"
+            )
+        if view in {"attention-heads", "attention-head-values", "delta-memory-write"}:
+            return self._attention_head_lens_snapshot(
+                value_mode=view == "attention-head-values",
+                write_mode=view == "delta-memory-write",
+                include_logit_lens=include_logit_lens, include_j_lens=include_j_lens,
+                include_r_lens=include_r_lens, include_jpp_lens=include_jpp_lens,
             )
         jpp_lens_label = "J++ Lens"
         if include_jpp_lens:
@@ -3155,13 +3922,13 @@ class LLMDebugAdapter:
                 "residual-pre", "attention-output", "residual-mid",
                 "mlp-output", "residual-post",
             }:
-                raise ValueError(f"unknown ICA lens view: {requested_view}")
+                raise DebugActionError(f"unknown ICA lens view: {requested_view}")
         if view not in {
             "neurons", "attention-neurons", "attention-output",
             "mlp-output", "residual-pre", "residual-mid", "residual-post",
             "residual-input", "residual-output", "residual-stream",
         }:
-            raise ValueError(f"unknown lens view: {view}")
+            raise DebugActionError(f"unknown lens view: {view}")
         previous_state = self.previous_state
         inside_mlp = (
             self.inside_internal
@@ -3263,7 +4030,7 @@ class LLMDebugAdapter:
 
         if view not in {"neurons", "attention-neurons"}:
             if self.execution is None:
-                raise ValueError("a loaded model is required for vector lenses")
+                raise DebugActionError("a loaded model is required for vector lenses")
             if view in {"residual-pre", "residual-input", "residual-stream"}:
                 attention_names = (
                     "attention", "full_attention", "gated_linear_attention"
@@ -3286,7 +4053,7 @@ class LLMDebugAdapter:
                     ):
                         result_state = self.outer_state
                 if result_state is None:
-                    raise ValueError(
+                    raise LensUnavailable(
                         "Residual Lens · Pre requires an attention operation in the current block"
                     )
                 layer = result_state.layer.name
@@ -3301,8 +4068,8 @@ class LLMDebugAdapter:
                     in {"attention", "full_attention", "gated_linear_attention"}
                 )
                 if inside_attention:
-                    if self.internal_steps[self.mlp_step_index][0] != "residual_add":
-                        raise ValueError(
+                    if not any(step[0]=='residual_add' for step in self.internal_steps[:self.mlp_step_index+1]):
+                        raise LensUnavailable(
                             "Residual Lens · Mid is available after attention residual addition"
                         )
                     result_state = self.outer_state
@@ -3311,7 +4078,7 @@ class LLMDebugAdapter:
                         "attention", "full_attention", "gated_linear_attention"
                     )
                     if result_state is None:
-                        raise ValueError(
+                        raise LensUnavailable(
                             "Residual Lens · Mid is available after attention completes"
                         )
                 layer = result_state.layer.name
@@ -3321,12 +4088,17 @@ class LLMDebugAdapter:
                     result_state, "attention update"
                 )
             elif view in {"residual-post", "residual-output"}:
-                if self.inside_internal:
+                is_gemma4 = getattr(getattr(self.execution, "runtime", None), "architecture", "") == "gemma4"
+                if is_gemma4:
+                    result_state = prior_operation("layer_scale")
+                    if result_state is None:
+                        raise LensUnavailable("Residual Lens · Post is available after per-layer embedding and layer scaling complete")
+                elif self.inside_internal:
                     if (
                         self._function_name_for_path(self.outer_state.layer.name) != "mlp"
-                        or self.internal_steps[self.mlp_step_index][0] != "residual_add"
+                        or not any(step[0]=='residual_add' for step in self.internal_steps[:self.mlp_step_index+1])
                     ):
-                        raise ValueError(
+                        raise LensUnavailable(
                             "Residual Lens · Post is available after MLP residual addition"
                         )
                     result_state = self.outer_state
@@ -3334,9 +4106,9 @@ class LLMDebugAdapter:
                     result_state = prior_operation("mlp")
                 if (
                     result_state is None
-                    or self._function_name_for_path(result_state.layer.name) != "mlp"
+                    or self._function_name_for_path(result_state.layer.name) != ("layer_scale" if is_gemma4 else "mlp")
                 ):
-                    raise ValueError(
+                    raise LensUnavailable(
                         "Residual Lens · Post is available after an MLP completes"
                     )
                 layer = result_state.layer.name
@@ -3355,7 +4127,7 @@ class LLMDebugAdapter:
                         "attention", "full_attention", "gated_linear_attention"
                     )
                 if attention_state is None:
-                    raise ValueError(
+                    raise LensUnavailable(
                         "Attention Output Lens is available after attention output projection completes"
                     )
                 projection_complete = not inside_attention or any(
@@ -3364,7 +4136,7 @@ class LLMDebugAdapter:
                 )
                 vector = attention_state.details.get("attention_projection")
                 if not projection_complete or vector is None:
-                    raise ValueError(
+                    raise LensUnavailable(
                         "Attention Output Lens is available after attention output projection completes"
                     )
                 result_state = attention_state
@@ -3385,7 +4157,7 @@ class LLMDebugAdapter:
                     result_state = prior_operation("mlp")
                     layer = result_state.layer.name if result_state is not None else ""
                 if result_state is None or not layer.endswith(".mlp"):
-                    raise ValueError("MLP Output Lens is available after an MLP completes")
+                    raise LensUnavailable("MLP Output Lens is available after an MLP completes")
                 projection_complete = not inside_mlp or any(
                     vector == "mlp_projection"
                     for _operation, vector, _meaning in self.internal_steps[: self.mlp_step_index]
@@ -3393,7 +4165,7 @@ class LLMDebugAdapter:
                 vector = result_state.details.get("mlp_projection")
                 label = "MLP output"
                 if not projection_complete or vector is None:
-                    raise ValueError("MLP Output Lens is available after down projection completes")
+                    raise LensUnavailable("MLP Output Lens is available after down projection completes")
                 activation = result_state.details.get("mlp_expansion")
                 geometry = getattr(self.execution, "component_fan_geometry", None)
                 if activation is not None and callable(geometry):
@@ -3466,7 +4238,7 @@ class LLMDebugAdapter:
                     vector_overrides=removed_vectors,
                 )
                 if not components:
-                    raise ValueError(
+                    raise DebugActionError(
                         f"ICA Lens is not available for {self.model_name}"
                     )
                 return {
@@ -3587,12 +4359,13 @@ class LLMDebugAdapter:
             }
         if view == "attention-neurons":
             neurons = self._top_attention_channels(
+                head_index=attention_head,
                 include_logit_lens=include_logit_lens,
                 include_j_lens=include_j_lens, include_r_lens=include_r_lens,
                 include_jpp_lens=include_jpp_lens,
             )
             if not neurons:
-                raise ValueError(
+                raise LensUnavailable(
                     "Attention Output Channel Lens is available after attention mixing completes"
                 )
             scale_record = attention_channel_activation_scale(
@@ -3606,7 +4379,7 @@ class LLMDebugAdapter:
             )
             scale_record = mlp_activation_scale(getattr(self, "model_name", ""), layer)
         if not neurons:
-            raise ValueError(
+            raise LensUnavailable(
                 "MLP Neuron Lens is available after an MLP activation has completed"
             )
         scale = float(scale_record["scale"]) if scale_record is not None else None
@@ -3649,6 +4422,15 @@ class LLMDebugAdapter:
                         neuron.vector,
                     ),
                     "activation": neuron.activation,
+                    "channelTokenContributions": (
+                        {"layer": layer, "channel": neuron.index, "tokenPosition": self.token_index,
+                         "hasImages": bool(self._prompt_images()),
+                         **self._attention_channel_head(result_state, neuron.index)}
+                        if view == "attention-neurons" and result_state is not None
+                        and "attention_weights" in result_state.tensors
+                        and "attention_cached_values" in result_state.tensors
+                        else None
+                    ),
                     "removed": neuron.index in self._removed_projected_components(
                         layer,
                         (
@@ -3773,8 +4555,43 @@ class LLMDebugAdapter:
             try:
                 if not self.handle(request):
                     break
+            except LensUnavailable as error:
+                self._console(f"Warning: {' '.join(str(error).splitlines())}", warning=True)
+                if request.get("command") == "llmdbg/neuronLens":
+                    view = str(request.get("arguments", {}).get("view", "neurons"))
+                    snapshot = {
+                        "view": view, "error": str(error), "unavailable": True,
+                    }
+                    mode = str(request.get("arguments", {}).get("mode", "logit"))
+                    key = (self.token_index, self.layer_index, self.inside_mlp,
+                           self.inside_attention, self.mlp_step_index, mode, view)
+                    self.lens_snapshot_cache[key] = snapshot
+                    self.send_response(request, snapshot)
+                else:
+                    self.send_response(request, success=False, message=str(error))
             except Exception as error:  # keep protocol errors visible to the client
-                self.send_response(request, success=False, message=str(error))
+                if isinstance(error, DebugActionError):
+                    self._console(f"Warning: {' '.join(str(error).splitlines())}", warning=True)
+                else:
+                    self.send_event("output", {
+                        "category": "stderr",
+                        "output": f"llmdbg: {request.get('command')} failed:\n{traceback.format_exc()}",
+                    })
+                if getattr(self, "_last_response_request", None) != request["seq"]:
+                    self.send_response(request, success=False, message=str(error))
+                if request.get("command") in {
+                    "next", "stepIn", "stepOut", "continue", "configurationDone", "pause",
+                }:
+                    # A failed internal step may reference a missing detail vector.
+                    # Recover at its enclosing layer, which still has valid residuals.
+                    self.inside_mlp = False
+                    self.inside_attention = False
+                    self.mlp_step_index = 0
+                    if self.trace and 0 <= self.layer_index < len(self.trace):
+                        self.stop("exception")
+                    else:
+                        self.send_event("terminated")
+                self.send_event("llmdbg/computationFailed", {"message": str(error)})
 
 
 def main() -> None:

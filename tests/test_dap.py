@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import io
 import subprocess
 import sys
 import tempfile
@@ -8,7 +9,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from llmdbg.dap import LLMDebugAdapter, SourceBreakpoint
+from llmdbg.dap import LLMDebugAdapter, LensUnavailable, ProtocolStream, SourceBreakpoint
 from llmdbg.activation_scales import (
     attention_channel_activation_scale,
     mlp_activation_scale,
@@ -33,6 +34,579 @@ def parse_frames(data: bytes) -> list[dict[str, object]]:
 
 
 class DAPIntegrationTest(unittest.TestCase):
+    def test_delta_memory_write_lens_decodes_beta_scaled_prediction_error(self) -> None:
+        import torch
+        from unittest.mock import Mock, patch
+        from llmdbg.dap import LensUnavailable
+        adapter = LLMDebugAdapter(ProtocolStream(io.BytesIO(), io.BytesIO()))
+        adapter.tokens = ('cat',)
+        adapter.model_name = 'test/model'
+        memory = torch.arange(8.).reshape(1,2,2,2)
+        key = torch.tensor([[[[1.,0.],[0.,1.]]]])
+        value = torch.tensor([[[[3.,5.],[4.,9.]]]])
+        decay, beta = torch.tensor([[[.5,.25]]]), torch.tensor([[[.2,.8]]])
+        predicted = torch.einsum('bhk,bhkv->bhv',key[:,0], memory*decay[:,0,:,None,None])
+        correction = beta[:,0,:,None]*(value[:,0]-predicted)
+        state = LayerState(Layer('model.layers.0.gated_linear_attention','attention','',1.,0.),(0.,)*3,(0.,)*3,'',
+                           {'delta_updated_memory': (0.,)*8})
+        state.tensors.update(delta_previous_memory=memory,delta_key=key,delta_value=value,delta_decay=decay,delta_beta=beta)
+        torch.testing.assert_close(adapter._delta_memory_write(state),correction.flatten())
+        updated = memory*decay[:,0,:,None,None]+key[:,0].unsqueeze(-1)*correction.unsqueeze(-2)
+        torch.testing.assert_close(updated-memory*decay[:,0,:,None,None],
+                                   key[:,0].unsqueeze(-1)*adapter._delta_memory_write(state).reshape(1,2,1,2))
+        adapter.trace = (state,LayerState(Layer('model.layers.0.mlp','mlp','',1.,0.),(0.,)*3,(0.,)*3,''))
+        adapter.layer_index = 1
+        adapter.execution = SimpleNamespace(runtime=SimpleNamespace(architecture='qwen35',model=SimpleNamespace(
+            config=SimpleNamespace(linear_num_value_heads=2))), vector_lens=Mock(return_value=SimpleNamespace(
+                vocabulary=(TokenScore(1,'cat',1.),),j_lens=(),r_lens=(),jpp_lens=())))
+        weight = torch.arange(12.).reshape(4,3)
+        with patch.object(adapter,'_attention_output_weight',return_value=weight):
+            result = adapter._neuron_lens_snapshot(view='delta-memory-write')
+            self.assertEqual(result['label'],'DeltaNet Memory Write Lens')
+            self.assertEqual(result['ranking'],'raw-write-norm')
+            for head,call in zip(result['heads'],adapter.execution.vector_lens.call_args_list):
+                h=head['index']
+                torch.testing.assert_close(torch.tensor(call.args[1]),correction[0,h] @ weight[h*2:(h+1)*2])
+                self.assertIsNone(head['relativeNorm'])
+                self.assertIsNone(head['calibrationError'])
+                self.assertEqual(head['channels'],[])
+            adapter.layer_index=0
+            adapter.inside_attention=True
+            adapter.configured_internal_steps={'gated_linear_attention':(
+                ('update_memory','delta_updated_memory',''),('read_memory','delta_readout',''))}
+            adapter.mlp_step_index=0
+            with self.assertRaisesRegex(LensUnavailable,'after update_memory'):
+                adapter._neuron_lens_snapshot(view='delta-memory-write')
+            adapter.mlp_step_index=1
+            self.assertEqual(len(adapter._neuron_lens_snapshot(view='delta-memory-write')['heads']),2)
+        del state.tensors['delta_key']
+        with self.assertRaisesRegex(LensUnavailable,'expanded DeltaNet'):
+            adapter._delta_memory_write(state)
+
+    def test_attention_head_value_lens_projects_values_and_expands_shared_kv(self) -> None:
+        import torch
+        from unittest.mock import Mock, patch
+        for architecture, function, detail, values in (
+            ('gpt2', 'attention', 'attention_qkv', (99.,)*8+(1.,2.,3.,4.)),
+            ('qwen3_vl', 'full_attention', 'attention_value', (1.,2.)),
+            ('qwen35', 'gated_linear_attention', 'delta_value', (1.,2.,3.,4.)),
+        ):
+            adapter = LLMDebugAdapter(ProtocolStream(io.BytesIO(), io.BytesIO()))
+            adapter.model_name = 'test/model'
+            path = ('transformer.h.0.' if architecture == 'gpt2' else 'model.layers.0.')+function
+            adapter.trace = (LayerState(Layer(path, 'attention', '', 1., 0.), (0.,)*3, (0.,)*3, '', {detail: values}),
+                             LayerState(Layer('model.layers.0.mlp', 'mlp', '', 1., 0.), (0.,)*3, (0.,)*3, ''))
+            adapter.layer_index = 1
+            adapter.tokens = ('cat',)
+            runtime = SimpleNamespace(architecture=architecture, model=SimpleNamespace(config=SimpleNamespace(
+                n_head=2, num_attention_heads=2, num_key_value_heads=1, linear_num_value_heads=2)))
+            adapter.execution = SimpleNamespace(runtime=runtime, vector_lens=Mock(return_value=SimpleNamespace(
+                vocabulary=(TokenScore(1,'cat',1.),), j_lens=(), r_lens=(), jpp_lens=())))
+            weight = torch.arange(12.).reshape(4,3)
+            with patch.object(adapter, '_attention_output_weight', return_value=weight):
+                result = adapter._neuron_lens_snapshot(view='attention-head-values')
+            self.assertEqual(result['label'], 'Attention Head Value Lens')
+            self.assertEqual(result['ranking'], 'raw-norm-missing-calibration')
+            expected = torch.tensor([1.,2.,1.,2.] if function=='full_attention' else [1.,2.,3.,4.])
+            for head, call in zip(result['heads'],adapter.execution.vector_lens.call_args_list):
+                start = head['index']*2
+                torch.testing.assert_close(torch.tensor(call.args[1]), expected[start:start+2] @ weight[start:start+2])
+                self.assertIsNone(head['relativeNorm'])
+                self.assertIn('Missing calibrated value-head',head['calibrationError'])
+                self.assertEqual(head['channels'], [])
+                self.assertEqual(head['valueHead'], 0 if function=='full_attention' else head['index'])
+            with patch.object(adapter,'_attention_output_weight',return_value=weight), patch(
+                'llmdbg.dap.attention_head_norm_scale',side_effect=lambda model,layer,head,*,value: {'scale':1. if head==0 else 10000.}) as lookup:
+                calibrated=adapter._neuron_lens_snapshot(view='attention-head-values')
+            self.assertTrue(all(call.kwargs=={'value':True} for call in lookup.call_args_list))
+            self.assertEqual(calibrated['ranking'],'calibrated-value-norm')
+            self.assertEqual(calibrated['heads'][0]['index'],0)
+            self.assertIsNone(calibrated['heads'][0]['calibrationError'])
+
+    def test_attention_head_lenses_project_every_head_without_bias(self) -> None:
+        import torch
+        from unittest.mock import Mock, patch
+        from llmdbg.dap import LensUnavailable
+        for architecture, function, detail in (("gpt2", "attention", "attention_mixing"), ("qwen3_vl", "full_attention", "full_attention_mixing"), ("qwen35", "gated_linear_attention", "gated_delta_mixing")):
+            adapter = LLMDebugAdapter(ProtocolStream(io.BytesIO(), io.BytesIO()))
+            adapter.model_name = 'test/model'
+            path = "transformer.h.0.attention" if architecture == "gpt2" else f"model.layers.0.{function}"
+            mixed = torch.arange(4.) + 1
+            weight = torch.arange(12.).reshape(4, 3)
+            projection = SimpleNamespace(weight=weight if architecture == "gpt2" else weight.T, bias=torch.ones(3)*100)
+            block = SimpleNamespace(attn=SimpleNamespace(c_proj=projection), self_attn=SimpleNamespace(o_proj=projection), linear_attn=SimpleNamespace(out_proj=projection))
+            runtime = SimpleNamespace(architecture=architecture, layers=[block], layer_kind=lambda _: function, model=SimpleNamespace(config=SimpleNamespace(n_head=2, num_attention_heads=8 if function == 'gated_linear_attention' else 2, linear_num_value_heads=2)))
+            adapter.execution = SimpleNamespace(runtime=runtime, vector_lens=Mock(return_value=SimpleNamespace(norm=1., vocabulary=(TokenScore(1, "cat", 2.),), j_lens=(), r_lens=(), jpp_lens=())))
+            def head_channels(layer, activation, **kwargs):
+                count = runtime.model.config.n_head
+                width = len(activation)//count
+                start = kwargs['head_index']*width
+                return tuple(NeuronProjection(index=i, activation=activation[i], direction_norm=1., vocabulary=(), contribution=()) for i in range(start, min(start+3,start+width)))
+            adapter.execution.top_attention_channels = Mock(side_effect=head_channels)
+            adapter.trace = (LayerState(Layer(path, "attention", "", 1., 0.), (0.,)*3, (0.,)*3, "", {detail: tuple(mixed.tolist())}), LayerState(Layer("model.layers.0.mlp", "mlp", "", 1., 0.), (0.,)*3, (0.,)*3, ""))
+            adapter.tokens = ("test",)
+            adapter.trace[0].details['attention_projection'] = (0.,)*3
+            adapter.layer_index = 1
+            result = adapter._neuron_lens_snapshot(view="attention-heads")
+            self.assertEqual([head["index"] for head in result["heads"]], [1, 0])
+            calls = adapter.execution.vector_lens.call_args_list
+            vectors = [torch.tensor(call.args[1]) for call in calls]
+            torch.testing.assert_close(vectors[0], mixed[2:] @ weight[2:])
+            torch.testing.assert_close(vectors[1], mixed[:2] @ weight[:2])
+            torch.testing.assert_close(sum(vectors), mixed @ weight)
+            self.assertEqual(calls[0].kwargs["source_site"], "mid")
+            self.assertEqual(calls[0].kwargs["token_count"], 5)
+            self.assertIsNone(result["heads"][0]["relativeNorm"])
+            self.assertIn('unavailable', result["heads"][0]["calibrationError"])
+            self.assertEqual(result["heads"][0]["logitTokens"][0]["text"], "cat")
+            adapter.layer_index = 0
+            adapter.inside_attention = True
+            adapter.mlp_step_index = 0
+            with self.assertRaisesRegex(LensUnavailable, "mixing completes"):
+                adapter._neuron_lens_snapshot(view="attention-heads")
+            adapter.mlp_step_index = len(adapter.internal_steps) - 1
+            available = adapter._neuron_lens_snapshot(view="attention-heads")
+            self.assertEqual(len(available["heads"]), 2)
+            projection.weight = torch.ones(14, 3) if architecture == "gpt2" else torch.ones(3, 14)
+            runtime.model.config.n_head = runtime.model.config.num_attention_heads = 7
+            runtime.model.config.linear_num_value_heads = 7
+            adapter.trace[0].details[detail] = tuple(float(i) for i in range(14))
+            adapter.execution.vector_lens.reset_mock()
+            adapter.execution.vector_lens.return_value.vocabulary = tuple(TokenScore(i, str(i), float(i)) for i in range(10))
+            top = adapter._neuron_lens_snapshot(view="attention-heads")
+            self.assertEqual([head["index"] for head in top["heads"]], [6, 5, 4, 3, 2])
+            for head in top['heads']:
+                self.assertLessEqual(len(head['channels']), 3)
+                self.assertTrue(all(channel['index']//2 == head['index'] for channel in head['channels']))
+            self.assertEqual(adapter.execution.vector_lens.call_count, 5)
+            self.assertTrue(all(len(head["logitTokens"]) == 5 for head in top["heads"]))
+            with patch('llmdbg.dap.attention_head_norm_scale', side_effect=lambda model, layer, head: {"scale": 1. if head == 0 else 10000.}):
+                calibrated = adapter._neuron_lens_snapshot(view='attention-heads')
+            self.assertEqual(calibrated['ranking'], 'calibrated-norm')
+            self.assertEqual(calibrated['heads'][0]['index'], 0)
+            self.assertAlmostEqual(calibrated['heads'][0]['relativeNorm'], 3. ** .5, places=5)
+
+    def test_expression_decoder_loop(self) -> None:
+        from unittest.mock import Mock
+        from llmdbg.dap import DebugActionError
+        adapter = LLMDebugAdapter(ProtocolStream(io.BytesIO(), io.BytesIO()))
+        adapter._decode_expression = Mock(side_effect=[{"rows": []}, DebugActionError("bad slice"), {"rows": []}])
+        result = adapter._decode_expressions("mixed[0, 0, i*64:(i+1)*64] @ W_o[i*64:(i+1)*64, :]", {"variable": "i", "start": 0, "stop": 3})
+        self.assertEqual([item["loopValue"] for item in result["results"]], [0, 1, 2])
+        self.assertEqual(result["results"][1]["error"], "bad slice")
+        self.assertIn("0 * 64", adapter._decode_expression.call_args_list[0].args[0])
+        self.assertIn("2 * 64", adapter._decode_expression.call_args_list[2].args[0])
+        for loop in ({"variable": "for", "stop": 2}, {"variable": "i", "stop": 65}, {"variable": "i", "stop": 0}, {"variable": "i", "stop": 2.5}, {"variable": "j", "stop": 2}):
+            with self.assertRaises(DebugActionError):
+                adapter._decode_expressions("mixed[i]", loop)
+        adapter._decode_expression = Mock(return_value={"rows": []})
+        adapter._decode_expressions("mixed", None)
+        adapter._decode_expression.assert_called_once_with("mixed")
+
+    def test_expression_decoder_keeps_custom_lenses_separate_and_isolates_failures(self) -> None:
+        import torch
+        from unittest.mock import Mock, patch
+        from llmdbg.model_runtime import VectorProjection
+        from llmdbg.dap import DebugActionError
+        adapter = LLMDebugAdapter(ProtocolStream(io.BytesIO(), io.BytesIO()))
+        adapter.tokens = ("test",)
+        tensor = torch.arange(4.).reshape(1, 1, 4)
+        adapter.trace = (LayerState(Layer("model.layers.1.full_attention", "", "", 1., 0.), (1.,), (2.,), "", details={"normalized_input": (0., 1., 2., 3.)}, tensors={"input": torch.ones_like(tensor), "normalized_input": tensor, "matrix": torch.ones(2, 4)}),)
+        adapter.inside_attention = True
+        adapter.mlp_step_index = 1
+        adapter.function_bindings = {"full_attention": [{"name": "normalized", "operation": "input_layernorm", "line": 1}]}
+        adapter.execution = SimpleNamespace(runtime=SimpleNamespace(layers=[None] * 2, model=SimpleNamespace(get_output_embeddings=lambda: SimpleNamespace(weight=torch.zeros(8, 4)))))
+        token = TokenScore(1, "cat", 2.)
+        def project(_layer, values, **kwargs):
+            self.assertEqual(values, (-1., 0., 1., 2.))
+            if kwargs["include_r_lens"]:
+                raise RuntimeError("corrupt artifact")
+            return VectorProjection(1., (token,), j_lens=(token,), jpp_lens=(token,))
+        adapter.execution.vector_lens = Mock(side_effect=project)
+        entries = [{"id": method, "label": method, "method": method} for method in ("j", "r", "jpp")]
+        entries.append({"id": "other-j", "label": "Another J Lens", "method": "j"})
+        with patch("llmdbg.residual_vocabulary_lenses.configured_lenses", return_value=tuple(entries)):
+            result = adapter._decode_expression("normalized - x")
+        self.assertEqual(len(result["rows"]), 5)
+        self.assertEqual(result["sourceSite"], "post")
+        self.assertEqual(result["sourceLayer"], 0)
+        self.assertEqual(result["layer"], 1)
+        self.assertEqual(result["rows"][0]["tokens"][0]["text"], "cat")
+        self.assertIn("corrupt artifact", result["rows"][2]["error"])
+        self.assertEqual(result["rows"][-1]["label"], "Another J Lens")
+        self.assertEqual(adapter.execution.vector_lens.call_count, 5)
+        adapter.execution.vector_lens.side_effect = lambda *args, **kwargs: VectorProjection(1., (token,))
+        with patch("llmdbg.residual_vocabulary_lenses.configured_lenses", return_value=tuple(entries)):
+            missing = adapter._decode_expression("normalized - x")
+        self.assertEqual([row["id"] for row in missing["rows"]], ["logit"])
+        with self.assertRaisesRegex(DebugActionError, "not flattened"):
+            adapter._decode_expression("matrix")
+        with self.assertRaisesRegex(DebugActionError, "NaN or infinity"):
+            adapter._decode_expression("normalized / 0")
+
+    def test_attention_output_weight_expression(self) -> None:
+        import torch
+        from llmdbg.dap import DebugActionError
+        adapter = LLMDebugAdapter(ProtocolStream(io.BytesIO(), io.BytesIO()))
+        with self.assertRaisesRegex(DebugActionError, "paused model"):
+            adapter._inspect_expression("W_o")
+        mixed = torch.arange(4.).reshape(1, 1, 4)
+        adapter.trace = (LayerState(
+            Layer("transformer.h.0.attention", "attention", "attention", 1., 0.),
+            (1.,), (2.,), "test", tensors={"attention_mixing": mixed},
+        ),)
+        adapter.inside_attention = True
+        weight = torch.nn.Parameter(torch.arange(16.).reshape(4, 4))
+        runtime = SimpleNamespace(architecture="gpt2", layers=[SimpleNamespace(
+            attn=SimpleNamespace(c_proj=SimpleNamespace(weight=weight)))])
+        adapter.execution = SimpleNamespace(runtime=runtime)
+        torch.testing.assert_close(adapter._inspect_expression("mixed[0, 0, :2] @ W_o[:2, :]"), mixed[0, 0, :2] @ weight[:2])
+        inspected = adapter._inspect_expression("W_o")
+        self.assertFalse(inspected.requires_grad)
+        inspected.zero_()
+        self.assertNotEqual(weight.sum().item(), 0)
+        for kind, attribute, projection in (("full_attention", "self_attn", "o_proj"), ("gated_linear_attention", "linear_attn", "out_proj")):
+            runtime.architecture = "qwen3_5"
+            runtime.layer_kind = lambda layer, kind=kind: kind
+            runtime.layers = [SimpleNamespace(**{attribute: SimpleNamespace(**{projection: SimpleNamespace(weight=weight)})})]
+            torch.testing.assert_close(adapter._inspect_expression("W_o"), weight.T)
+
+    def test_tensor_arithmetic_for_watch_and_plot_is_non_mutating(self) -> None:
+        import torch
+        from llmdbg.dap import DebugActionError
+        adapter = LLMDebugAdapter(ProtocolStream(io.BytesIO(), io.BytesIO()))
+        adapter.tokens = ("test",)
+        tensor = torch.arange(4.).reshape(1, 1, 4)
+        adapter.trace = (LayerState(
+            Layer("model.layers.3.full_attention", "attention", "attention", 1., 0.),
+            (1.,), (2.,), "test", details={"normalized_input": (0., 1., 2., 3.)}, tensors={"input": torch.ones_like(tensor),
+            "normalized_input": tensor, "matrix": torch.ones(4, 2)},
+        ),)
+        adapter.inside_attention = True
+        adapter.mlp_step_index = 1
+        adapter.function_bindings = {"full_attention": [{"name": "normalized", "operation": "input_layernorm", "line": 1}]}
+        for expression, expected in (
+            ("normalized-x", tensor - 1),
+            ("(normalized + x) * 2 / 4", (tensor + 1) / 2),
+            ("-normalized + 2", -tensor + 2),
+            ("(normalized-x)[0, 0, :2]", (tensor - 1)[0, 0, :2]),
+            ("normalized[0, 0, 1*2:(1+1)*2]", tensor[0, 0, 2:4]),
+            ("normalized[0, 0, ::1+1]", tensor[0, 0, ::2]),
+            ("normalized[0, 0, (1+1)*1]", tensor[0, 0, 2]),
+            ("normalized @ matrix", tensor @ torch.ones(4, 2)),
+        ):
+            torch.testing.assert_close(adapter._inspect_expression(expression), expected)
+        self.assertIsNone(adapter._inspect_expression("normalized.add_(1)"))
+        self.assertIsNone(adapter._inspect_expression("__import__('os')"))
+        with self.assertRaises(DebugActionError):
+            adapter._inspect_expression("normalized ** 2")
+        with self.assertRaises(DebugActionError):
+            adapter._inspect_expression("normalized + matrix")
+        with self.assertRaisesRegex(DebugActionError, "integer"):
+            adapter._inspect_expression("normalized[0, 0, :4/2]")
+        torch.testing.assert_close(tensor, torch.arange(4.).reshape(1, 1, 4))
+        try:
+            import matplotlib
+        except ImportError:
+            return
+        result = adapter._render_plot("normalized-x", "fig, ax = plt.subplots(); ax.plot(vector)")
+        self.assertIn("shape [1, 1, 4]", result["meta"])
+        self.assertTrue(result["image"])
+
+    def test_nested_qwen_mixer_step_in_over_out_and_tuple_locals(self) -> None:
+        from llmdbg.config import load_debug_config
+        from llmdbg.demo_model import Layer, LayerState
+        from unittest.mock import Mock
+        source = Path(__file__).parents[2] / "llmdbg-usecase" / "Qwen35-2B-Vision.llmdbg.py"
+        adapter = LLMDebugAdapter(ProtocolStream(io.BytesIO(), io.BytesIO()))
+        adapter.execution = SimpleNamespace(runtime=SimpleNamespace(
+            layers=[object()], architecture="qwen3_5", layer_kind=lambda _: "gated_linear_attention",
+            state_name=lambda i, k: f"model.layers.{i}.{k}", final_norm_name="model.norm",
+        ))
+        adapter._configure_model_source(load_debug_config(str(source)))
+        adapter.trace = [LayerState(Layer("model.layers.0.gated_linear_attention", "", "", 1., 0.), (0.,), (0.,), "")]
+        adapter.layer_index = 0
+        adapter.inside_attention = True
+        adapter.stop = Mock()
+        adapter.mlp_step_index = 1
+        adapter.handle({"seq": 1, "command": "next"})
+        self.assertEqual(adapter.mlp_step_index, 9)
+        adapter.mlp_step_index = 1
+        adapter.handle({"seq": 2, "command": "stepIn"})
+        self.assertEqual(adapter._core_info()["name"], "gated_delta")
+        self.assertEqual(adapter.mlp_step_index, 2)
+        adapter.handle({"seq": 3, "command": "next"})
+        self.assertEqual(adapter._source_expression("query"), "delta_query")
+        adapter.handle({"seq": 4, "command": "next"})
+        self.assertEqual(adapter._source_expression("beta"), "delta_beta")
+        adapter.handle({"seq": 5, "command": "stepOut"})
+        self.assertEqual(adapter.mlp_step_index, 9)
+        self.assertIsNone(adapter._core_info())
+        adapter.trace = [LayerState(Layer("model.layers.0.full_attention", "", "", 1., 0.), (0.,), (0.,), "")]
+        adapter.mlp_step_index = 1
+        adapter.handle({"seq": 6, "command": "stepIn"})
+        self.assertEqual(adapter._core_info()["name"], "attention")
+        adapter.handle({"seq": 7, "command": "next"})
+        self.assertEqual(adapter._source_expression("query"), "attention_query")
+        adapter.handle({"seq": 8, "command": "stepOut"})
+        self.assertEqual(adapter.mlp_step_index, 10)
+
+    def test_nested_mixer_return_keeps_completed_mixed_local_and_breakpoint(self) -> None:
+        import torch
+        from unittest.mock import Mock, patch
+        from llmdbg.model_runtime import VectorProjection
+        source = Path(__file__).parents[2] / 'llmdbg-usecase/Qwen35-2B-Vision.llmdbg.py'
+        from llmdbg.config import load_debug_config
+        config = load_debug_config(source)
+        adapter = LLMDebugAdapter(ProtocolStream(io.BytesIO(), io.BytesIO()))
+        adapter.execution = SimpleNamespace(runtime=SimpleNamespace(
+            layers=[object()], architecture='qwen3_5', layer_kind=lambda _: 'gated_linear_attention',
+            state_name=lambda i,k:f'model.layers.{i}.{k}', final_norm_name='model.norm',
+            model=SimpleNamespace(get_output_embeddings=lambda:SimpleNamespace(weight=torch.zeros(3,4))),
+        ),vector_lens=Mock(return_value=VectorProjection(1.,(TokenScore(1,'cat',2.),))))
+        adapter._configure_model_source(config)
+        mixed = torch.arange(4.).reshape(1,1,4)
+        adapter.trace = [LayerState(Layer('model.layers.0.gated_linear_attention','','',1.,0.),(0.,)*4,(0.,)*4,'',
+            details={'gated_delta_mixing':tuple(mixed.flatten().tolist())},tensors={'gated_delta_mixing':mixed})]
+        adapter.tokens=('test',)
+        adapter.inside_attention=True
+        adapter.stop=Mock()
+        core=adapter.nested_cores['gated_linear_attention']
+        adapter.mlp_step_index=core['end']-1
+        self.assertNotIn('mixed',adapter._local_vector_names())
+        adapter.handle({'seq':1,'command':'next'})
+        self.assertEqual(adapter._active_function_name(),'gated_delta')
+        self.assertEqual(adapter.internal_steps[adapter.mlp_step_index][0],'return')
+        self.assertEqual(adapter._internal_source_lines()[adapter.mlp_step_index],config['functionReturns']['gated_delta']['line'])
+        self.assertIn('mixed',adapter._local_vector_names())
+        torch.testing.assert_close(adapter._inspect_expression('mixed'),mixed)
+        with patch('llmdbg.residual_vocabulary_lenses.configured_lenses',return_value=()):
+            self.assertEqual(adapter._decode_expression('mixed')['shape'],[1,1,4])
+        adapter.handle({'seq':2,'command':'next'})
+        self.assertIsNone(adapter._core_info())
+        self.assertEqual(adapter.internal_steps[adapter.mlp_step_index][0],'output_projection')
+        adapter.breakpoints=(SourceBreakpoint(config['functionReturns']['gated_delta']['line']),)
+        adapter.mlp_step_index=core['call']
+        adapter.handle({'seq':3,'command':'next'})
+        self.assertEqual(adapter.mlp_step_index,core['end'])
+        adapter.handle({'seq':4,'command':'stepOut'})
+        self.assertEqual(adapter.mlp_step_index,core['end']+1)
+
+        # The earlier inline-return form remains valid and adds no duplicate stop.
+        text=source.read_text().replace('mixed = block.gated_output_norm(readout, gate)\n    return mixed',
+                                        'return block.gated_output_norm(readout, gate)')
+        with tempfile.TemporaryDirectory() as directory:
+            old_source=Path(directory)/'old.llmdbg.py'
+            old_source.write_text(text)
+            old_config=load_debug_config(old_source)
+            adapter._configure_model_source(old_config)
+        self.assertNotIn('gated_delta',old_config['functionReturns'])
+        self.assertEqual(adapter.nested_cores['gated_linear_attention']['end'],7)
+
+    def test_attention_channel_details_map_query_heads_to_shared_value_heads(self) -> None:
+        import torch
+        state = SimpleNamespace(tensors={
+            "attention_weights": torch.empty(1, 8, 1, 3),
+            "attention_cached_values": torch.empty(1, 2, 3, 256),
+        })
+        self.assertEqual(LLMDebugAdapter._attention_channel_head(state, 1303), {
+            "queryHead": 5, "kvHead": 1, "dimension": 23, "headDimension": 256,
+        })
+
+    def test_gemma4_source_exposes_shared_attention_and_complete_block_output(self) -> None:
+        from llmdbg.config import load_debug_config
+        source = Path(__file__).parents[2] / "llmdbg-usecase" / "Gemma4-E2B.llmdbg.py"
+        adapter = LLMDebugAdapter(ProtocolStream(io.BytesIO(), io.BytesIO()))
+        adapter.execution = SimpleNamespace(runtime=SimpleNamespace(
+            layers=[object()] * 35, architecture="gemma4", has_per_layer_inputs=True,
+            layer_kind=lambda index: "full_attention",
+            state_name=lambda index, kind: f"model.layers.{index}.{kind}",
+            final_norm_name="model.norm",
+        ))
+        adapter._configure_model_source(load_debug_config(str(source)))
+        for operation in ("full_attention", "mlp", "per_layer_residual", "layer_scale"):
+            self.assertEqual(sum(path.endswith("." + operation) for path in adapter.step_paths), 35)
+        self.assertEqual(len(adapter.function_source_lines["full_attention"]), 9)
+        self.assertEqual(len(adapter.function_source_lines["mlp"]), 8)
+
+    def test_qwen3vl_source_exposes_all_attention_and_deepstack_steps(self) -> None:
+        from llmdbg.config import load_debug_config
+        source = Path(__file__).parents[2] / "llmdbg-usecase" / "Qwen3-VL-2B-Instruct.llmdbg.py"
+        adapter = LLMDebugAdapter(ProtocolStream(io.BytesIO(), io.BytesIO()))
+        adapter.execution = SimpleNamespace(runtime=SimpleNamespace(
+            layers=[object()] * 28, architecture="qwen3_vl", visual_layer_count=3,
+            layer_kind=lambda index: "full_attention",
+            state_name=lambda index, kind: f"model.layers.{index}.{kind}",
+            final_norm_name="model.norm",
+        ))
+        adapter._configure_model_source(load_debug_config(str(source)))
+        self.assertEqual(sum(path.endswith(".full_attention") for path in adapter.step_paths), 28)
+        self.assertEqual(sum(path.endswith(".visual_residual") for path in adapter.step_paths), 3)
+        self.assertEqual(len(adapter.function_source_lines["full_attention"]), 10)
+        self.assertEqual(len(adapter.function_source_lines["mlp"]), 7)
+
+    def test_visual_token_regions_use_processor_grid_and_validate_token_count(self) -> None:
+        adapter = LLMDebugAdapter(ProtocolStream(io.BytesIO(), io.BytesIO()))
+        adapter.messages = [{"role": "user", "content": [
+            {"type": "image", "url": "first.png"},
+            {"type": "image", "url": "second.png"},
+        ]}]
+        adapter.tokens = ("start",) + ("<|image_pad|>",) * 6 + ("between",) + ("<|image_pad|>",) * 4
+        adapter.execution = SimpleNamespace(image_grids=((1, 4, 6), (1, 4, 4)), image_merge_size=2)
+        first, second = adapter._prompt_images()
+        self.assertEqual((first["gridRows"], first["gridColumns"], first["startToken"], first["endToken"]), (2, 3, 1, 6))
+        self.assertEqual((second["gridRows"], second["gridColumns"], second["startToken"], second["endToken"]), (2, 2, 8, 11))
+        adapter.execution.image_grids = ((1, 4, 4), (1, 4, 4))
+        self.assertNotIn("regionMapping", adapter._prompt_images()[0])
+        self.assertEqual(adapter._prompt_images()[1]["regionMapping"], "merged-row-major")
+
+    def test_attention_token_contributions_use_correct_gqa_head_and_signed_values(self) -> None:
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch is needed for tensor inspection")
+        layer = "model.layers.3.full_attention"
+        weights = torch.zeros(1, 8, 1, 3)
+        weights[0, 6, 0] = torch.tensor([.25, .5, .25])
+        values = torch.zeros(1, 2, 3, 256)
+        values[0, 0, :, 97] = 100.  # The other KV head must not be used.
+        values[0, 1, :, 97] = torch.tensor([2., -4., 1.])
+        mixed = torch.zeros(1, 1, 2048)
+        mixed[0, 0, 1633] = -.625  # Output gate is distinct from raw token contributions.
+        adapter = LLMDebugAdapter(ProtocolStream(io.BytesIO(), io.BytesIO()))
+        adapter.tokens = ("first", "second", "current")
+        adapter.token_index = 2
+        adapter.trace = (LayerState(Layer(layer, "attention", "test", 1., 0.), (), (), "test", tensors={
+            "attention_weights": weights, "attention_cached_values": values,
+            "full_attention_mixing": mixed,
+        }),)
+        result = adapter._attention_token_contributions(layer, 1633, 2)
+        self.assertEqual((result["queryHead"], result["kvHead"], result["dimension"]), (6, 1, 97))
+        self.assertEqual([row["contribution"] for row in result["rows"]], [.5, -2., .25])
+        self.assertEqual(result["sum"], -1.25)
+        self.assertEqual(result["positiveSum"], .75)
+        self.assertEqual(result["negativeSum"], -2.)
+        self.assertEqual(result["mixedValue"], -.625)
+        self.assertEqual(result["stage"], "before-output-gate")
+        with self.assertRaisesRegex(ValueError, "another token"):
+            adapter._attention_token_contributions(layer, 1633, 1)
+        with self.assertRaisesRegex(ValueError, "Channel must be"):
+            adapter._attention_token_contributions(layer, 2048, 2)
+        adapter.trace = (LayerState(Layer(layer, "attention", "test", 1., 0.), (), (), "test"),)
+        with self.assertRaisesRegex(ValueError, "unavailable"):
+            adapter._attention_token_contributions(layer, 1633, 2)
+
+    def test_tensor_watch_preserves_shape_and_supports_indexing_and_expansion(self) -> None:
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch is needed for tensor inspection")
+        adapter = LLMDebugAdapter(ProtocolStream(io.BytesIO(), io.BytesIO()))
+        tensor = torch.arange(24, dtype=torch.float16).reshape(1, 2, 3, 4)
+        adapter.trace = (LayerState(
+            Layer("model.layers.3.full_attention", "attention", "attention", 1., 0.),
+            (1.,), (2.,), "test", tensors={"attention_cached_keys": tensor},
+        ),)
+        adapter.inside_attention = True
+        adapter.mlp_step_index = 5
+        adapter.function_bindings = {"full_attention": [
+            {"name": "keys", "operation": "cached_keys", "line": 5},
+        ]}
+        self.assertEqual(adapter._evaluate_body("keys.shape")["result"], "torch.Size([1, 2, 3, 4])")
+        self.assertEqual(adapter._evaluate_body("keys.dtype")["result"], "torch.float16")
+        self.assertEqual(adapter._evaluate_body("keys.size(-1)")["result"], "4")
+        self.assertEqual(adapter._evaluate_body("keys.numel()")["result"], "24")
+        self.assertEqual(adapter._evaluate_body("keys[0, 1, 2, 3]")["result"], "23.0")
+        sliced = adapter._evaluate_body("keys[0, 1, :, :2]")
+        retained = adapter.inspection_references[sliced["variablesReference"]][0]
+        self.assertTrue(torch.equal(retained, tensor[0, 1, :, :2]))
+        children = adapter._tensor_variables(sliced["variablesReference"], {"filter": "indexed", "start": 1, "count": 1})
+        self.assertEqual([child["name"] for child in children], ["[1]"])
+        self.assertEqual(children[0]["type"], "torch.Tensor")
+        self.assertIsNone(adapter._inspect_expression("keys.zero_()"))
+        self.assertEqual(tensor[0, 1, 2, 3].item(), 23.)
+
+    def test_tensor_snapshot_is_independent_and_keeps_dtype(self) -> None:
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch is needed for tensor inspection")
+        from llmdbg.model_runtime import _inspection_snapshots
+        source = torch.arange(6, dtype=torch.float16).reshape(1, 1, 6)
+        snapshots = _inspection_snapshots(source, None, {"keys": source})
+        source.zero_()
+        self.assertEqual(snapshots["keys"].sum().item(), 15.)
+        self.assertEqual(snapshots["keys"].dtype, torch.float16)
+        self.assertEqual(snapshots["keys"].shape, (1, 1, 6))
+        self.assertFalse(snapshots["keys"].requires_grad)
+
+    def test_invalid_comparison_warns_once_and_keeps_session_responsive(self) -> None:
+        requests = [
+            {"seq": 1, "type": "request", "command": "llmdbg/measureCosine", "arguments": {}},
+            {"seq": 2, "type": "request", "command": "disconnect"},
+        ]
+        output = io.BytesIO()
+        adapter = LLMDebugAdapter(ProtocolStream(io.BytesIO(b"".join(map(frame, requests))), output))
+        adapter.run()
+        messages = parse_frames(output.getvalue())
+        responses = [message for message in messages if message["type"] == "response"]
+        self.assertEqual([message["request_seq"] for message in responses], [1, 2])
+        self.assertFalse(responses[0]["success"])
+        self.assertTrue(responses[1]["success"])
+        warnings = [message for message in messages if message.get("event") == "output"]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("Warning:", warnings[0]["body"]["output"])
+        self.assertNotIn("Traceback", warnings[0]["body"]["output"])
+        self.assertTrue(any(message.get("event") == "llmdbg/computationFailed" for message in messages))
+
+    def test_unavailable_lens_does_not_report_an_internal_error(self) -> None:
+        request = {"seq": 1, "type": "request", "command": "llmdbg/neuronLens",
+                   "arguments": {"view": "residual-post", "mode": "logit"}}
+        output = io.BytesIO()
+        adapter = LLMDebugAdapter(ProtocolStream(io.BytesIO(frame(request)), output))
+        def unavailable(_request):
+            raise LensUnavailable("Residual Lens · Post is available after MLP residual addition")
+        adapter.handle = unavailable
+        adapter.run()
+        messages = parse_frames(output.getvalue())
+        responses = [message for message in messages if message["type"] == "response"]
+        warnings = [message for message in messages if message.get("event") == "output"]
+        self.assertEqual(len(responses), 1)
+        self.assertTrue(responses[0]["success"])
+        self.assertTrue(responses[0]["body"]["unavailable"])
+        self.assertEqual(len(warnings), 1)
+        self.assertEqual(warnings[0]["body"]["output"].count("\n"), 1)
+        self.assertIn("Warning:", warnings[0]["body"]["output"])
+        self.assertNotIn("Traceback", warnings[0]["body"]["output"])
+
+    def test_failed_acknowledged_step_recovers_and_accepts_disconnect(self) -> None:
+        requests = [
+            {"seq": 1, "type": "request", "command": "stepIn"},
+            {"seq": 2, "type": "request", "command": "disconnect"},
+        ]
+        output = io.BytesIO()
+        adapter = LLMDebugAdapter(ProtocolStream(io.BytesIO(b"".join(map(frame, requests))), output))
+        adapter.trace = (LayerState(Layer("test", "test", "test", 1., 0.), (1.,), (2.,), "test"),)
+        adapter.layer_index = 0
+        adapter.token_index = 0
+        original = adapter.handle
+
+        def fail_step(request):
+            if request["command"] == "stepIn":
+                adapter.send_response(request)
+                adapter.inside_attention = True
+                raise KeyError("attention_query")
+            return original(request)
+
+        adapter.handle = fail_step
+        adapter.run()
+        messages = parse_frames(output.getvalue())
+        responses = [message for message in messages if message["type"] == "response"]
+        self.assertEqual([message["request_seq"] for message in responses], [1, 2])
+        self.assertTrue(any(message.get("event") == "stopped" and message["body"]["reason"] == "exception" for message in messages))
+        self.assertTrue(any(message.get("event") == "output" and "KeyError" in message["body"]["output"] for message in messages))
+        self.assertFalse(adapter.inside_attention)
+
     def test_lens_before_first_breakpoint_has_a_clear_error(self) -> None:
         adapter = object.__new__(LLMDebugAdapter)
         adapter.trace = ()
