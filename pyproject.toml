@@ -31,3 +31,11 @@ llmdbg-dap = "llmdbg.dap:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/llmdbg"]
+
+[tool.uv.sources]
+jlens = { git = "https://github.com/anthropics/jacobian-lens.git" }
+
+[dependency-groups]
+dev = [
+    "jlens",
+]
