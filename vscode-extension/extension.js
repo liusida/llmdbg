@@ -10,263 +10,9 @@ const { selectProfile, profileRecipe } = require("./runtime-profiles");
 
 const execFile = util.promisify(childProcess.execFile);
 const LEGACY_PLOT_SNIPPETS_KEY = "llmdbg.plotSnippets";
-const GPT2_STARTER_FILE = "GPT-2.llmdbg.py";
 const DEFAULT_J_LENS_SOURCE = "hf://datasets/sida/llmdbg";
 const DEFAULT_R_LENS_SOURCE = "hf://datasets/sida/llmdbg";
 const DEFAULT_JPP_LENS_SOURCE = "hf://datasets/sida/llmdbg";
-const GPT2_STARTER_SOURCE = `from llmdbg import debug, gpt2, nop
-
-model = gpt2("openai-community/gpt2", device="auto", dtype="auto")
-prompt = "The capital of France is"
-tokens = model.tokenize(prompt)
-
-def attention(x, block):
-    normalized = block.layernorm(x)
-    qkv = block.qkv_projection(normalized)
-    mixed = block.attention_mixing(qkv)
-    update = block.output_projection(mixed)
-    return x + update
-
-def mlp(x, block):
-    normalized = block.layernorm(x)
-    hidden = block.expansion(normalized)
-    hidden = block.gelu(hidden)
-    update = block.projection(hidden)
-    return x + update
-
-with debug(model, tokens) as run:
-    for token in run.tokens:
-        x = model.token_embedding(tokens)
-        for layer, block in enumerate(model.layers):
-            nop()  # residual input
-            x = attention(x, block)
-            nop()  # residual after attention
-            x = mlp(x, block)
-            nop()  # residual after MLP
-
-        x = model.final_layernorm(x)
-        logits = model.vocabulary_projection(x)
-        predictions = model.top_tokens(logits, k=10)
-        nop()  # Stable breakpoint with predictions available.
-`;
-function qwen35StarterSource(modelId, options = {}) {
-  const revision = options.revision || "main";
-  const promptSource = options.chat
-    ? `messages = [
-    {"role": "system", "content": "You are a helpful assistant."},
-    {"role": "user", "content": "What is the capital of France?"},
-]
-tokens = model.chat(messages, add_generation_prompt=True, max_new_tokens=20)`
-    : `prompt = "The capital of France is"
-tokens = model.tokenize(prompt)`;
-  return `from llmdbg import debug, nop, qwen35
-
-model = qwen35(
-    "${modelId}",
-    revision="${revision}",
-    device="auto",
-    dtype="auto",
-)
-${promptSource}
-
-def full_attention(x, block):
-    normalized = block.input_layernorm(x)
-    query = block.query_projection(normalized)
-    key = block.key_projection(normalized)
-    value = block.value_projection(normalized)
-    keys = block.cached_keys(key)
-    values = block.cached_values(value)
-    weights = block.attention_weights(query, keys)
-    mixed = block.mix_values(weights, values)
-    update = block.output_projection(mixed)
-    return x + update
-
-def gated_linear_attention(x, block):
-    normalized = block.input_layernorm(x)
-    mixed = block.gated_delta(normalized)
-    update = block.output_projection(mixed)
-    return x + update
-
-def mlp(x, block):
-    normalized = block.post_attention_layernorm(x)
-    gate = block.gate_projection(normalized)
-    gate = block.silu(gate)
-    up = block.up_projection(normalized)
-    hidden = gate * up
-    update = block.down_projection(hidden)
-    return x + update
-
-with debug(model, tokens) as run:
-    for token in run.tokens:
-        x = model.token_embedding(tokens)
-        for layer, block in enumerate(model.layers):
-            nop()  # residual input
-            if block.kind == "full_attention":
-                x = full_attention(x, block)
-            else:
-                x = gated_linear_attention(x, block)
-            nop()  # residual after attention
-            x = mlp(x, block)
-            nop()  # residual after MLP
-
-        x = model.final_layernorm(x)
-        logits = model.vocabulary_projection(x)
-        predictions = model.top_tokens(logits, k=10)
-        nop()  # Stable breakpoint with predictions available.
-`;
-}
-const GEMMA2_STARTER_SOURCE = `from llmdbg import debug, gemma2, nop
-
-model = gemma2(
-    "google/gemma-2-2b-it",
-    revision="299a8560bedf22ed1c72a8a11e7dce4a7f9f51f8",
-    device="auto",
-    dtype="auto",
-)
-messages = [{"role": "user", "content": "What is the capital of France?"}]
-tokens = model.chat(messages, add_generation_prompt=True, max_new_tokens=20)
-
-def full_attention(x, block):
-    residual = x
-    normalized = block.input_layernorm(x)
-    mixed = block.full_attention(normalized)
-    projected = block.output_projection(mixed)
-    update = block.post_attention_layernorm(projected)
-    return residual + update
-
-def mlp(x, block):
-    residual = x
-    normalized = block.pre_feedforward_layernorm(x)
-    gate = block.gate_projection(normalized)
-    gate = block.gelu(gate)
-    up = block.up_projection(normalized)
-    hidden = gate * up
-    projected = block.down_projection(hidden)
-    update = block.post_feedforward_layernorm(projected)
-    return residual + update
-
-with debug(model, tokens) as run:
-    for token in run.tokens:
-        x = model.token_embedding(tokens)
-        for layer, block in enumerate(model.layers):
-            nop()  # residual input
-            x = full_attention(x, block)
-            nop()  # residual after attention
-            x = mlp(x, block)
-            nop()  # residual after MLP
-        x = model.final_layernorm(x)
-        logits = model.vocabulary_projection(x)
-        predictions = model.top_tokens(logits, k=10)
-        nop()  # Stable breakpoint with predictions available.
-`;
-const QWEN3VL_STARTER_SOURCE = `from llmdbg import debug, nop, qwen3vl
-
-model = qwen3vl("Qwen/Qwen3-VL-2B-Instruct", device="auto", dtype="auto")
-messages = [
-    {"role": "system", "content": "You are a helpful visual assistant."},
-    {"role": "user", "content": [
-        {"type": "image", "url": "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/pipeline-cat-chonk.jpeg"},
-        {"type": "text", "text": "What is in this picture? Answer briefly."},
-    ]},
-]
-tokens = model.chat(messages, add_generation_prompt=True, max_new_tokens=20)
-
-def full_attention(x, block):
-    normalized = block.input_layernorm(x)
-    query = block.query_projection(normalized)
-    key = block.key_projection(normalized)
-    value = block.value_projection(normalized)
-    keys = block.cached_keys(key)
-    values = block.cached_values(value)
-    weights = block.attention_weights(query, keys)
-    mixed = block.mix_values(weights, values)
-    update = block.output_projection(mixed)
-    return x + update
-
-def mlp(x, block):
-    normalized = block.post_attention_layernorm(x)
-    gate = block.gate_projection(normalized)
-    gate = block.silu(gate)
-    up = block.up_projection(normalized)
-    hidden = gate * up
-    update = block.down_projection(hidden)
-    return x + update
-
-with debug(model, tokens) as run:
-    for token in run.tokens:
-        x = model.token_embedding(tokens)
-        for layer, block in enumerate(model.layers):
-            nop()  # residual input
-            x = full_attention(x, block)
-            nop()  # residual after attention
-            x = mlp(x, block)
-            nop()  # residual after MLP
-            x = block.visual_residual(x)  # DeepStack injection in the early layers
-        x = model.final_layernorm(x)
-        logits = model.vocabulary_projection(x)
-        predictions = model.top_tokens(logits, k=10)
-        nop()  # Continue to generate the next token
-`;
-const GEMMA4_STARTER_SOURCE = `from llmdbg import debug, gemma4, nop
-
-model = gemma4("google/gemma-4-E2B-it", device="auto", dtype="auto")
-messages = [{"role": "user", "content": [
-    {"type": "image", "url": "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/pipeline-cat-chonk.jpeg"},
-    {"type": "text", "text": "What is in this picture? Answer briefly."},
-]}]
-tokens = model.chat(messages, add_generation_prompt=True, max_new_tokens=20)
-
-def full_attention(x, block):
-    normalized = block.input_layernorm(x)
-    query = block.query_projection(normalized)
-    keys = block.cached_keys(normalized)  # later layers share earlier layers' KV
-    values = block.cached_values(normalized)
-    weights = block.attention_weights(query, keys)
-    mixed = block.mix_values(weights, values)
-    projected = block.output_projection(mixed)
-    update = block.post_attention_layernorm(projected)
-    return x + update
-
-def mlp(x, block):
-    normalized = block.pre_feedforward_layernorm(x)
-    gate = block.gate_projection(normalized)
-    gate = block.gelu(gate)
-    up = block.up_projection(normalized)
-    hidden = gate * up
-    projected = block.down_projection(hidden)
-    update = block.post_feedforward_layernorm(projected)
-    return x + update
-
-with debug(model, tokens) as run:
-    for token in run.tokens:
-        x = model.token_embedding(tokens)
-        for layer, block in enumerate(model.layers):
-            nop()  # residual input
-            x = full_attention(x, block)  # native sliding/global attention
-            nop()  # residual after attention
-            x = mlp(x, block)
-            x = block.per_layer_residual(x)  # per-layer token-identity embedding
-            x = block.layer_scale(x)  # complete block output
-            nop()
-        x = model.final_layernorm(x)
-        logits = model.vocabulary_projection(x)
-        predictions = model.top_tokens(logits, k=10)
-        nop()
-`;
-const STARTER_FILES = [
-  [GPT2_STARTER_FILE, GPT2_STARTER_SOURCE],
-  ["Gemma2-2B-IT.llmdbg.py", GEMMA2_STARTER_SOURCE],
-  ["Gemma4-E2B.llmdbg.py", GEMMA4_STARTER_SOURCE],
-  ["Qwen3-VL-2B-Instruct.llmdbg.py", QWEN3VL_STARTER_SOURCE],
-  ["Qwen35-0.8B.llmdbg.py", qwen35StarterSource("Qwen/Qwen3.5-0.8B")],
-  ["Qwen35-2B-Base.llmdbg.py", qwen35StarterSource("Qwen/Qwen3.5-2B-Base")],
-  ["Qwen35-2B-Chat.llmdbg.py", qwen35StarterSource(
-    "Qwen/Qwen3.5-2B",
-    { chat: true, revision: "15852e8c16360a2fea060d615a32b45270f8a8fc" }
-  )],
-  ["Qwen35-9B.llmdbg.py", qwen35StarterSource("Qwen/Qwen3.5-9B")],
-  ["Qwen35-27B.llmdbg.py", qwen35StarterSource("Qwen/Qwen3.5-27B")]
-];
 const ACTIVE_FILE_LAUNCH_SOURCE = `${JSON.stringify({
   version: "0.2.0",
   configurations: [{
@@ -605,30 +351,37 @@ async function initializeProject() {
     folder = selected.folder;
   }
 
+  const starterRoot = path.join(__dirname, "bundled", "playground");
+  const catalog = JSON.parse(fs.readFileSync(path.join(starterRoot, "starters.json"), "utf8"));
+  // Check all packaged sources before creating any workspace files.
+  for (const file of catalog.files) fs.accessSync(path.join(starterRoot, file));
   const vscodeUri = vscode.Uri.joinPath(folder.uri, ".vscode");
   const launchUri = vscode.Uri.joinPath(vscodeUri, "launch.json");
   const created = [];
   const skipped = [];
-  for (const [file, source] of STARTER_FILES) {
+  for (const file of catalog.files) {
     const uri = vscode.Uri.joinPath(folder.uri, file);
     try {
       await vscode.workspace.fs.stat(uri);
       skipped.push(file);
-    } catch {
-      await vscode.workspace.fs.writeFile(uri, Buffer.from(source, "utf8"));
+    } catch (error) {
+      if (error.code !== "FileNotFound") throw error;
+      await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(uri, ".."));
+      await vscode.workspace.fs.copy(vscode.Uri.file(path.join(starterRoot, file)), uri, { overwrite: false });
       created.push(file);
     }
   }
   try {
     await vscode.workspace.fs.stat(launchUri);
     skipped.push(".vscode/launch.json");
-  } catch {
+  } catch (error) {
+    if (error.code !== "FileNotFound") throw error;
     await vscode.workspace.fs.createDirectory(vscodeUri);
     await vscode.workspace.fs.writeFile(launchUri, Buffer.from(ACTIVE_FILE_LAUNCH_SOURCE, "utf8"));
     created.push(".vscode/launch.json");
   }
 
-  const document = await vscode.workspace.openTextDocument(vscode.Uri.joinPath(folder.uri, GPT2_STARTER_FILE));
+  const document = await vscode.workspace.openTextDocument(vscode.Uri.joinPath(folder.uri, catalog.open));
   await vscode.window.showTextDocument(document);
   const summary = created.length ? `Created ${created.length} llmdbg starter file${created.length === 1 ? "" : "s"}.` : "The llmdbg starter files already exist.";
   const existing = skipped.length ? ` Left existing ${skipped.join(" and ")} unchanged.` : "";

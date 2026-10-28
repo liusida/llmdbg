@@ -67,7 +67,7 @@ with debug(model, tokens):
         self.assertEqual(config["prompt"], "")
 
     def test_loads_qwen35_multimodal_chat_program(self) -> None:
-        source = Path(__file__).parents[2] / "llmdbg-usecase" / "Qwen35-2B-Vision.llmdbg.py"
+        source = Path(__file__).parents[1] / "playground" / "Qwen35-Vision.llmdbg.py"
         config = load_debug_config(str(source))
 
         self.assertEqual(config["model"], "Qwen/Qwen3.5-2B")
@@ -77,7 +77,7 @@ with debug(model, tokens):
         self.assertIsInstance(image_source, str)
         self.assertTrue(image_source.lower().endswith((".jpg", ".jpeg", ".png", ".webp")))
         self.assertTrue(any(part["type"] == "text" for part in content))
-        self.assertEqual(config["maxNewTokens"], 20)
+        self.assertEqual(config["maxNewTokens"], 128)
 
     def test_qwen35_thinking_example_is_text_only_and_enables_thinking(self) -> None:
         from llmdbg.program import qwen35

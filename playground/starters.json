@@ -1,0 +1,11 @@
+{
+  "open": "GPT2-Text.llmdbg.py",
+  "files": [
+    "GPT2-Text.llmdbg.py",
+    "Qwen3-Chat.llmdbg.py",
+    "Qwen35-Vision.llmdbg.py",
+    "Qwen35-Thinking.llmdbg.py",
+    "Qwen3-MultiTurn.llmdbg.py",
+    "images/cat.jpg"
+  ]
+}

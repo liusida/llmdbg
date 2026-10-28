@@ -60,10 +60,11 @@ recorded explicitly in each fit manifest.
 The recommended format is now a real Python program named `gpt2.llmdbg.py`:
 
 For a new workspace, run **llmdbg: Create Starter Files** from the VS Code
-Command Palette. It creates examples for GPT-2 and every supported Qwen3.5
-size (0.8B, 2B, 9B, and 27B), plus a `.vscode/launch.json` entry that runs
-the currently active `.llmdbg.py` file,
-while leaving any existing files untouched.
+Command Palette. It copies five curated demos from `playground/`: GPT-2 Text,
+Qwen3 Chat, Qwen3.5 Vision, Qwen3.5 Thinking, and Qwen3 MultiTurn. It also copies
+the vision demo's image and creates a `.vscode/launch.json` entry that runs the
+currently active `.llmdbg.py` file. Existing files are left untouched. The GPT-2
+demo opens by default; model IDs can be edited near the top of each demo.
 
 `Qwen3-VL-2B-Instruct.llmdbg.py` supports image+text prompts with full attention
 at every decoder layer. Use `qwen3vl("Qwen/Qwen3-VL-2B-Instruct")` and the
@@ -83,10 +84,9 @@ and value patch maps. The vision encoder runs during preparation, not as
 step-through Python. Logit Lens works without fitted artifacts; other lenses
 must match the exact checkpoint (the base E2B and E2B-it are distinct).
 
-Qwen3.5 2B has separate Base and Chat starters. The Base starter tokenizes raw
-text. The Chat starter passes literal `messages` through the checkpoint's own
-chat template with `model.chat(messages, add_generation_prompt=True)` and pins
-the model revision used by its UltraChat ICA artifact.
+The curated chat demos pass literal `messages` through the checkpoint's own
+chat template with `model.chat(messages, add_generation_prompt=True)`; the
+multi-turn demo instead continues a final assistant prefill.
 Set `max_new_tokens` on `model.chat(...)` to continue greedily generating after
 the prompt. Each generated token enters the same token-by-token, layer-by-layer
 debug loop, so stepping proceeds through its complete forward pass before the
@@ -455,26 +455,35 @@ J-Lens paper's default 1,000 sequences. They therefore implement the same
 estimator and readout, but use a smaller fitting recipe and are not full-data
 reproductions of the paper's maps.
 
-Qwen 3.5 J-Lens and R-Lens data can be reproduced independently:
+Current site-aware format-v2 Qwen 3.5 J-Lens and R-Lens data can be reproduced
+independently:
 
 ```console
-uv pip install datasets "git+https://github.com/anthropics/jacobian-lens.git"
-uv run python scripts/fit_qwen35_j_lens.py \
-  --model Qwen/Qwen3.5-0.8B-Base --prompts 25
-uv run python scripts/fit_qwen35_r_lens.py \
-  --model Qwen/Qwen3.5-0.8B-Base --prompts 25
+uv run python scripts/fit_lenses/v2/fit_lenses.py \
+  --model Qwen/Qwen3.5-0.8B --method j --prompts 25
+uv run python scripts/fit_lenses/v2/fit_lenses.py \
+  --model Qwen/Qwen3.5-0.8B --method r --prompts 25
 ```
 
-Replace the model ID with `Qwen/Qwen3.5-2B-Base` to reproduce the published
-2B maps. The 9B and 27B catalog entries point to immutable, checksum-verified
-files in the authors' release rather than duplicating those multi-gigabyte
-artifacts.
+The legacy format-v1 fitters and packer are isolated under
+`scripts/fit_lenses/v1/` and
+their command-line entry points are intentionally blocked because they produce
+Post-only maps that cannot be repackaged as site-aware v2 artifacts. The 9B
+and 27B catalog entries point to immutable,
+checksum-verified files in the authors' release rather than duplicating those
+multi-gigabyte artifacts.
 
-Both scripts use `gb10-load-llm` and checkpoint after every prompt. The R-Lens
-fitter additionally verifies that its RelP substitutions preserve the ordinary
-forward pass exactly. Fitted artifacts are written below `build/j_lens/` and
-`build/r_lens/` for validation and Hub publication; they are not bundled into
-the wheel or extension. Neuron Lens lazily downloads only the selected maps
+Local and Hub artifacts use the same version-first layout:
+`lenses/v1/<owner--model>/<method>` and
+`lenses/v2/<owner--model>/<method>`. Historical Hub paths remain available as
+compatibility aliases for extension versions that cached an older index.
+
+The format-v2 fitter uses `gb10-load-llm` and checkpoints after a configurable
+number of prompts. Its R-Lens path additionally verifies that its RelP
+substitutions preserve the ordinary forward pass. Fitted artifacts are written
+below `build/lenses/v2/` for validation and Hub publication; they are
+not bundled into the wheel or extension. Neuron Lens lazily downloads only the
+selected maps
 from `sida/llmdbg` into the standard Hugging Face cache. A Base artifact may be
 used by the matching Instruct model only when its hidden width agrees and the
 artifact manifest opts into that transfer. This Base-to-Instruct reuse is a
@@ -494,6 +503,79 @@ set `output[42]`, `mlp_expansion[1843]`, or
 selected token from its KV-cache prefix, and refreshes all downstream values.
 Rank-based `top_neurons[0]` may identify a different neuron after mutation;
 use `mlp_expansion[neuron_id]` when targeting a fixed neuron.
+
+## Automatic intermediate chat replies
+
+Use `AUTO_REPLY` when a follow-up depends on an assistant response that has not
+been generated yet:
+
+```python
+from llmdbg import AUTO_REPLY
+
+messages = [
+    {"role": "user", "content": "Choose a secret concept. Do not name it. Write a paragraph about something unrelated."},
+    {"role": "assistant", "content": AUTO_REPLY},
+    {"role": "user", "content": "Now reveal the secret concept you chose."},
+]
+tokens = model.chat(messages, max_new_tokens=4000, enable_thinking=False,
+                    add_generation_prompt=True)
+```
+
+Session preparation stops at the first assistant generation prefix: no
+intermediate reply is generated just to pause at the first prompt token.
+Stepping beyond the prompt generates the intermediate reply one token at a time;
+only at EOS does llmdbg append the follow-up with the model's chat-template
+boundaries. Full-sequence Concept Trace Replay explicitly resolves pending
+intermediate turns on a private execution, leaving live stepping unchanged. Previous token
+IDs and the native execution cache are retained rather than decoding and
+retokenizing the entire conversation. The final assistant reply is generated by
+the debugger or Concept Trace as usual. The complete prior conversation is
+available as prompt tokens for inspection.
+
+`max_new_tokens` applies separately to each intermediate reply and the final
+reply. Intermediate replies must reach EOS before later turns can run. If one
+hits its cap, Concept Trace still shows its partial text and lattice with a
+notice; later turns are omitted. Increase the budget to extend the cached partial
+reply. Concept Trace has no separate token-position cap: it displays the full
+sequence, including partial replies. Longer traces require more memory and
+capture time. Generated token IDs are cached across sessions using
+the same private cache directory and execution-input identity rules described
+below. A bounded resident-model cache also retains up to 32 intermediate
+continuations, so replay can reuse them even if disk caching is unavailable.
+`main` is resolved to an exact Hub commit before loading config, tokenizer and
+weights; that commit is used for persistent cache identity. Mutable local or
+otherwise unresolved revisions skip persistent caching. Each turn's key includes
+only its preceding context: changing the last user message does not regenerate
+earlier `AUTO_REPLY` turns. Logs distinguish resident/disk reuse from actual
+generation. The Concept Trace
+Regenerate button regenerates the **final** reply; intermediate replies are
+resolved as prior conversation context when the full snapshot is requested.
+
+`AUTO_REPLY` must be assistant content between user messages. Multiple such turns
+are supported. Images may be supplied before the first placeholder; later
+follow-ups currently support text only. This feature preserves the conversation,
+but does not guarantee that a later stated secret matches an earlier unwritten
+choice.
+
+## Continuing an assistant prefill
+
+To continue directly from an authored assistant prefix, leave the final message
+open instead of adding a new assistant header:
+
+```python
+messages = [
+    {"role": "user", "content": "Reveal the secret concept."},
+    {"role": "assistant", "content": "The first concept"},
+]
+tokens = model.chat(messages, max_new_tokens=4000, enable_thinking=False,
+                    add_generation_prompt=False, continue_final_message=True)
+```
+
+This also works after `AUTO_REPLY` turns. Those turns remain lazy and finish at
+EOS as usual; only the final assistant prefill remains open. The prefix is an
+input token sequence, and the model generates its continuation. Combining
+`continue_final_message=True` with `add_generation_prompt=True`, or using it
+without a non-empty final assistant text message, is an error.
 
 ## Concept Trace cache
 
