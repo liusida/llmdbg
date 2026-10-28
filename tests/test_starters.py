@@ -6,8 +6,8 @@ from llmdbg.chat_auto import is_auto_reply
 from llmdbg.config import load_debug_config
 
 
-class PlaygroundTest(unittest.TestCase):
-    root = Path(__file__).resolve().parents[1] / 'playground'
+class StartersTest(unittest.TestCase):
+    root = Path(__file__).resolve().parents[1] / 'starters'
 
     def test_curated_configs_and_source_plans(self):
         for filename, kind in {

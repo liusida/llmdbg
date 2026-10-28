@@ -342,7 +342,7 @@ async function initializeProject() {
     folder = selected.folder;
   }
 
-  const starterRoot = path.join(__dirname, "bundled", "playground");
+  const starterRoot = path.join(__dirname, "bundled", "starters");
   const catalog = JSON.parse(fs.readFileSync(path.join(starterRoot, "starters.json"), "utf8"));
   // Check all packaged sources before creating any workspace files.
   for (const file of catalog.files) fs.accessSync(path.join(starterRoot, file));

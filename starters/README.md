@@ -23,9 +23,9 @@ The image is copied from the repository workspace's existing cat example.
 Config checks and a tiny CPU DAP smoke test run normally. Real-checkpoint debugger
 tests are opt-in before major releases; see [tests/README.md](../tests/README.md).
 
-`starters.json` is the packaging allowlist used by Create Starter Files. Other
-playground files, local experiments, and other `.vscode` settings are not bundled.
-Edit `playground/.vscode/launch.json` to change the default launch configuration;
+`starters.json` is the packaging allowlist used by Create Starter Files. Files
+outside this list, local experiments, and other `.vscode` settings are not bundled.
+Edit `starters/.vscode/launch.json` to change the default launch configuration;
 packaging and Create Starter Files copy that file without generating a duplicate.
 
 Chat and vision use short generation budgets; thinking has a 4096-token budget

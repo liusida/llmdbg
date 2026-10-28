@@ -1,8 +1,8 @@
-# Playground debugger tests
+# Starters debugger tests
 
-Normal tests include config/source-plan validation (`test_playground.py`) and
+Normal tests include config/source-plan validation (`test_starters.py`) and
 a real DAP round trip with a tiny locally created CPU checkpoint
-(`test_playground_dap.py`). These do not download checkpoints or allocate GPU
+(`test_starters_dap.py`). These do not download checkpoints or allocate GPU
 memory. The latter also checks consecutive sessions on a private persistent host.
 
 ## Before a major release
@@ -10,7 +10,7 @@ memory. The latter also checks consecutive sessions on a private persistent host
 Explicitly enable the real-checkpoint suite from the repository root:
 
 ```bash
-LLMDBG_RELEASE_TESTS=1 uv run python -m unittest discover -s tests -p test_playground_gpu.py -v
+LLMDBG_RELEASE_TESTS=1 uv run python -m unittest discover -s tests -p test_starters_gpu.py -v
 ```
 
 Without `LLMDBG_RELEASE_TESTS=1`, this suite is skipped, including during ordinary
@@ -37,10 +37,10 @@ Requests have a finite timeout (default 1800 seconds), and intermediate-turn
 resolution has an additional deadline. Override the request timeout if needed:
 
 ```bash
-LLMDBG_RELEASE_TESTS=1 LLMDBG_RELEASE_TIMEOUT=2400 uv run python -m unittest discover -s tests -p test_playground_gpu.py -v
+LLMDBG_RELEASE_TESTS=1 LLMDBG_RELEASE_TIMEOUT=2400 uv run python -m unittest discover -s tests -p test_starters_gpu.py -v
 ```
 
-Results are saved under `build/test-results/playground-<timestamp>-<pid>/`:
+Results are saved under `build/test-results/starters-<timestamp>-<pid>/`:
 
 - `summary.json`: pass/fail, model metadata, token counts, elapsed times, errors.
 - `*.dap.jsonl`: complete requests, responses, events, and debugger output.

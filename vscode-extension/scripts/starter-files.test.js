@@ -3,8 +3,8 @@ const test=require('node:test'), assert=require('node:assert/strict');
 const fs=require('node:fs'), path=require('node:path'), vm=require('node:vm');
 const extensionRoot=path.resolve(__dirname,'..');
 const source=fs.readFileSync(path.join(extensionRoot,'extension.js'),'utf8');
-const playground=path.resolve(extensionRoot,'../playground');
-const catalog=JSON.parse(fs.readFileSync(path.join(playground,'starters.json'),'utf8'));
+const starters=path.resolve(extensionRoot,'../starters');
+const catalog=JSON.parse(fs.readFileSync(path.join(starters,'starters.json'),'utf8'));
 
 function harness(initial={},failStat=false) {
   const files=new Map(Object.entries(initial)), opened=[], messages=[];
@@ -25,9 +25,9 @@ function harness(initial={},failStat=false) {
 test('packaged starters exactly match the curated allowlist, including the image',()=>{
   require('node:child_process').execFileSync(process.execPath,[path.join(__dirname,'stage-adapter.js')]);
   assert.equal(catalog.files.filter(f=>f.endsWith('.llmdbg.py')).length,5);
-  const bundled=path.join(extensionRoot,'bundled/playground');
+  const bundled=path.join(extensionRoot,'bundled/starters');
   for(const file of ['starters.json',...catalog.files])
-    assert.deepEqual(fs.readFileSync(path.join(bundled,file)),fs.readFileSync(path.join(playground,file)));
+    assert.deepEqual(fs.readFileSync(path.join(bundled,file)),fs.readFileSync(path.join(starters,file)));
   assert.equal(fs.existsSync(path.join(bundled,'Qwen35-2B-Vision.llmdbg.py')),false);
   assert.equal(fs.existsSync(path.join(bundled,'.vscode/settings.json')),false);
   assert.ok(catalog.files.includes('.vscode/launch.json'));
@@ -35,8 +35,8 @@ test('packaged starters exactly match the curated allowlist, including the image
 test('Create Starter Files copies five demos, image, launch config and opens GPT2',async()=>{
   const h=harness();await h.run();
   for(const file of catalog.files)
-    assert.deepEqual(h.files.get(path.join('/workspace',file)),fs.readFileSync(path.join(playground,file)));
-  assert.deepEqual(h.files.get('/workspace/.vscode/launch.json'),fs.readFileSync(path.join(playground,'.vscode/launch.json')));
+    assert.deepEqual(h.files.get(path.join('/workspace',file)),fs.readFileSync(path.join(starters,file)));
+  assert.deepEqual(h.files.get('/workspace/.vscode/launch.json'),fs.readFileSync(path.join(starters,'.vscode/launch.json')));
   assert.deepEqual(h.opened,['/workspace/GPT2-Text.llmdbg.py']);
   assert.equal(h.files.size,7);
 });

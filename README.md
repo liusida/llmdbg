@@ -60,7 +60,7 @@ recorded explicitly in each fit manifest.
 The recommended format is now a real Python program named `gpt2.llmdbg.py`:
 
 For a new workspace, run **llmdbg: Create Starter Files** from the VS Code
-Command Palette. It copies five curated demos from `playground/`: GPT-2 Text,
+Command Palette. It copies five curated demos from `starters/`: GPT-2 Text,
 Qwen3 Chat, Qwen3.5 Vision, Qwen3.5 Thinking, and Qwen3 MultiTurn. It also copies
 the vision demo's image and creates a `.vscode/launch.json` entry that runs the
 currently active `.llmdbg.py` file. Existing files are left untouched. The GPT-2

@@ -67,7 +67,7 @@ with debug(model, tokens):
         self.assertEqual(config["prompt"], "")
 
     def test_loads_qwen35_multimodal_chat_program(self) -> None:
-        source = Path(__file__).parents[1] / "playground" / "Qwen35-Vision.llmdbg.py"
+        source = Path(__file__).parents[1] / "starters" / "Qwen35-Vision.llmdbg.py"
         config = load_debug_config(str(source))
 
         self.assertEqual(config["model"], "Qwen/Qwen3.5-2B")

@@ -6,7 +6,7 @@ import unittest
 from dap_client import DebugHost
 
 
-class PlaygroundDAPTest(unittest.TestCase):
+class StartersDAPTest(unittest.TestCase):
     def test_tiny_checkpoint_launch_steps_predictions_generation_and_reconnect(self):
         from tokenizers import Tokenizer
         from tokenizers.models import WordLevel
@@ -23,7 +23,7 @@ class PlaygroundDAPTest(unittest.TestCase):
             config = GPT2Config(vocab_size=32, n_embd=16, n_layer=2, n_head=2,
                                 n_positions=64, bos_token_id=None, eos_token_id=None)
             GPT2LMHeadModel(config).eval().save_pretrained(checkpoint)
-            source = Path(__file__).resolve().parents[1]/'playground/GPT2-Text.llmdbg.py'
+            source = Path(__file__).resolve().parents[1]/'starters/GPT2-Text.llmdbg.py'
             program = load_debug_config(source)
             host = DebugHost(root/'logs', env_overrides={'CUDA_VISIBLE_DEVICES': ''})
             try:

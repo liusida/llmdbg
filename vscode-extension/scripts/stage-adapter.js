@@ -21,12 +21,12 @@ fs.cpSync(source, bundled, {
 console.log(`Staged adapter from ${source} to ${bundled}`);
 
 // Only copy curated entries, including the shared launch config, not local settings.
-const playground = path.join(projectRoot, "playground");
-const catalog = JSON.parse(fs.readFileSync(path.join(playground, "starters.json"), "utf8"));
-const starterDestination = path.join(path.dirname(bundled), "playground");
+const starters = path.join(projectRoot, "starters");
+const catalog = JSON.parse(fs.readFileSync(path.join(starters, "starters.json"), "utf8"));
+const starterDestination = path.join(path.dirname(bundled), "starters");
 for (const file of ["starters.json", ...catalog.files]) {
   const destination = path.join(starterDestination, file);
   fs.mkdirSync(path.dirname(destination), { recursive: true });
-  fs.copyFileSync(path.join(playground, file), destination);
+  fs.copyFileSync(path.join(starters, file), destination);
 }
-console.log(`Staged ${catalog.files.length} curated starter files from ${playground}`);
+console.log(`Staged ${catalog.files.length} curated starter files from ${starters}`);

@@ -13,7 +13,7 @@ from dap_client import DebugHost
 
 @unittest.skipUnless(os.environ.get('LLMDBG_RELEASE_TESTS') == '1',
                      'opt-in GPU release suite (set LLMDBG_RELEASE_TESTS=1)')
-class PlaygroundReleaseTest(unittest.TestCase):
+class StartersReleaseTest(unittest.TestCase):
     def test_all_curated_demos_through_dap(self):
         # Imports and subprocess creation stay behind the opt-in gate.
         import torch
@@ -21,7 +21,7 @@ class PlaygroundReleaseTest(unittest.TestCase):
         self.assertTrue(torch.cuda.is_available(), 'Release suite requires CUDA')
         root = Path(__file__).resolve().parents[2]
         stamp = time.strftime('%Y%m%d-%H%M%S')+f'-{os.getpid()}'
-        logs = root/'build'/'test-results'/('playground-'+stamp)
+        logs = root/'build'/'test-results'/('starters-'+stamp)
         timeout = float(os.environ.get('LLMDBG_RELEASE_TIMEOUT', '1800'))
         host = DebugHost(logs, timeout=timeout)
         self.addCleanup(host.close)
@@ -36,7 +36,7 @@ class PlaygroundReleaseTest(unittest.TestCase):
                 record = {'demo': filename, 'passed': False}
                 client = host.client(filename)
                 try:
-                    source = root/'playground'/filename
+                    source = root/'starters'/filename
                     config = load_debug_config(source)
                     client.request('initialize', adapterID='llmdbg')
                     launch = {'config': str(source), 'stopOnEntry': True, 'device': 'cuda'}
