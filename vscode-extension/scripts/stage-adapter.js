@@ -20,7 +20,7 @@ fs.cpSync(source, bundled, {
 });
 console.log(`Staged adapter from ${source} to ${bundled}`);
 
-// Only copy curated entries, never personal experiments or playground settings.
+// Only copy curated entries, including the shared launch config, not local settings.
 const playground = path.join(projectRoot, "playground");
 const catalog = JSON.parse(fs.readFileSync(path.join(playground, "starters.json"), "utf8"));
 const starterDestination = path.join(path.dirname(bundled), "playground");

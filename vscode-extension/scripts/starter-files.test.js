@@ -17,7 +17,7 @@ function harness(initial={},failStat=false) {
       async writeFile(file,data){files.set(file,data);}},
     async openTextDocument(file){opened.push(file);return file;}};
   const vscode={Uri:uri,workspace,window:{async showTextDocument(){},showInformationMessage:text=>messages.push(text)}};
-  const context={vscode,fs,path,__dirname:extensionRoot,Buffer,ACTIVE_FILE_LAUNCH_SOURCE:'{"version":"0.2.0"}'};
+  const context={vscode,fs,path,__dirname:extensionRoot,Buffer};
   vm.runInNewContext(source.slice(source.indexOf('async function initializeProject()'),source.indexOf('function expandWorkspaceFolder(')),context);
   return {run:()=>context.initializeProject(),files,opened,messages};
 }
@@ -29,13 +29,14 @@ test('packaged starters exactly match the curated allowlist, including the image
   for(const file of ['starters.json',...catalog.files])
     assert.deepEqual(fs.readFileSync(path.join(bundled,file)),fs.readFileSync(path.join(playground,file)));
   assert.equal(fs.existsSync(path.join(bundled,'Qwen35-2B-Vision.llmdbg.py')),false);
-  assert.equal(fs.existsSync(path.join(bundled,'.vscode')),false);
+  assert.equal(fs.existsSync(path.join(bundled,'.vscode/settings.json')),false);
+  assert.ok(catalog.files.includes('.vscode/launch.json'));
 });
 test('Create Starter Files copies five demos, image, launch config and opens GPT2',async()=>{
   const h=harness();await h.run();
   for(const file of catalog.files)
     assert.deepEqual(h.files.get(path.join('/workspace',file)),fs.readFileSync(path.join(playground,file)));
-  assert.ok(h.files.has('/workspace/.vscode/launch.json'));
+  assert.deepEqual(h.files.get('/workspace/.vscode/launch.json'),fs.readFileSync(path.join(playground,'.vscode/launch.json')));
   assert.deepEqual(h.opened,['/workspace/GPT2-Text.llmdbg.py']);
   assert.equal(h.files.size,7);
 });

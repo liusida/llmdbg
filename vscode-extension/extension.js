@@ -13,15 +13,6 @@ const LEGACY_PLOT_SNIPPETS_KEY = "llmdbg.plotSnippets";
 const DEFAULT_J_LENS_SOURCE = "hf://datasets/sida/llmdbg";
 const DEFAULT_R_LENS_SOURCE = "hf://datasets/sida/llmdbg";
 const DEFAULT_JPP_LENS_SOURCE = "hf://datasets/sida/llmdbg";
-const ACTIVE_FILE_LAUNCH_SOURCE = `${JSON.stringify({
-  version: "0.2.0",
-  configurations: [{
-    type: "llmdbg",
-    request: "launch",
-    name: "llmdbg: Active file",
-    config: "${file}"
-  }]
-}, null, 2)}\n`;
 
 function residualToVocabularyLensSettings() {
   const config = vscode.workspace.getConfiguration("llmdbg");
@@ -355,8 +346,6 @@ async function initializeProject() {
   const catalog = JSON.parse(fs.readFileSync(path.join(starterRoot, "starters.json"), "utf8"));
   // Check all packaged sources before creating any workspace files.
   for (const file of catalog.files) fs.accessSync(path.join(starterRoot, file));
-  const vscodeUri = vscode.Uri.joinPath(folder.uri, ".vscode");
-  const launchUri = vscode.Uri.joinPath(vscodeUri, "launch.json");
   const created = [];
   const skipped = [];
   for (const file of catalog.files) {
@@ -371,16 +360,6 @@ async function initializeProject() {
       created.push(file);
     }
   }
-  try {
-    await vscode.workspace.fs.stat(launchUri);
-    skipped.push(".vscode/launch.json");
-  } catch (error) {
-    if (error.code !== "FileNotFound") throw error;
-    await vscode.workspace.fs.createDirectory(vscodeUri);
-    await vscode.workspace.fs.writeFile(launchUri, Buffer.from(ACTIVE_FILE_LAUNCH_SOURCE, "utf8"));
-    created.push(".vscode/launch.json");
-  }
-
   const document = await vscode.workspace.openTextDocument(vscode.Uri.joinPath(folder.uri, catalog.open));
   await vscode.window.showTextDocument(document);
   const summary = created.length ? `Created ${created.length} llmdbg starter file${created.length === 1 ? "" : "s"}.` : "The llmdbg starter files already exist.";
