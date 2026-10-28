@@ -10,6 +10,28 @@ from llmdbg.activation_scales import (
 
 
 class ActivationScalesTest(unittest.TestCase):
+    def test_qwen3_8b_mlp_and_attention_channel_scales_cover_all_layers(self) -> None:
+        import math
+        for layer in range(36):
+            for lookup, suffix in ((mlp_activation_scale, 'mlp'),
+                                   (attention_channel_activation_scale, 'full_attention')):
+                record = lookup('Qwen/Qwen3-8B', f'model.layers.{layer}.{suffix}')
+                self.assertIsNotNone(record)
+                self.assertTrue(math.isfinite(record['scale']) and record['scale'] > 0)
+
+    def test_qwen3_8b_output_and_value_head_references_are_complete(self) -> None:
+        import math
+        for layer in range(36):
+            name = f'model.layers.{layer}.full_attention'
+            for head in range(32):
+                for value in (False, True):
+                    record = attention_head_norm_scale('Qwen/Qwen3-8B', name, head, value=value)
+                    self.assertIsNotNone(record, (layer, head, value))
+                    self.assertEqual(record['head_dimension'], 128)
+                    self.assertGreater(record['analyzed_tokens'], 400)
+                    self.assertTrue(math.isfinite(record['scale']) and record['scale'] > 0)
+            self.assertIsNone(attention_head_norm_scale('Qwen/Qwen3-8B', name, 32, value=True))
+
     def test_qwen35_2b_value_references_cover_all_heads_separately(self) -> None:
         for layer in range(24):
             delta=layer%4!=3

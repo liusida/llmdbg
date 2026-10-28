@@ -394,6 +394,12 @@ percentile ribbons, and the packaged median scale as a marked guide line. Run
 `scripts/measure_mlp_activation_scales.py` or
 `scripts/measure_attention_channel_activation_scales.py` with `--plot-output`
 to reproduce them from the calibration prompt.
+Qwen3-8B has MLP and attention-channel references for all 36 layers, plus
+separate output-head and value-head references for all 32 query heads per layer.
+Both existing measurement scripts use the same 422 non-prefix tokens from
+`scripts/data/diverse_32_sentences.txt`, bfloat16 model values, and fp32 norm
+statistics. The artifacts record the exact checkpoint commit. These magnitude
+references are shared by Logit/J/R/J++ Lens readouts, not fitted separately per lens.
 Gemma 4 E2B-it has attention-channel and MLP scales for all 35 layers,
 measured in bfloat16 on the 441 non-prefix tokens of
 `scripts/data/diverse_32_sentences.txt`. This is a text-only reference, also

@@ -109,8 +109,11 @@ def main() -> None:
     if not prompt:
         raise ValueError("prompt file must not be empty")
 
-    config = AutoConfig.from_pretrained(args.model, revision=args.revision)
-    tokenizer = AutoTokenizer.from_pretrained(args.model, revision=args.revision)
+    from transformers.utils.hub import cached_file, extract_commit_hash
+    config_path = cached_file(args.model, 'config.json', revision=args.revision)
+    load_revision = extract_commit_hash(config_path, None) or args.revision
+    config = AutoConfig.from_pretrained(args.model, revision=load_revision)
+    tokenizer = AutoTokenizer.from_pretrained(args.model, revision=load_revision)
     full_prompt = args.prefix + prompt
     max_length = int(getattr(getattr(config, "text_config", config), "max_position_embeddings", tokenizer.model_max_length))
     encoded = tokenizer(
@@ -129,7 +132,7 @@ def main() -> None:
         AutoModelForMultimodalLM if getattr(config, "vision_config", None) is not None else AutoModelForCausalLM,
         args.model,
         config=config,
-        revision=args.revision,
+        revision=load_revision,
         dtype=torch.bfloat16,
         attn_implementation="eager" if config.model_type == "gemma4" else "sdpa",
         touch="auto",
@@ -318,7 +321,7 @@ def main() -> None:
             "score": "current projected head norm / scale",
         },
         "model_id": args.model,
-        "model_revision": getattr(config, "_commit_hash", None) or args.revision,
+        "model_revision": getattr(config, "_commit_hash", None) or load_revision,
         "architecture": architecture,
         "activation": "input channels to attention o_proj/out_proj",
         "quantity": "activation * l2_norm(output-projection direction)",

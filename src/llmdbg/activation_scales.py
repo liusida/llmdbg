@@ -11,6 +11,7 @@ from typing import Any
 
 
 _SCALE_FILES = {
+    "Qwen/Qwen3-8B": "qwen3_8b_mlp_activation_scales.json",
     "google/gemma-4-E2B-it": "gemma4_e2b_it_mlp_activation_scales.json",
     "openai-community/gpt2": "gpt2_mlp_activation_scales.json",
     "openai-community/gpt2-medium": "gpt2_medium_mlp_activation_scales.json",
@@ -21,6 +22,7 @@ _SCALE_FILES = {
 }
 
 _ATTENTION_SCALE_FILES = {
+    "Qwen/Qwen3-8B": "qwen3_8b_attention_channel_activation_scales.json",
     "google/gemma-2-2b-it": "gemma2_2b_it_attention_channel_activation_scales.json",
     "Qwen/Qwen3-VL-2B-Instruct": "qwen3_vl_2b_instruct_attention_channel_activation_scales.json",
     "google/gemma-4-E2B-it": "gemma4_e2b_it_attention_channel_activation_scales.json",

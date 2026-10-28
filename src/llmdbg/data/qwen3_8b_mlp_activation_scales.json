@@ -1,0 +1,602 @@
+{
+  "schema_version": 2,
+  "model_id": "Qwen/Qwen3-8B",
+  "model_revision": "b968826d9c46dd6066d109eabc6255188de91218",
+  "architecture": "qwen3",
+  "activation": "input to mlp.down_proj (silu(gate_proj(x)) * up_proj(x))",
+  "quantity": "activation * l2_norm(down-projection direction)",
+  "statistic": "median across analyzed tokens of token p99(abs(activation) * l2_norm(down-projection direction))",
+  "quantile": 0.99,
+  "side_definition": "sign of the activation-weighted contribution magnitude nearest p99 at the token supplying the layer median",
+  "prompt_file": "diverse_32_sentences.txt",
+  "prompt_sha256": "97481d04d1c042669991e8ecc7bb2b2b650aff51f3c1574874cac1dfda4257e0",
+  "prefix": "Context:\n",
+  "excluded_prefix_tokens": 2,
+  "analyzed_tokens": 422,
+  "captured_tokens": 424,
+  "untruncated_tokens": 424,
+  "truncated_to_model_context": false,
+  "intermediate_size": 12288,
+  "intermediate_sizes": [
+    12288
+  ],
+  "touched_model_bytes": 16381471232,
+  "layers": [
+    {
+      "layer": 0,
+      "scale": 0.10894918441772461,
+      "side": "negative",
+      "signed_reference": -0.10891856998205185,
+      "captured_token_position": 68,
+      "analysis_token_position": 66,
+      "nearest_neuron": 6487,
+      "token_scale_percentiles": {
+        "p01": 0.02994387410581112,
+        "p10": 0.039421118795871735,
+        "p50": 0.10894918441772461,
+        "p90": 0.1936587244272232,
+        "p99": 0.30424320697784424
+      }
+    },
+    {
+      "layer": 1,
+      "scale": 0.06293037533760071,
+      "side": "positive",
+      "signed_reference": 0.06289845705032349,
+      "captured_token_position": 156,
+      "analysis_token_position": 154,
+      "nearest_neuron": 7553,
+      "token_scale_percentiles": {
+        "p01": 0.022831544280052185,
+        "p10": 0.03125262260437012,
+        "p50": 0.06293037533760071,
+        "p90": 0.11756303906440735,
+        "p99": 0.1949138343334198
+      }
+    },
+    {
+      "layer": 2,
+      "scale": 0.0956253781914711,
+      "side": "positive",
+      "signed_reference": 0.09534513205289841,
+      "captured_token_position": 216,
+      "analysis_token_position": 214,
+      "nearest_neuron": 6673,
+      "token_scale_percentiles": {
+        "p01": 0.03300046920776367,
+        "p10": 0.04860413447022438,
+        "p50": 0.0956253781914711,
+        "p90": 0.14385171234607697,
+        "p99": 0.20137245953083038
+      }
+    },
+    {
+      "layer": 3,
+      "scale": 0.1276220977306366,
+      "side": "negative",
+      "signed_reference": -0.1275332272052765,
+      "captured_token_position": 174,
+      "analysis_token_position": 172,
+      "nearest_neuron": 5514,
+      "token_scale_percentiles": {
+        "p01": 0.042316801846027374,
+        "p10": 0.08214391022920609,
+        "p50": 0.1276220977306366,
+        "p90": 0.1873472034931183,
+        "p99": 0.28941670060157776
+      }
+    },
+    {
+      "layer": 4,
+      "scale": 0.2285812944173813,
+      "side": "negative",
+      "signed_reference": -0.22832956910133362,
+      "captured_token_position": 63,
+      "analysis_token_position": 61,
+      "nearest_neuron": 2478,
+      "token_scale_percentiles": {
+        "p01": 0.06205398589372635,
+        "p10": 0.15065783262252808,
+        "p50": 0.2285812944173813,
+        "p90": 0.3062031865119934,
+        "p99": 0.39709049463272095
+      }
+    },
+    {
+      "layer": 5,
+      "scale": 0.3248829245567322,
+      "side": "negative",
+      "signed_reference": -0.3244972825050354,
+      "captured_token_position": 269,
+      "analysis_token_position": 267,
+      "nearest_neuron": 6286,
+      "token_scale_percentiles": {
+        "p01": 0.07552222907543182,
+        "p10": 0.17227333784103394,
+        "p50": 0.3248829245567322,
+        "p90": 0.4198075830936432,
+        "p99": 0.6178798675537109
+      }
+    },
+    {
+      "layer": 6,
+      "scale": 0.383236825466156,
+      "side": "positive",
+      "signed_reference": 0.3834213316440582,
+      "captured_token_position": 27,
+      "analysis_token_position": 25,
+      "nearest_neuron": 967,
+      "token_scale_percentiles": {
+        "p01": 0.18996475636959076,
+        "p10": 0.2347785234451294,
+        "p50": 0.383236825466156,
+        "p90": 0.49696555733680725,
+        "p99": 0.6140223741531372
+      }
+    },
+    {
+      "layer": 7,
+      "scale": 0.4119127094745636,
+      "side": "positive",
+      "signed_reference": 0.4115265905857086,
+      "captured_token_position": 155,
+      "analysis_token_position": 153,
+      "nearest_neuron": 1387,
+      "token_scale_percentiles": {
+        "p01": 0.21802903711795807,
+        "p10": 0.28385135531425476,
+        "p50": 0.4119127094745636,
+        "p90": 0.512681782245636,
+        "p99": 0.6730561852455139
+      }
+    },
+    {
+      "layer": 8,
+      "scale": 0.573419451713562,
+      "side": "positive",
+      "signed_reference": 0.5719968676567078,
+      "captured_token_position": 115,
+      "analysis_token_position": 113,
+      "nearest_neuron": 1201,
+      "token_scale_percentiles": {
+        "p01": 0.29600486159324646,
+        "p10": 0.39592766761779785,
+        "p50": 0.573419451713562,
+        "p90": 0.7121328115463257,
+        "p99": 0.8406268954277039
+      }
+    },
+    {
+      "layer": 9,
+      "scale": 0.582274317741394,
+      "side": "negative",
+      "signed_reference": -0.5811846852302551,
+      "captured_token_position": 390,
+      "analysis_token_position": 388,
+      "nearest_neuron": 6185,
+      "token_scale_percentiles": {
+        "p01": 0.35013797879219055,
+        "p10": 0.42176079750061035,
+        "p50": 0.582274317741394,
+        "p90": 0.689160168170929,
+        "p99": 0.7802635431289673
+      }
+    },
+    {
+      "layer": 10,
+      "scale": 0.5475382804870605,
+      "side": "positive",
+      "signed_reference": 0.5467606782913208,
+      "captured_token_position": 387,
+      "analysis_token_position": 385,
+      "nearest_neuron": 1146,
+      "token_scale_percentiles": {
+        "p01": 0.38036686182022095,
+        "p10": 0.4116852879524231,
+        "p50": 0.5475382804870605,
+        "p90": 0.6487690806388855,
+        "p99": 0.7150623798370361
+      }
+    },
+    {
+      "layer": 11,
+      "scale": 0.5605158805847168,
+      "side": "positive",
+      "signed_reference": 0.5590744018554688,
+      "captured_token_position": 103,
+      "analysis_token_position": 101,
+      "nearest_neuron": 11800,
+      "token_scale_percentiles": {
+        "p01": 0.3738802671432495,
+        "p10": 0.4162786602973938,
+        "p50": 0.5605158805847168,
+        "p90": 0.6981131434440613,
+        "p99": 0.8085123896598816
+      }
+    },
+    {
+      "layer": 12,
+      "scale": 0.591500997543335,
+      "side": "negative",
+      "signed_reference": -0.5911920070648193,
+      "captured_token_position": 404,
+      "analysis_token_position": 402,
+      "nearest_neuron": 6714,
+      "token_scale_percentiles": {
+        "p01": 0.3880012035369873,
+        "p10": 0.4422312378883362,
+        "p50": 0.591500997543335,
+        "p90": 0.7501129508018494,
+        "p99": 0.9031223654747009
+      }
+    },
+    {
+      "layer": 13,
+      "scale": 0.6452721357345581,
+      "side": "negative",
+      "signed_reference": -0.64493328332901,
+      "captured_token_position": 223,
+      "analysis_token_position": 221,
+      "nearest_neuron": 2097,
+      "token_scale_percentiles": {
+        "p01": 0.43319788575172424,
+        "p10": 0.48946258425712585,
+        "p50": 0.6452721357345581,
+        "p90": 0.8269126415252686,
+        "p99": 1.0080101490020752
+      }
+    },
+    {
+      "layer": 14,
+      "scale": 0.6007518768310547,
+      "side": "negative",
+      "signed_reference": -0.6006231307983398,
+      "captured_token_position": 223,
+      "analysis_token_position": 221,
+      "nearest_neuron": 8119,
+      "token_scale_percentiles": {
+        "p01": 0.43994253873825073,
+        "p10": 0.48721927404403687,
+        "p50": 0.6007518768310547,
+        "p90": 0.7448157668113708,
+        "p99": 0.9103536009788513
+      }
+    },
+    {
+      "layer": 15,
+      "scale": 0.6150460243225098,
+      "side": "negative",
+      "signed_reference": -0.6148038506507874,
+      "captured_token_position": 371,
+      "analysis_token_position": 369,
+      "nearest_neuron": 778,
+      "token_scale_percentiles": {
+        "p01": 0.4569782316684723,
+        "p10": 0.5098758935928345,
+        "p50": 0.6150460243225098,
+        "p90": 0.7706893682479858,
+        "p99": 0.9107343554496765
+      }
+    },
+    {
+      "layer": 16,
+      "scale": 0.5925197005271912,
+      "side": "positive",
+      "signed_reference": 0.5928431749343872,
+      "captured_token_position": 206,
+      "analysis_token_position": 204,
+      "nearest_neuron": 9629,
+      "token_scale_percentiles": {
+        "p01": 0.48469457030296326,
+        "p10": 0.5204811692237854,
+        "p50": 0.5925197005271912,
+        "p90": 0.7239421606063843,
+        "p99": 0.8912805318832397
+      }
+    },
+    {
+      "layer": 17,
+      "scale": 0.6670316457748413,
+      "side": "negative",
+      "signed_reference": -0.6674408316612244,
+      "captured_token_position": 84,
+      "analysis_token_position": 82,
+      "nearest_neuron": 3871,
+      "token_scale_percentiles": {
+        "p01": 0.5349849462509155,
+        "p10": 0.5885851383209229,
+        "p50": 0.6670316457748413,
+        "p90": 0.8006948828697205,
+        "p99": 0.9263590574264526
+      }
+    },
+    {
+      "layer": 18,
+      "scale": 0.730816125869751,
+      "side": "negative",
+      "signed_reference": -0.7310161590576172,
+      "captured_token_position": 41,
+      "analysis_token_position": 39,
+      "nearest_neuron": 10607,
+      "token_scale_percentiles": {
+        "p01": 0.5539734363555908,
+        "p10": 0.6350820660591125,
+        "p50": 0.730816125869751,
+        "p90": 0.8678694367408752,
+        "p99": 1.0264524221420288
+      }
+    },
+    {
+      "layer": 19,
+      "scale": 0.8277300596237183,
+      "side": "negative",
+      "signed_reference": -0.8274138569831848,
+      "captured_token_position": 80,
+      "analysis_token_position": 78,
+      "nearest_neuron": 8961,
+      "token_scale_percentiles": {
+        "p01": 0.638817310333252,
+        "p10": 0.7129164934158325,
+        "p50": 0.8277300596237183,
+        "p90": 0.993920087814331,
+        "p99": 1.1296031475067139
+      }
+    },
+    {
+      "layer": 20,
+      "scale": 0.8563426733016968,
+      "side": "positive",
+      "signed_reference": 0.856303870677948,
+      "captured_token_position": 141,
+      "analysis_token_position": 139,
+      "nearest_neuron": 3506,
+      "token_scale_percentiles": {
+        "p01": 0.6965682506561279,
+        "p10": 0.7443227171897888,
+        "p50": 0.8563426733016968,
+        "p90": 0.9921051263809204,
+        "p99": 1.1508852243423462
+      }
+    },
+    {
+      "layer": 21,
+      "scale": 0.9518171548843384,
+      "side": "negative",
+      "signed_reference": -0.9515469670295715,
+      "captured_token_position": 245,
+      "analysis_token_position": 243,
+      "nearest_neuron": 9290,
+      "token_scale_percentiles": {
+        "p01": 0.745163083076477,
+        "p10": 0.8149816989898682,
+        "p50": 0.9518171548843384,
+        "p90": 1.126457929611206,
+        "p99": 1.3205770254135132
+      }
+    },
+    {
+      "layer": 22,
+      "scale": 1.2426847219467163,
+      "side": "positive",
+      "signed_reference": 1.240804672241211,
+      "captured_token_position": 249,
+      "analysis_token_position": 247,
+      "nearest_neuron": 7744,
+      "token_scale_percentiles": {
+        "p01": 1.0052493810653687,
+        "p10": 1.0880186557769775,
+        "p50": 1.2426847219467163,
+        "p90": 1.4360997676849365,
+        "p99": 1.7024219036102295
+      }
+    },
+    {
+      "layer": 23,
+      "scale": 1.4997873306274414,
+      "side": "negative",
+      "signed_reference": -1.4994862079620361,
+      "captured_token_position": 75,
+      "analysis_token_position": 73,
+      "nearest_neuron": 4940,
+      "token_scale_percentiles": {
+        "p01": 1.187143087387085,
+        "p10": 1.2833986282348633,
+        "p50": 1.4997873306274414,
+        "p90": 1.7889107465744019,
+        "p99": 2.0891594886779785
+      }
+    },
+    {
+      "layer": 24,
+      "scale": 1.8084475994110107,
+      "side": "positive",
+      "signed_reference": 1.8085088729858398,
+      "captured_token_position": 155,
+      "analysis_token_position": 153,
+      "nearest_neuron": 4453,
+      "token_scale_percentiles": {
+        "p01": 1.240960717201233,
+        "p10": 1.4030545949935913,
+        "p50": 1.8084475994110107,
+        "p90": 2.1613564491271973,
+        "p99": 2.6380040645599365
+      }
+    },
+    {
+      "layer": 25,
+      "scale": 1.969017505645752,
+      "side": "positive",
+      "signed_reference": 1.9675341844558716,
+      "captured_token_position": 224,
+      "analysis_token_position": 222,
+      "nearest_neuron": 10893,
+      "token_scale_percentiles": {
+        "p01": 1.3363571166992188,
+        "p10": 1.5275284051895142,
+        "p50": 1.969017505645752,
+        "p90": 2.4756851196289062,
+        "p99": 2.9380409717559814
+      }
+    },
+    {
+      "layer": 26,
+      "scale": 2.171631336212158,
+      "side": "negative",
+      "signed_reference": -2.1659510135650635,
+      "captured_token_position": 417,
+      "analysis_token_position": 415,
+      "nearest_neuron": 5,
+      "token_scale_percentiles": {
+        "p01": 1.2990413904190063,
+        "p10": 1.5974661111831665,
+        "p50": 2.171631336212158,
+        "p90": 2.8329124450683594,
+        "p99": 3.5354928970336914
+      }
+    },
+    {
+      "layer": 27,
+      "scale": 2.660355567932129,
+      "side": "positive",
+      "signed_reference": 2.661212205886841,
+      "captured_token_position": 35,
+      "analysis_token_position": 33,
+      "nearest_neuron": 2268,
+      "token_scale_percentiles": {
+        "p01": 1.6208477020263672,
+        "p10": 1.9240598678588867,
+        "p50": 2.660355567932129,
+        "p90": 3.3882639408111572,
+        "p99": 4.3044891357421875
+      }
+    },
+    {
+      "layer": 28,
+      "scale": 3.338527202606201,
+      "side": "positive",
+      "signed_reference": 3.3368141651153564,
+      "captured_token_position": 342,
+      "analysis_token_position": 340,
+      "nearest_neuron": 2155,
+      "token_scale_percentiles": {
+        "p01": 1.897480845451355,
+        "p10": 2.364788770675659,
+        "p50": 3.338527202606201,
+        "p90": 4.206484794616699,
+        "p99": 5.2317585945129395
+      }
+    },
+    {
+      "layer": 29,
+      "scale": 3.335329055786133,
+      "side": "positive",
+      "signed_reference": 3.3327081203460693,
+      "captured_token_position": 365,
+      "analysis_token_position": 363,
+      "nearest_neuron": 2939,
+      "token_scale_percentiles": {
+        "p01": 1.7127693891525269,
+        "p10": 2.181656837463379,
+        "p50": 3.335329055786133,
+        "p90": 4.566420555114746,
+        "p99": 5.842107772827148
+      }
+    },
+    {
+      "layer": 30,
+      "scale": 4.152321815490723,
+      "side": "negative",
+      "signed_reference": -4.15582799911499,
+      "captured_token_position": 153,
+      "analysis_token_position": 151,
+      "nearest_neuron": 2539,
+      "token_scale_percentiles": {
+        "p01": 1.9318358898162842,
+        "p10": 2.5456509590148926,
+        "p50": 4.152321815490723,
+        "p90": 5.793815612792969,
+        "p99": 7.3703837394714355
+      }
+    },
+    {
+      "layer": 31,
+      "scale": 4.7114481925964355,
+      "side": "negative",
+      "signed_reference": -4.716102600097656,
+      "captured_token_position": 305,
+      "analysis_token_position": 303,
+      "nearest_neuron": 6212,
+      "token_scale_percentiles": {
+        "p01": 2.264374017715454,
+        "p10": 2.8166654109954834,
+        "p50": 4.7114481925964355,
+        "p90": 7.400118827819824,
+        "p99": 10.693379402160645
+      }
+    },
+    {
+      "layer": 32,
+      "scale": 5.569091320037842,
+      "side": "negative",
+      "signed_reference": -5.564391613006592,
+      "captured_token_position": 3,
+      "analysis_token_position": 1,
+      "nearest_neuron": 3703,
+      "token_scale_percentiles": {
+        "p01": 2.6322641372680664,
+        "p10": 3.432762861251831,
+        "p50": 5.569091320037842,
+        "p90": 9.574450492858887,
+        "p99": 16.58115005493164
+      }
+    },
+    {
+      "layer": 33,
+      "scale": 6.429283142089844,
+      "side": "negative",
+      "signed_reference": -6.440903186798096,
+      "captured_token_position": 32,
+      "analysis_token_position": 30,
+      "nearest_neuron": 10107,
+      "token_scale_percentiles": {
+        "p01": 3.6973679065704346,
+        "p10": 4.3052449226379395,
+        "p50": 6.429283142089844,
+        "p90": 11.30566120147705,
+        "p99": 19.46186637878418
+      }
+    },
+    {
+      "layer": 34,
+      "scale": 6.745635032653809,
+      "side": "negative",
+      "signed_reference": -6.7379889488220215,
+      "captured_token_position": 78,
+      "analysis_token_position": 76,
+      "nearest_neuron": 9121,
+      "token_scale_percentiles": {
+        "p01": 4.165705680847168,
+        "p10": 4.981413841247559,
+        "p50": 6.745635032653809,
+        "p90": 12.070192337036133,
+        "p99": 22.907861709594727
+      }
+    },
+    {
+      "layer": 35,
+      "scale": 5.925874710083008,
+      "side": "negative",
+      "signed_reference": -5.914390563964844,
+      "captured_token_position": 104,
+      "analysis_token_position": 102,
+      "nearest_neuron": 515,
+      "token_scale_percentiles": {
+        "p01": 3.487773895263672,
+        "p10": 4.131363391876221,
+        "p50": 5.925874710083008,
+        "p90": 8.887627601623535,
+        "p99": 20.017513275146484
+      }
+    }
+  ]
+}
