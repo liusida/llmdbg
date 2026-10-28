@@ -9,8 +9,8 @@ from pathlib import Path
 import torch
 from safetensors.torch import save_file
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts/publish_workspace_lenses.py"
-SPEC = importlib.util.spec_from_file_location("publish_workspace_lenses_test", SCRIPT)
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts/fit_lenses/v2/publish_lenses.py"
+SPEC = importlib.util.spec_from_file_location("publish_lenses_v2_test", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 publish = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(publish)
@@ -24,7 +24,7 @@ class PublishWorkspaceLensesTest(unittest.TestCase):
             (stage / "index.json").write_text(json.dumps(legacy))
             entry = {
                 "model_id": "test/model", "method": "j", "format_version": 2,
-                "path": "workspace-lenses/v2/test--model/j",
+                "path": "lenses/v2/test--model/j",
             }
 
             index = json.loads(publish.update_index(stage, [entry]).read_text())

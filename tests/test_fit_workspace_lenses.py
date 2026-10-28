@@ -8,13 +8,14 @@ from types import SimpleNamespace
 from typing import Any
 
 import torch
+from transformers import Qwen3Config, Qwen3ForCausalLM
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "fit_workspace_lenses.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts/fit_lenses/v2/fit_lenses.py"
 
 
 def load_script():
-    spec = importlib.util.spec_from_file_location("fit_workspace_lenses_test", SCRIPT)
+    spec = importlib.util.spec_from_file_location("fit_lenses_v2_test", SCRIPT)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -83,11 +84,30 @@ class FitWorkspaceLensesTest(unittest.TestCase):
 
     def test_model_specific_prompt_defaults(self) -> None:
         self.assertEqual(self.module.DEFAULT_PROMPTS["openai-community/gpt2"], 100)
+        self.assertEqual(self.module.DEFAULT_PROMPTS["Qwen/Qwen3-8B"], 25)
         self.assertEqual(self.module.DEFAULT_PROMPTS["Qwen/Qwen3.5-0.8B"], 100)
         self.assertEqual(self.module.DEFAULT_PROMPTS["Qwen/Qwen3.5-2B-Base"], 100)
         self.assertEqual(self.module.DEFAULT_PROMPTS["Qwen/Qwen3.5-2B"], 100)
         self.assertEqual(self.module.DEFAULT_PROMPTS["Qwen/Qwen3.5-9B"], 25)
         self.assertEqual(self.module.DEFAULT_PROMPTS["Qwen/Qwen3.5-27B"], 25)
+
+    def test_qwen3_model_layout_is_supported(self) -> None:
+        model = Qwen3ForCausalLM(Qwen3Config(
+            vocab_size=32,
+            hidden_size=16,
+            intermediate_size=32,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_key_value_heads=2,
+            head_dim=4,
+        ))
+
+        embed, layers, norm, architecture = self.module.model_parts(model)
+
+        self.assertIs(embed, model.model.embed_tokens)
+        self.assertIs(layers, model.model.layers)
+        self.assertIs(norm, model.model.norm)
+        self.assertEqual(architecture, "qwen3")
 
 
 if __name__ == "__main__":

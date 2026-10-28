@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fit a RelP R-Lens transport map for GPT-2."""
+"""Legacy format-v1 GPT-2 R-Lens fitter retained for reference."""
 
 from __future__ import annotations
 
@@ -18,7 +18,12 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.models.gpt2.modeling_gpt2 import GPT2MLP
 
 DATASET_ID = "NeelNanda/pile-10k"
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+OBSOLETE_ERROR = """\
+ERROR: this script fits the obsolete format-v1 R-Lens artifact.
+It does not capture the Embed/Mid/Post maps required by format v2, and a v1
+result cannot be repackaged as v2. Use scripts/fit_lenses/v2/fit_lenses.py --method r.
+"""
 
 
 class _IdentityActivation(torch.autograd.Function):
@@ -89,7 +94,12 @@ def calibration_prompts(count: int) -> list[str]:
 
 
 def main() -> None:
-    args = arguments()
+    arguments()
+    raise SystemExit(OBSOLETE_ERROR)
+
+
+def legacy_main(args: argparse.Namespace) -> None:
+    """Retained v1 implementation; unreachable from the command-line entry point."""
     import jlens
 
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
@@ -105,8 +115,9 @@ def main() -> None:
     model.eval().requires_grad_(False)
     layer_count = int(model.config.num_hidden_layers)
     target_layer = layer_count - 1
-    output = args.output or PROJECT_ROOT / "build/r_lens/artifacts/gpt2.pt"
-    checkpoint = args.checkpoint or PROJECT_ROOT / "build/r_lens/gpt2.checkpoint.pt"
+    root = PROJECT_ROOT / "build/lenses/v1/openai-community--gpt2/r"
+    output = args.output or root / "fitted.pt"
+    checkpoint = args.checkpoint or root / "fit.checkpoint.pt"
     output.parent.mkdir(parents=True, exist_ok=True)
     checkpoint.parent.mkdir(parents=True, exist_ok=True)
 

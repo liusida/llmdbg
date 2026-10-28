@@ -90,18 +90,18 @@ are scaled to the newly selected 25-prompt budget and are marked accordingly:
 
 | Job | Batch | Measured rows | Projected runtime | Checkpoint | Checkpoint path |
 |---|---:|---:|---:|---:|---|
-| GPT-2 J | 16 | 32/64, twice | 6.7 min | 0.053 GiB | `build/workspace_lens_v2/gpt2/j/fit.checkpoint.pt` |
-| GPT-2 R | 16 | 32/64, twice | 3.6 min | 0.053 GiB | `build/workspace_lens_v2/gpt2/r/fit.checkpoint.pt` |
-| Qwen 0.8B J | 16 | 32/64, twice | 51.7 min | 0.188 GiB | `build/workspace_lens_v2/qwen3_5-0_8b/j/fit.checkpoint.pt` |
-| Qwen 0.8B R | 16 | 32/64, twice | 52.4 min | 0.188 GiB | `build/workspace_lens_v2/qwen3_5-0_8b/r/fit.checkpoint.pt` |
-| Qwen 2B Base J | 16 | 32/64, twice | 2.13 h | 0.750 GiB | `build/workspace_lens_v2/qwen3_5-2b-base/j/fit.checkpoint.pt` |
-| Qwen 2B Base R | 16 | 32/64, twice | 1.98 h | 0.750 GiB | `build/workspace_lens_v2/qwen3_5-2b-base/r/fit.checkpoint.pt` |
-| Qwen 2B Chat J | 16 | 32/64, twice | 2.15 h | 0.750 GiB | `build/workspace_lens_v2/qwen3_5-2b/j/fit.checkpoint.pt` |
-| Qwen 2B Chat R | 16 | 32/64, twice | 2.04 h | 0.750 GiB | `build/workspace_lens_v2/qwen3_5-2b/r/fit.checkpoint.pt` |
-| Qwen 9B J | 4 | 8/16, twice | 2.82 h (25 prompts, scaled) | 4.000 GiB | `build/workspace_lens_v2/qwen3_5-9b/j/fit.checkpoint.pt` |
-| Qwen 9B R | 4 | 8/16, twice | 2.61 h (25 prompts, scaled) | 4.000 GiB | `build/workspace_lens_v2/qwen3_5-9b/r/fit.checkpoint.pt` |
-| Qwen 27B J | 2 | 2/4, once | 11.72 h (25 prompts, scaled) | 12.500 GiB | `build/workspace_lens_v2/qwen3_5-27b/j/fit.checkpoint.pt` |
-| Qwen 27B R | 1 | 2/4, twice | 13.18 h (25 prompts, scaled) | 12.500 GiB | `build/workspace_lens_v2/qwen3_5-27b/r/fit.checkpoint.pt` |
+| GPT-2 J | 16 | 32/64, twice | 6.7 min | 0.053 GiB | `build/lenses/v2/openai-community--gpt2/j/fit.checkpoint.pt` |
+| GPT-2 R | 16 | 32/64, twice | 3.6 min | 0.053 GiB | `build/lenses/v2/openai-community--gpt2/r/fit.checkpoint.pt` |
+| Qwen 0.8B J | 16 | 32/64, twice | 51.7 min | 0.188 GiB | `build/lenses/v2/Qwen--Qwen3.5-0.8B/j/fit.checkpoint.pt` |
+| Qwen 0.8B R | 16 | 32/64, twice | 52.4 min | 0.188 GiB | `build/lenses/v2/Qwen--Qwen3.5-0.8B/r/fit.checkpoint.pt` |
+| Qwen 2B Base J | 16 | 32/64, twice | 2.13 h | 0.750 GiB | `build/lenses/v2/Qwen--Qwen3.5-2B-Base/j/fit.checkpoint.pt` |
+| Qwen 2B Base R | 16 | 32/64, twice | 1.98 h | 0.750 GiB | `build/lenses/v2/Qwen--Qwen3.5-2B-Base/r/fit.checkpoint.pt` |
+| Qwen 2B Chat J | 16 | 32/64, twice | 2.15 h | 0.750 GiB | `build/lenses/v2/Qwen--Qwen3.5-2B/j/fit.checkpoint.pt` |
+| Qwen 2B Chat R | 16 | 32/64, twice | 2.04 h | 0.750 GiB | `build/lenses/v2/Qwen--Qwen3.5-2B/r/fit.checkpoint.pt` |
+| Qwen 9B J | 4 | 8/16, twice | 2.82 h (25 prompts, scaled) | 4.000 GiB | `build/lenses/v2/Qwen--Qwen3.5-9B/j/fit.checkpoint.pt` |
+| Qwen 9B R | 4 | 8/16, twice | 2.61 h (25 prompts, scaled) | 4.000 GiB | `build/lenses/v2/Qwen--Qwen3.5-9B/r/fit.checkpoint.pt` |
+| Qwen 27B J | 2 | 2/4, once | 11.72 h (25 prompts, scaled) | 12.500 GiB | `build/lenses/v2/Qwen--Qwen3.5-27B/j/fit.checkpoint.pt` |
+| Qwen 27B R | 1 | 2/4, twice | 13.18 h (25 prompts, scaled) | 12.500 GiB | `build/lenses/v2/Qwen--Qwen3.5-27B/r/fit.checkpoint.pt` |
 
 These are projections, not completed fits. Remaining rows will be added only
 after their corrected timing shards run.

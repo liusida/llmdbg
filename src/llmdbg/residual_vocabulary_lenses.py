@@ -6,7 +6,6 @@ import json
 import os
 from contextlib import contextmanager
 from contextvars import ContextVar
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -158,7 +157,6 @@ def source_file(
     return target
 
 
-@lru_cache(maxsize=32)
 def available_lenses(model_id: str) -> tuple[dict[str, str], ...]:
     """Return enabled entries declared compatible with the active model.
 
@@ -228,3 +226,9 @@ def available_lenses(model_id: str) -> tuple[dict[str, str], ...]:
             "method": item["method"],
         })
     return tuple(result)
+
+
+# Preserve the public cache-reset hook used by long-lived debug sessions and
+# tests. Discovery itself is intentionally uncached so a newly published Hub
+# index entry becomes visible without restarting the runtime.
+available_lenses.cache_clear = lambda: None  # type: ignore[attr-defined]

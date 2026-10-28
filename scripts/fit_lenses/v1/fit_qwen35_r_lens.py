@@ -1,13 +1,8 @@
 #!/usr/bin/env python3
-"""Fit dense RelP R-Lens transport maps for Qwen 3.5.
+"""Legacy format-v1 R-Lens fitter retained for implementation reference.
 
-Install the optional fitter dependencies into the environment used to run this
-script first::
-
-    uv pip install datasets "git+https://github.com/anthropics/jacobian-lens.git"
-
-The default output is the package data location consumed automatically by
-llmdbg's Neuron Lens.
+Do not use this script for new artifacts. Use ``fit_lenses/v2/fit_lenses.py`` to
+fit the current, site-aware format-v2 Workspace Lens instead.
 """
 
 from __future__ import annotations
@@ -23,10 +18,19 @@ from typing import Any
 import torch
 from gb10_load_llm import load_model_to_cuda
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers.models.qwen3.modeling_qwen3 import Qwen3MLP, Qwen3RMSNorm
 from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5MLP, Qwen3_5RMSNorm
 
 DATASET_ID = "NeelNanda/pile-10k"
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+OBSOLETE_ERROR = """\
+ERROR: this script fits the obsolete format-v1 R-Lens artifact.
+It does not capture the Embed/Mid/Post maps required by the current format-v2
+Workspace Lens, and a v1 result cannot be repackaged as v2.
+
+Use scripts/fit_lenses/v2/fit_lenses.py --method r for new fits. If the requested
+model is not listed there yet, add and test its architecture support first.
+"""
 
 
 class _IdentityActivation(torch.autograd.Function):
@@ -63,17 +67,37 @@ def install_relp_rules(model: torch.nn.Module) -> tuple[int, int]:
             or name.endswith(".post_attention_layernorm")
             or name == "model.norm"
         )
-        if isinstance(module, Qwen3_5RMSNorm) and residual_norm:
-            def relp_norm(current: Qwen3_5RMSNorm, values: torch.Tensor) -> torch.Tensor:
+        if isinstance(module, Qwen3RMSNorm) and residual_norm:
+            def relp_qwen3_norm(
+                current: Qwen3RMSNorm, values: torch.Tensor
+            ) -> torch.Tensor:
+                input_dtype = values.dtype
+                inverse_rms = torch.rsqrt(
+                    values.float().pow(2).mean(-1, keepdim=True)
+                    + current.variance_epsilon
+                ).detach()
+                normalized = values.float() * inverse_rms
+                return current.weight * normalized.to(input_dtype)
+
+            module.forward = MethodType(relp_qwen3_norm, module)
+            norms += 1
+        elif isinstance(module, Qwen3_5RMSNorm) and residual_norm:
+            def relp_qwen35_norm(
+                current: Qwen3_5RMSNorm, values: torch.Tensor
+            ) -> torch.Tensor:
                 inverse_rms = torch.rsqrt(
                     values.float().pow(2).mean(-1, keepdim=True) + current.eps
                 ).detach()
-                return (values.float() * inverse_rms * (1 + current.weight.float())).type_as(values)
+                return (
+                    values.float() * inverse_rms * (1 + current.weight.float())
+                ).type_as(values)
 
-            module.forward = MethodType(relp_norm, module)
+            module.forward = MethodType(relp_qwen35_norm, module)
             norms += 1
-        elif isinstance(module, Qwen3_5MLP):
-            def relp_mlp(current: Qwen3_5MLP, values: torch.Tensor) -> torch.Tensor:
+        elif isinstance(module, (Qwen3MLP, Qwen3_5MLP)):
+            def relp_mlp(
+                current: Qwen3MLP | Qwen3_5MLP, values: torch.Tensor
+            ) -> torch.Tensor:
                 gate_values = current.gate_proj(values)
                 gate = _IdentityActivation.apply(gate_values, current.act_fn(gate_values))
                 return current.down_proj(_HalfProduct.apply(gate, current.up_proj(values)))
@@ -115,12 +139,17 @@ def prompts(count: int) -> list[str]:
 
 
 def main() -> None:
-    args = arguments()
+    arguments()
+    raise SystemExit(OBSOLETE_ERROR)
+
+
+def legacy_main(args: argparse.Namespace) -> None:
+    """Retained v1 implementation; unreachable from the command-line entry point."""
     try:
         import jlens
     except ImportError as error:
         raise SystemExit(
-            'Install the optional fitter: uv pip install "git+https://github.com/anthropics/jacobian-lens.git"'
+            "Install the development dependencies with: uv sync"
         ) from error
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
     tokenizer = AutoTokenizer.from_pretrained(args.model)
@@ -143,13 +172,10 @@ def main() -> None:
     if not source_layers or min(source_layers) < 0 or max(source_layers) > target_layer:
         raise ValueError(f"source layers must be within 0..{target_layer}")
 
-    output = args.output or (
-        PROJECT_ROOT / "build" / "r_lens" / "artifacts" / f"{slug(args.model)}.pt"
-    )
+    root = PROJECT_ROOT / "build/lenses/v1" / args.model.replace("/", "--") / "r"
+    output = args.output or root / "fitted.pt"
     output.parent.mkdir(parents=True, exist_ok=True)
-    checkpoint = args.checkpoint or (
-        PROJECT_ROOT / "build" / "r_lens" / f"{slug(args.model)}.checkpoint.pt"
-    )
+    checkpoint = args.checkpoint or root / "fit.checkpoint.pt"
     checkpoint.parent.mkdir(parents=True, exist_ok=True)
 
     parity_ids = tokenizer("R-Lens parity check.", return_tensors="pt")["input_ids"].cuda()

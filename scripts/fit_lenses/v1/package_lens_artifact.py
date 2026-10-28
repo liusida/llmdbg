@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert a fitted torch lens to the llmdbg Hub safetensors format."""
+"""Legacy format-v1 lens packer retained for implementation reference."""
 
 from __future__ import annotations
 
@@ -11,7 +11,12 @@ from pathlib import Path
 import torch
 from safetensors.torch import save_file
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+OBSOLETE_ERROR = """\
+ERROR: this packer only produces the obsolete format-v1 lens artifact.
+Do not publish new artifacts with it or relabel its output as v2. Current
+format-v2 lens fits are packaged by scripts/fit_lenses/v2/fit_lenses.py.
+"""
 
 
 def arguments() -> argparse.Namespace:
@@ -32,7 +37,12 @@ def sha256(path: Path) -> str:
 
 
 def main() -> None:
-    args = arguments()
+    arguments()
+    raise SystemExit(OBSOLETE_ERROR)
+
+
+def legacy_main(args: argparse.Namespace) -> None:
+    """Retained v1 implementation; unreachable from the command-line entry point."""
     artifact = torch.load(args.artifact, map_location="cpu", weights_only=True)
     maps = artifact.get("J")
     provenance = dict(artifact.get("provenance", {}))
@@ -40,7 +50,7 @@ def main() -> None:
         raise ValueError(f"{args.artifact} does not contain J maps")
     layers = sorted(int(layer) for layer in maps)
     tensors = {f"J.{layer}": maps[layer].contiguous() for layer in layers}
-    destination = PROJECT_ROOT / "build/hf-upload" / args.hub_path.strip("/")
+    destination = PROJECT_ROOT / "build/hf-upload/lenses/v1" / args.hub_path.strip("/")
     destination.mkdir(parents=True, exist_ok=True)
     tensor_path = destination / "lens.safetensors"
     save_file(tensors, tensor_path)

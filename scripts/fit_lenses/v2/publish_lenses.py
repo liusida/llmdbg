@@ -17,14 +17,14 @@ from typing import Any
 
 from safetensors import safe_open
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 HUB_REPO = "sida/llmdbg"
 
 
 def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("artifacts", nargs="+", type=Path)
-    parser.add_argument("--stage", type=Path, default=PROJECT_ROOT / "build/hf-upload-v2")
+    parser.add_argument("--stage", type=Path, default=PROJECT_ROOT / "build/hf-upload")
     parser.add_argument("--upload", action="store_true")
     return parser.parse_args()
 
@@ -73,7 +73,7 @@ def validate_artifact(directory: Path) -> dict[str, Any]:
 
 def artifact_path(manifest: dict[str, Any]) -> str:
     model = str(manifest["model_id"]).replace("/", "--")
-    return f"workspace-lenses/v2/{model}/{manifest['method']}"
+    return f"lenses/v2/{model}/{manifest['method']}"
 
 
 def stage_artifacts(artifacts: list[Path], stage: Path) -> list[dict[str, Any]]:
@@ -103,7 +103,7 @@ def clean_cache_test(stage: Path, entries: list[dict[str, Any]]) -> None:
         old = workspace_lens.os.environ.get("LLMDBG_WORKSPACE_LENS_PATH")
         try:
             workspace_lens.os.environ["LLMDBG_WORKSPACE_LENS_PATH"] = str(
-                stage / "workspace-lenses" / "v2"
+                stage / "lenses" / "v2"
             )
             for entry in entries:
                 workspace_lens.clear_cache()
@@ -159,11 +159,11 @@ def upload(stage: Path, entries: list[dict[str, Any]], index_path: Path) -> None
         api.upload_folder(
             repo_id=HUB_REPO, repo_type="dataset",
             folder_path=stage / entry["path"], path_in_repo=entry["path"],
-            commit_message=f"Add {entry['model_id']} {entry['method']} Workspace Lens v2",
+            commit_message=f"Add {entry['model_id']} {entry['method']} Lens v2",
         )
     api.upload_file(
         repo_id=HUB_REPO, repo_type="dataset", path_or_fileobj=index_path,
-        path_in_repo="index.json", commit_message="Update Workspace Lens v2 index",
+        path_in_repo="index.json", commit_message="Update Lens v2 index",
     )
 
 

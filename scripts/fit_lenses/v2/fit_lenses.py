@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fit site-aware v2 J/R Workspace Lens maps with resumable accumulation."""
+"""Fit site-aware format-v2 J/R lenses with resumable accumulation."""
 
 from __future__ import annotations
 
@@ -21,10 +21,15 @@ from gb10_load_llm import load_model_to_cuda
 from safetensors.torch import save_file
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DATASET_ID = "NeelNanda/pile-10k"
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+PILE_DATASET_ID = "NeelNanda/pile-10k"
+WIKITEXT_DATASET_ID = "Salesforce/wikitext"
+WIKITEXT_CONFIG = "wikitext-103-raw-v1"
 SUPPORTED_MODELS = (
     "openai-community/gpt2",
+    "Qwen/Qwen3-8B",
     "Qwen/Qwen3.5-0.8B",
     "Qwen/Qwen3.5-2B-Base",
     "Qwen/Qwen3.5-2B",
@@ -33,6 +38,7 @@ SUPPORTED_MODELS = (
 )
 DEFAULT_PROMPTS = {
     "openai-community/gpt2": 100,
+    "Qwen/Qwen3-8B": 25,
     "Qwen/Qwen3.5-0.8B": 100,
     "Qwen/Qwen3.5-2B-Base": 100,
     "Qwen/Qwen3.5-2B": 100,
@@ -49,10 +55,19 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument(
         "--prompts", type=int,
-        help="Jacobian calibration sequences (default: 100 through 2B; 25 for 9B/27B)",
+        help="Jacobian calibration sequences (model-specific default: 25 or 100)",
     )
     parser.add_argument("--max-seq-len", type=int, default=128)
     parser.add_argument("--skip-first", type=int, default=4)
+    parser.add_argument(
+        "--dataset",
+        choices=("pile-10k", "wikitext-103"),
+        default="pile-10k",
+        help=(
+            "calibration corpus; wikitext-103 reproduces Neuronpedia's "
+            "2,000-character concatenation/chunking"
+        ),
+    )
     parser.add_argument("--dim-batch", type=int, default=16)
     parser.add_argument("--checkpoint-every", type=int, default=5)
     parser.add_argument("--calibrate", action="store_true")
@@ -64,8 +79,8 @@ def arguments() -> argparse.Namespace:
     return args
 
 
-def slug(model_id: str) -> str:
-    return model_id.rstrip("/").split("/")[-1].lower().replace(".", "_")
+def model_path(model_id: str) -> str:
+    return model_id.strip("/").replace("/", "--")
 
 
 def sha256(path: Path) -> str:
@@ -84,12 +99,36 @@ def resolved_revision(value: Any) -> str | None:
     return str(revision) if revision else None
 
 
-def calibration_prompts(count: int) -> list[str]:
+def calibration_prompts(count: int, dataset_name: str) -> list[str]:
     from datasets import load_dataset
 
-    dataset = load_dataset(DATASET_ID, split="train", streaming=True)
-    texts = (str(row["text"]) for row in dataset if str(row["text"]).strip())
-    prompts = list(itertools.islice(texts, count))
+    if dataset_name == "pile-10k":
+        dataset = load_dataset(PILE_DATASET_ID, split="train", streaming=True)
+        texts = (str(row["text"]) for row in dataset if str(row["text"]).strip())
+        prompts = list(itertools.islice(texts, count))
+    elif dataset_name == "wikitext-103":
+        dataset = load_dataset(
+            WIKITEXT_DATASET_ID,
+            WIKITEXT_CONFIG,
+            split="train",
+            streaming=True,
+        )
+        prompts = []
+        buffer = ""
+        for row in dataset:
+            text = str(row.get("text", "")).strip()
+            if not text or text.startswith("="):
+                continue
+            buffer += " " + text
+            while len(buffer) > 2000:
+                prompts.append(buffer[:2000].strip())
+                buffer = buffer[2000:]
+                if len(prompts) >= count:
+                    break
+            if len(prompts) >= count:
+                break
+    else:
+        raise ValueError(f"unsupported dataset {dataset_name!r}")
     if len(prompts) != count:
         raise RuntimeError(f"dataset supplied {len(prompts)} of {count} prompts")
     return prompts
@@ -99,6 +138,8 @@ def model_parts(model: Any) -> tuple[Any, Any, Any, str]:
     model_type = str(getattr(model.config, "model_type", ""))
     if model_type == "gpt2":
         return model.transformer.drop, model.transformer.h, model.transformer.ln_f, "gpt2"
+    if model_type == "qwen3":
+        return model.model.embed_tokens, model.model.layers, model.model.norm, "qwen3"
     if model_type in {"qwen3_5", "qwen3_5_text"}:
         return model.model.embed_tokens, model.model.layers, model.model.norm, "qwen3_5"
     raise ValueError(f"unsupported architecture {model_type!r}")
@@ -111,12 +152,12 @@ def hidden_size(model: Any) -> int:
 
 def install_relp(model: Any, architecture: str) -> dict[str, Any]:
     if architecture == "gpt2":
-        from fit_gpt2_r_lens import install_relp_rules
+        from scripts.fit_lenses.v1.fit_gpt2_r_lens import install_relp_rules
 
         norms, mlps = install_relp_rules(model)
         return {"ln_rule": True, "identity_rule": True, "half_rule": False,
                 "norm_modules": norms, "mlp_modules": mlps}
-    from fit_qwen35_r_lens import install_relp_rules
+    from scripts.fit_lenses.v1.fit_qwen35_r_lens import install_relp_rules
 
     norms, mlps = install_relp_rules(model)
     return {"ln_rule": True, "identity_rule": True, "half_rule": True,
@@ -222,7 +263,7 @@ def save_checkpoint(path: Path, sums: dict[str, torch.Tensor], completed: int) -
 def main() -> int:
     args = arguments()
     output = args.output or (
-        PROJECT_ROOT / "build" / "workspace_lens_v2" / slug(args.model) / args.method
+        PROJECT_ROOT / "build" / "lenses" / "v2" / model_path(args.model) / args.method
     )
     checkpoint = args.checkpoint or output / "fit.checkpoint.pt"
     output.mkdir(parents=True, exist_ok=True)
@@ -251,7 +292,7 @@ def main() -> int:
             raise RuntimeError(f"RelP changed forward values by {(before-after).abs().max().item():.3e}")
 
     requested_prompts = 1 if args.calibrate else args.prompts
-    prompts = calibration_prompts(requested_prompts)
+    prompts = calibration_prompts(requested_prompts, args.dataset)
     if args.calibrate:
         # Warm model kernels and the CUDA context before timing. Without this,
         # the smaller first shard can appear slower than the larger shard.
@@ -373,7 +414,12 @@ def main() -> int:
         "dtype": "float16",
         "artifact_bytes": tensor_path.stat().st_size,
         "tensor_shapes": {key: list(value.shape) for key, value in averaged.items()},
-        "dataset": DATASET_ID,
+        "dataset": (
+            PILE_DATASET_ID
+            if args.dataset == "pile-10k"
+            else f"{WIKITEXT_DATASET_ID}/{WIKITEXT_CONFIG}"
+        ),
+        "dataset_recipe": args.dataset,
         "prompts": completed,
         "max_seq_len": args.max_seq_len,
         "skip_first": args.skip_first,

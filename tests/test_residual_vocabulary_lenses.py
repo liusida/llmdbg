@@ -97,6 +97,28 @@ class ResidualVocabularyLensRegistryTest(unittest.TestCase):
             index.write_text('{"workspace_lenses": []}')
             self.assertEqual(source_file({"source": directory}, "index.json"), index)
 
+    def test_new_index_entry_is_discovered_without_runtime_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            index = root / "index.json"
+            index.write_text('{"j_lenses": []}')
+            configured = [{
+                "id": "j", "label": "J-Lens", "method": "j",
+                "source": directory, "indexSection": "j_lenses",
+            }]
+            with patch.dict(
+                os.environ,
+                {"LLMDBG_RESIDUAL_TO_VOCABULARY_LENSES": json.dumps(configured)},
+            ):
+                self.assertEqual(available_lenses("Qwen/Qwen3-8B"), ())
+                index.write_text(json.dumps({"j_lenses": [{
+                    "model_id": "Qwen/Qwen3-8B", "compatible_models": [],
+                }]}))
+                self.assertEqual(
+                    available_lenses("Qwen/Qwen3-8B"),
+                    ({"id": "j", "label": "J-Lens", "method": "j"},),
+                )
+
     def test_local_source_cannot_escape_repository(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "escapes"):
