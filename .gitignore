@@ -18,3 +18,4 @@ htmlcov/
 .logs/
 /src/llmdbg/data/r_lens/
 private/
+diagnostics/
