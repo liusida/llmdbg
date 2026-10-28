@@ -7,6 +7,29 @@ import llmdbg.model_runtime as model_runtime
 
 
 class ModelRuntimeCacheTest(unittest.TestCase):
+    def test_qwen3_dense_cached_trace_matches_native_forward(self) -> None:
+        import torch
+        from types import SimpleNamespace
+        from transformers import Qwen3Config, Qwen3ForCausalLM
+        from llmdbg import qwen3
+        self.assertEqual(qwen3().architecture, 'qwen3')
+        config = Qwen3Config(vocab_size=64, hidden_size=32, intermediate_size=64,
+            num_hidden_layers=2, num_attention_heads=4, num_key_value_heads=2, head_dim=8)
+        with torch.random.fork_rng():
+            torch.manual_seed(42)
+            model = Qwen3ForCausalLM(config).eval()
+        runtime = model_runtime.ModelRuntime(model, SimpleNamespace(decode=lambda ids: str(ids[0])))
+        ids = torch.tensor([[1, 2, 3]])
+        execution = model_runtime.ModelExecution(runtime, ids, ('a', 'b', 'c'), 'cpu', lambda _: None)
+        with torch.inference_mode():
+            expected = model.model(input_ids=ids, use_cache=False).last_hidden_state
+        for position in (0, 2):
+            trace = execution.trace_token(position)
+            self.assertTrue(all(runtime.layer_kind(i) == 'full_attention' for i in range(2)))
+            self.assertTrue(any(s.layer.name.endswith('.full_attention') for s in trace.states))
+            torch.testing.assert_close(torch.tensor(trace.states[-1].output_vector),
+                                       expected[0, position], atol=1e-5, rtol=1e-4)
+
     def test_delta_channels_group_by_value_heads_not_attention_heads(self) -> None:
         import torch
         from types import SimpleNamespace

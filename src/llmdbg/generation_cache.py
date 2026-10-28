@@ -32,7 +32,7 @@ def identity(adapter, prompt_count):
     execution = adapter.execution
     runtime, tokenizer = execution.runtime, execution.runtime.tokenizer
     config = runtime.model.config
-    revision = getattr(config, '_commit_hash', None)
+    revision = getattr(runtime,'resolved_revision',None) or getattr(config, '_commit_hash', None)
     requested = getattr(adapter, 'model_revision', 'main')
     revision = revision or (requested if requested not in ('main','master','') else None)
     # A local mutable checkpoint or unresolved branch cannot safely share a disk entry.

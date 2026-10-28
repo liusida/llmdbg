@@ -15,6 +15,33 @@ from llmdbg.model_runtime import _runtime_lock
 from llmdbg.residual_vocabulary_lenses import activate, available_lenses, lens
 
 
+def generated_token_hints(tokenizer, ids, pieces, start):
+    """Decode byte-fragment tokens with neighbours without altering token positions."""
+    hints = [None] * len(pieces)
+    for index, piece in enumerate(pieces):
+        if '\ufffd' not in piece:
+            continue
+        left, right = max(0, index-4), min(len(ids), index+5)
+        decoded = tokenizer.decode(ids[left:right])
+        hints[index] = f'Tokens {start+left}–{start+right-1} decoded together: {decoded!r}'
+    return hints
+
+
+def chat_turn_ranges(tokens):
+    """Find actual chat-template headers, not ordinary mentions of role names."""
+    headers = []
+    for position, piece in enumerate(tokens):
+        if piece not in {'<|im_start|>', '<start_of_turn>'}:
+            continue
+        role = ''.join(tokens[position+1:position+17]).split('\n',1)[0].strip()
+        if role == 'model':
+            role = 'assistant'
+        if role in {'system','user','assistant'}:
+            headers.append((position,role))
+    return [{'start':position,'end':headers[index+1][0] if index+1<len(headers) else len(tokens),'role':role}
+            for index,(position,role) in enumerate(headers)]
+
+
 def metadata(adapter):
     execution = adapter.execution
     if execution is None:
@@ -113,28 +140,41 @@ class Snapshot:
             raise ValueError('Choose an available vocabulary lens.')
         self.method = self.selected['method'] if self.selected else 'logit'
         self.prompt_count, self.max_new_tokens = generation_budget(adapter)
+        from copy import deepcopy
+        self.replay = replace(self.execution, input_ids=self.execution.input_ids.clone(),
+            inputs_embeds=self.execution.inputs_embeds.clone() if self.execution.inputs_embeds is not None else None,
+            past_key_values=None, cached_through=-1, capture_delta_core=False,
+            interventions=dict(self.execution.interventions), ica_interventions=set(self.execution.ica_interventions),
+            vector_patches=dict(self.execution.vector_patches), ica_observations={},auto_chat=deepcopy(self.execution.auto_chat))
+        resolved_auto = self.replay.auto_chat is not None and 'stop' not in args
+        self.partial_auto = False
+        if resolved_auto:
+            from llmdbg.chat_auto import resolve_auto_chat
+            resolve_auto_chat(self.replay,allow_partial=True)
+            self.partial_auto = self.replay.auto_chat is not None
+            self.prompt_count = self.replay.auto_chat['start'] if self.partial_auto else self.replay.token_count
         limit = self.prompt_count + self.max_new_tokens
         self.start = int(args.get('start', 0))
-        self.stop = int(args.get('stop', limit))
+        self.stop = self.replay.token_count if self.partial_auto else int(args.get('stop', limit))
+        if self.partial_auto:
+            limit = max(limit,self.stop)
         if not 0 <= self.start < self.stop <= limit:
             raise ValueError(f'Token range must satisfy 0 ≤ start < stop ≤ {limit}: '
                              f'{self.prompt_count} prompt tokens + max_new_tokens={self.max_new_tokens} (stop is exclusive).')
-        if self.stop - self.start > 5000:
-            raise ValueError('Display at most 5000 token positions per snapshot; narrow the range.')
         self.eos_stopped = False
         self.newly_generated = 0
         self.model = str(adapter.model_name)
         self.rows, self.vectors, self.mixed, self.values, self.head_rows = [], {}, {}, {}, {}
         self.maps, self.edge_cache = {}, {}
-        self.replay = replace(self.execution, input_ids=self.execution.input_ids.clone(),
-            inputs_embeds=self.execution.inputs_embeds.clone() if self.execution.inputs_embeds is not None else None,
-            past_key_values=None, cached_through=-1, capture_delta_core=False,
-            interventions=dict(self.execution.interventions), ica_interventions=dict(self.execution.ica_interventions),
-            vector_patches=dict(self.execution.vector_patches), ica_observations={})
         self.intervened = bool(self.replay.interventions or self.replay.ica_interventions or self.replay.vector_patches)
         self.current_token = adapter.token_index
         from llmdbg import generation_cache
-        self.generation_key, self.persistent_cache, self.cache_metadata = generation_cache.identity(adapter,self.prompt_count)
+        cache_adapter = adapter
+        if resolved_auto:
+            from types import SimpleNamespace
+            cache_adapter = SimpleNamespace(execution=self.replay,model_name=adapter.model_name,
+                                            model_revision=getattr(adapter,'model_revision','main'))
+        self.generation_key, self.persistent_cache, self.cache_metadata = generation_cache.identity(cache_adapter,self.prompt_count)
         self.regenerate = bool(args.get('regenerate',False))
         if self.regenerate and not self.intervened:
             # A fresh generation starts at the authored prompt, not after a
@@ -318,6 +358,10 @@ class Snapshot:
 
     def _capture(self):
         import torch
+        # Turn resolution may have already filled a prefix of the private KV
+        # cache. Capture hooks need the entire range, not only its uncached tail.
+        self.replay.past_key_values = None
+        self.replay.cached_through = -1
         runtime = self.execution.runtime
         handles = []
         if self.intervened:
@@ -360,17 +404,34 @@ class Snapshot:
                                       self.vectors[key]))
 
     def result(self):
+        generated_ids = self.replay.input_ids[0, self.prompt_count:self.stop].tolist()
+        generated_pieces = list(self.tokens[self.prompt_count:self.stop])
+        limited_final = (not self.partial_auto and not self.eos_stopped and self.max_new_tokens>0
+                         and self.stop>=self.prompt_count+self.max_new_tokens)
+        incomplete_reason = ''
+        if self.partial_auto:
+            incomplete_reason = (f'Partial AUTO_REPLY: reached max_new_tokens={self.replay.auto_chat["budget"]} before EOS. '
+                                 'Showing the generated tokens so far; later turns have not run.')
+        elif limited_final:
+            incomplete_reason = f'Generation reached max_new_tokens={self.max_new_tokens}; showing partial results.'
+        if incomplete_reason and self.start>0:
+            incomplete_reason += f' Lattice shows positions {self.start}–{self.stop-1}.'
         return {'snapshotId': self.id, 'model': self.model, 'mode': self.mode,
+                'incomplete':self.partial_auto or limited_final,'incompleteReason':incomplete_reason,
                 'lensLabel': self.selected['label'] if self.selected else 'Logit Lens',
                 'targetId': self.token_id, 'target': self.execution.runtime.tokenizer.decode([self.token_id]),
                 'start': self.start, 'stop': self.stop, 'tokens': list(self.tokens[self.start:self.stop]),
+                'turns': chat_turn_ranges(self.tokens[:self.stop]),
                 'currentToken': self.current_token, 'rows': self.rows, 'interventions': self.intervened,
                 'promptTokenCount': self.prompt_count, 'maxNewTokens': self.max_new_tokens,
+                'promptTokens': list(self.tokens[:self.prompt_count]),
                 'generatedTokenCount': max(0, self.stop-self.prompt_count),
                 'newlyGeneratedTokens': self.newly_generated, 'stoppedAtEos': self.eos_stopped,
                 'generatedText': ''.join(self.tokens[self.prompt_count:]),
                 'generatedTokenStart': self.prompt_count,
                 'generatedTokens': list(self.tokens[self.prompt_count:self.stop]),
+                'generatedTokenHints': generated_token_hints(self.execution.runtime.tokenizer,
+                    generated_ids, generated_pieces, self.prompt_count),
                 'generationCache': self.generation_cache_source,
                 'reusedGeneratedTokens': self.reused_generated,
                 'activationsReused': self.activations_reused,

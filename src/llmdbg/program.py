@@ -27,6 +27,7 @@ class ChatPrompt:
     add_generation_prompt: bool = True
     max_new_tokens: int = 20
     enable_thinking: bool = False
+    continue_final_message: bool = False
 
 
 class TensorHandle(Sequence[float]):
@@ -219,12 +220,17 @@ class RemoteModel:
         add_generation_prompt: bool = True,
         max_new_tokens: int = 20,
         enable_thinking: bool = False,
+        continue_final_message: bool = False,
     ) -> ChatPrompt:
+        from llmdbg.chat_auto import normalize_messages, validate_continuation
+        normalized = normalize_messages(messages)
+        validate_continuation(normalized,add_generation_prompt,continue_final_message)
         return ChatPrompt(
-            tuple(dict(message) for message in messages),
+            tuple(normalized),
             add_generation_prompt,
             max_new_tokens,
             enable_thinking,
+            continue_final_message,
         )
 
     @property
@@ -268,6 +274,8 @@ class DebugSession:
             messages=(list(self.prompt.messages) if isinstance(self.prompt, ChatPrompt) else None),
             add_generation_prompt=(self.prompt.add_generation_prompt if isinstance(self.prompt, ChatPrompt) else True),
             enable_thinking=(self.prompt.enable_thinking if isinstance(self.prompt, ChatPrompt) else False),
+            continue_final_message=(self.prompt.continue_final_message if isinstance(self.prompt, ChatPrompt) else False),
+            max_new_tokens=(self.prompt.max_new_tokens if isinstance(self.prompt, ChatPrompt) else 20),
             device=self.model.device, dtype=self.model.dtype,
         )
         self.model._session = self
@@ -287,11 +295,34 @@ class DebugSession:
     def tokens(self) -> Iterator[int]:
         """Yield real token-position locals while selecting each runtime trace."""
         assert self.execution is not None
-        count = int(self.execution.input_ids.shape[1])
-        for position in range(count):
+        auto = self.execution.auto_chat is not None
+        position, generated = 0, 0
+        while position < self.execution.token_count:
             self.token = position
             self._refresh()
             yield position
+            position += 1
+            if position < self.execution.token_count or not auto:
+                continue
+            budget = self.prompt.max_new_tokens
+            if generated >= budget:
+                if self.execution.auto_chat:
+                    raise ValueError('AUTO_REPLY reached max_new_tokens before EOS. Increase the budget to reach the follow-up.')
+                return
+            final = self._states[self.execution.runtime.final_norm_name]
+            _, predictions = self.execution.vocabulary_projection(final.output_vector,count=1)
+            token = predictions[0].token_id
+            eos = getattr(self.execution.runtime.tokenizer,'eos_token_id',None)
+            eos_ids = set(eos if isinstance(eos,(list,tuple,set)) else [eos])
+            if token in eos_ids:
+                if not self.execution.auto_chat:
+                    return
+                from llmdbg.chat_auto import finish_auto_turn
+                finish_auto_turn(self.execution)
+                generated = 0
+            else:
+                self.execution.append_generated_token(token)
+                generated += 1
 
     def layer_kind(self, index: int) -> str:
         assert self.execution is not None
@@ -349,6 +380,13 @@ def gpt2(
     dtype: str = "auto",
 ) -> RemoteModel:
     return RemoteModel(model, architecture="gpt2", revision=revision, device=device, dtype=dtype)
+
+
+def qwen3(
+    model: str = "Qwen/Qwen3-8B",
+    *, revision: str = "main", device: str = "auto", dtype: str = "auto",
+) -> RemoteModel:
+    return RemoteModel(model, architecture="qwen3", revision=revision, device=device, dtype=dtype)
 
 
 def qwen35(

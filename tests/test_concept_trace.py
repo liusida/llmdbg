@@ -9,12 +9,97 @@ from unittest.mock import patch
 
 import torch
 
-from llmdbg.concept_trace import Snapshot, cosine_scores, dispatch, target_support, target_tokens
+from llmdbg.concept_trace import Snapshot, cosine_scores, dispatch, target_support, target_tokens, generated_token_hints, chat_turn_ranges
 from llmdbg.dap import LLMDebugAdapter, ProtocolStream
 from llmdbg.model_runtime import ModelExecution, ModelRuntime
 
 
 class ConceptTraceTest(unittest.TestCase):
+    def test_partial_auto_reply_still_produces_snapshot_and_reuses_partial_cache(self):
+        from llmdbg.chat_auto import AUTO_REPLY_MARKER
+        adapter=self.adapter();adapter.max_new_tokens=1
+        execution=adapter.execution
+        execution.runtime.tokenizer.eos_token_id=63
+        execution.auto_chat={'messages':[{'role':'user','content':'choose'},
+            {'role':'assistant','content':AUTO_REPLY_MARKER},{'role':'user','content':'reveal'}],
+            'history':[{'role':'user','content':'choose'}],'current':1,'start':4,'budget':1,
+            'model':'test/model','kwargs':{'revision':'main'}}
+        with patch.object(Snapshot,'_next_token',side_effect=AssertionError('must not generate a final reply')):
+            snapshot=Snapshot(adapter,{'target':' cat'})
+        result=snapshot.result()
+        self.assertTrue(result['incomplete'])
+        self.assertIn('max_new_tokens=1',result['incompleteReason'])
+        self.assertIn('later turns have not run',result['incompleteReason'])
+        self.assertEqual(result['generatedTokenCount'],1)
+        self.assertEqual(len(result['generatedTokens']),1)
+        self.assertEqual(len(result['tokens']),5)
+        self.assertTrue(all(len(row['scores'])==5 for row in result['rows']))
+        self.assertEqual(execution.token_count,4)
+        self.assertNotIn('reveal',snapshot.replay.rendered_prompt)
+        with patch.object(ModelExecution,'_prefill',side_effect=AssertionError('partial replay must reuse tokens and activations')):
+            repeated=Snapshot(adapter,{'target':' cat'})
+        self.assertTrue(repeated.activations_reused)
+        self.assertTrue(repeated.result()['incomplete'])
+
+    def test_private_replay_preserves_intervention_set_type_and_cache_identity(self):
+        from llmdbg.generation_cache import identity
+        adapter=self.adapter()
+        snapshot=Snapshot(adapter,{'target':' cat','stop':1})
+        self.assertIsInstance(snapshot.replay.ica_interventions,set)
+        self.assertIsNot(snapshot.replay.ica_interventions,adapter.execution.ica_interventions)
+        original=identity(adapter,adapter.execution.token_count)[0]
+        private=SimpleNamespace(execution=snapshot.replay,model_name=adapter.model_name,
+                                model_revision=getattr(adapter,'model_revision','main'))
+        self.assertEqual(original,identity(private,adapter.execution.token_count)[0])
+
+    def test_runtime_resolved_revision_enables_persistent_cache_for_main(self):
+        from llmdbg.generation_cache import identity
+        adapter=self.adapter();adapter.model_revision='main'
+        adapter.execution.runtime.model.config._commit_hash=None
+        adapter.execution.runtime.resolved_revision='resolved-weights-commit'
+        _,persistent,metadata=identity(adapter,adapter.execution.token_count)
+        self.assertTrue(persistent)
+        self.assertEqual(metadata['revision'],'resolved-weights-commit')
+
+    def test_chat_turn_ranges_include_image_tokens_and_generated_assistant_turns(self):
+        tokens=['<|im_start|>','system','\n','help','<|im_end|>','\n',
+                '<|im_start|>','user','\n','<|image_pad|>','question','<|im_end|>','\n',
+                '<|im_start|>','assistant','\n','answer']
+        self.assertEqual(chat_turn_ranges(tokens),[
+            {'start':0,'end':6,'role':'system'}, {'start':6,'end':13,'role':'user'},
+            {'start':13,'end':17,'role':'assistant'}])
+        self.assertEqual(chat_turn_ranges(['user','assistant','ordinary prose']),[])
+        self.assertEqual(chat_turn_ranges(['<start_of_turn>','model','\n','answer']),
+                         [{'start':0,'end':4,'role':'assistant'}])
+
+    def test_auto_reply_full_replay_resolves_only_private_copy_but_short_range_does_not(self):
+        adapter=self.adapter()
+        adapter.max_new_tokens=2
+        adapter.execution.auto_chat={'history':[{'role':'user','content':'choose'}]}
+        original=adapter.execution.input_ids.clone()
+        with patch('llmdbg.chat_auto.resolve_auto_chat',side_effect=AssertionError('short range must not resolve replies')):
+            Snapshot(adapter,{'target':' cat','stop':1})
+        def resolve(execution,**kwargs):
+            self.assertIsNot(execution.auto_chat,adapter.execution.auto_chat)
+            execution.auto_chat['history'].append({'role':'user','content':'reveal'})
+            execution.append_generated_token(5)
+            execution.auto_chat=None
+        with patch('llmdbg.chat_auto.resolve_auto_chat',side_effect=resolve), \
+             patch.object(Snapshot,'_next_token',return_value=6):
+            snapshot=Snapshot(adapter,{'target':' cat'})
+        self.assertEqual(snapshot.prompt_count,5)
+        self.assertEqual(len(adapter.execution.auto_chat['history']),1)
+        torch.testing.assert_close(adapter.execution.input_ids,original)
+        self.assertIsNone(snapshot.replay.auto_chat)
+
+    def test_generated_byte_fragments_have_jointly_decoded_hints(self):
+        tokenizer = SimpleNamespace(decode=lambda ids: 'photo! 🏀')
+        hints = generated_token_hints(tokenizer, [1,2,3,4], ['photo!', ' �', '�', '�'], 420)
+        self.assertIsNone(hints[0])
+        for hint in hints[1:]:
+            self.assertIn('Tokens 420–423 decoded together:', hint)
+            self.assertIn('🏀', hint)
+
     def cache_adapter(self,budget=2):
         adapter=self.adapter()
         adapter.execution.runtime.model.config._commit_hash='unit-test-checkpoint'
@@ -104,15 +189,15 @@ class ConceptTraceTest(unittest.TestCase):
         adapter.execution.interventions[(0,'model.layers.0.mlp','input',0)]=0.
         self.assertFalse(identity(adapter,4)[1])
 
-    def test_snapshot_accepts_5000_positions_and_rejects_5001(self):
+    def test_snapshot_has_no_separate_display_cap(self):
         adapter = self.adapter()
-        adapter.max_new_tokens = 6000
+        adapter.max_new_tokens = 20000
         with patch.object(Snapshot, '_complete_tokens', side_effect=RuntimeError('range accepted')):
-            for stop in (2049, 5000):
+            for stop in (2049, 5000, 5001, 20004):
                 with self.assertRaisesRegex(RuntimeError, 'range accepted'):
                     Snapshot(adapter, {'target':' cat', 'start':0, 'stop':stop})
-            with self.assertRaisesRegex(ValueError, 'at most 5000'):
-                Snapshot(adapter, {'target':' cat', 'start':0, 'stop':5001})
+            with self.assertRaisesRegex(ValueError, 'Token range'):
+                Snapshot(adapter, {'target':' cat', 'start':0, 'stop':20005})
 
     def adapter(self, architecture='qwen'):
         if architecture == 'gpt2':

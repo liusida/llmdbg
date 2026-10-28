@@ -511,6 +511,8 @@ class LLMDebugAdapter:
                         arguments.get("addGenerationPrompt", True)
                     ),
                     enable_thinking=bool(arguments.get('enableThinking', False)),
+                    continue_final_message=bool(arguments.get('continueFinalMessage',False)),
+                    max_new_tokens=self.max_new_tokens,
                     device=str(arguments.get("device", "auto")),
                     dtype=str(arguments.get("dtype", "auto")),
                     progress=lambda output: self.send_event(
@@ -1391,7 +1393,7 @@ class LLMDebugAdapter:
                 self.GEMMA_MLP_STEPS
                 if runtime_architecture in {"gemma2", "gemma4"}
                 else self.QWEN_MLP_STEPS
-                if runtime_architecture in {"qwen3_5", "qwen3_vl"}
+                if runtime_architecture in {"qwen3", "qwen3_5", "qwen3_vl"}
                 else self.MLP_STEPS
             ),
         }
@@ -1470,6 +1472,8 @@ class LLMDebugAdapter:
 
     def _append_next_generated_token(self) -> bool:
         """Greedily extend a chat run after its current final token."""
+        if self.execution is not None and self.execution.auto_chat and self.generated_tokens >= self.max_new_tokens:
+            raise DebugActionError('AUTO_REPLY reached max_new_tokens before EOS. Increase the budget to reach the follow-up.')
         if (
             self.execution is None
             or self.generated_tokens >= self.max_new_tokens
@@ -1480,6 +1484,14 @@ class LLMDebugAdapter:
         eos = getattr(self.execution.runtime.tokenizer, "eos_token_id", None)
         eos_ids = set(eos if isinstance(eos, (list, tuple, set)) else [eos])
         if prediction.token_id in eos_ids:
+            if self.execution.auto_chat:
+                from llmdbg.chat_auto import finish_auto_turn
+                from llmdbg.model_runtime import _runtime_lock
+                with _runtime_lock:
+                    finish_auto_turn(self.execution)
+                self.generated_tokens = 0
+                self.tokens = self.execution.tokens
+                return True
             self.send_event(
                 "output",
                 {"category": "stdout", "output": "llmdbg: generation reached EOS\n"},

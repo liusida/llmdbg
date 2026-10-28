@@ -26,6 +26,8 @@ class ModelRuntime:
     model: Any
     tokenizer: Any
     processor: Any = None
+    resolved_revision: str | None = None
+    auto_reply_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     @property
     def is_multimodal(self) -> bool:
@@ -66,7 +68,7 @@ class ModelRuntime:
     def layer_kind(self, index: int) -> str:
         if self.architecture == "gpt2":
             return "attention"
-        if self.architecture in {"gemma2", "gemma4", "qwen3_vl"}:
+        if self.architecture in {"gemma2", "gemma4", "qwen3", "qwen3_vl"}:
             return "full_attention"
         config = getattr(self.text_model, "config", self.model.config)
         kind = config.layer_types[index]
@@ -203,6 +205,7 @@ class ModelExecution:
     )
     semantic_token_masks: dict[tuple[int, str], Any] = field(default_factory=dict)
     capture_delta_core: bool = False
+    auto_chat: dict[str, Any] | None = None
 
     def delta_memory_contributions(self, layer: int, head: int, position: int) -> dict[str, Any]:
         """On-demand replay with an independent cache; retain only one head's history."""
@@ -237,7 +240,7 @@ class ModelExecution:
                 return cached[1]
             replay = replace(self, past_key_values=None, cached_through=-1, capture_delta_core=True,
                              inputs_embeds=self.inputs_embeds.clone() if self.inputs_embeds is not None else None,
-                             interventions=dict(self.interventions), ica_interventions=dict(self.ica_interventions),
+                             interventions=dict(self.interventions), ica_interventions=set(self.ica_interventions),
                              vector_patches=dict(self.vector_patches), ica_observations={})
             name = f'model.layers.{layer}.gated_linear_attention'
             keys, values, decays, betas = [], [], [], []
@@ -1346,15 +1349,19 @@ def _get_model_runtime(
         f"Resolving tokenizer for {model_name_or_path}; "
         "uncached files may be downloaded.\n"
     )
-    config = AutoConfig.from_pretrained(model_name_or_path, revision=revision)
+    from transformers.utils.hub import cached_file, extract_commit_hash
+    config_path = cached_file(model_name_or_path,'config.json',revision=revision)
+    resolved_revision = extract_commit_hash(config_path,None)
+    load_revision = resolved_revision or revision
+    config = AutoConfig.from_pretrained(model_name_or_path, revision=load_revision)
     is_multimodal = getattr(config, "vision_config", None) is not None
     processor = None
     if is_multimodal:
-        processor = AutoProcessor.from_pretrained(model_name_or_path, revision=revision)
+        processor = AutoProcessor.from_pretrained(model_name_or_path, revision=load_revision)
         tokenizer = processor.tokenizer
         model_class = AutoModelForMultimodalLM
     else:
-        tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, revision=revision)
+        tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, revision=load_revision)
         model_class = AutoModelForCausalLM
     progress(
         f"Loading {model_name_or_path} tensors on {device} through gb10-load-llm; "
@@ -1363,7 +1370,8 @@ def _get_model_runtime(
     model = from_pretrained_to_cuda(
         model_class,
         model_name_or_path,
-        revision=revision,
+        revision=load_revision,
+        config=config,
         dtype=torch_dtype,
         device=device,
         touch="auto",
@@ -1373,7 +1381,7 @@ def _get_model_runtime(
         f"Loaded {model_name_or_path} on {device} with {dtype} tensors; "
         "the model is ready.\n"
     )
-    runtime = ModelRuntime(model=model, tokenizer=tokenizer, processor=processor)
+    runtime = ModelRuntime(model=model, tokenizer=tokenizer, processor=processor,resolved_revision=resolved_revision)
     _runtime = runtime
     _runtime_key = key
     return runtime
@@ -1457,11 +1465,22 @@ def prepare_model_execution(
     messages: list[dict[str, Any]] | None = None,
     add_generation_prompt: bool = True,
     enable_thinking: bool = False,
+    continue_final_message: bool = False,
+    max_new_tokens: int = 20,
     device: str = "auto",
     dtype: str = "auto",
     progress: Callable[[str], None] | None = None,
 ) -> ModelExecution:
-    """Load/reuse a model and tokenize a prompt without running its forward pass."""
+    """Prepare prompt tokens, deferring AUTO_REPLY turns until execution reaches them."""
+    from llmdbg.chat_auto import is_auto_reply, normalize_messages, prepare_auto_chat, validate_continuation
+    validate_continuation(messages,add_generation_prompt,continue_final_message)
+    if messages:
+        messages = normalize_messages(messages)
+        if any(is_auto_reply(message.get('content')) for message in messages):
+            return prepare_auto_chat(model_name_or_path,messages,max_new_tokens=max_new_tokens,
+                revision=revision,add_generation_prompt=add_generation_prompt,enable_thinking=enable_thinking,
+                continue_final_message=continue_final_message,
+                device=device,dtype=dtype,progress=progress)
     try:
         import torch
         import gb10_load_llm  # noqa: F401 - validates the private runtime
@@ -1498,9 +1517,9 @@ def prepare_model_execution(
             dtype=dtype,
             progress=report,
         )
-        if runtime.architecture not in {"gpt2", "qwen3_5", "qwen3_vl", "gemma2", "gemma4"}:
+        if runtime.architecture not in {"gpt2", "qwen3", "qwen3_5", "qwen3_vl", "gemma2", "gemma4"}:
             raise ValueError(
-                "llmdbg supports GPT-2, Qwen3.5, Qwen3-VL, Gemma 2, and Gemma 4 E2B models, "
+                "llmdbg supports GPT-2, Qwen3, Qwen3.5, Qwen3-VL, Gemma 2, and Gemma 4 E2B models, "
                 f"got {runtime.model.config.model_type!r}"
             )
         inputs_embeds = None
@@ -1508,7 +1527,7 @@ def prepare_model_execution(
         image_grids = ()
         image_merge_size = 1
         visual_inputs = {}
-        template_kwargs = {'enable_thinking': True} if enable_thinking else {}
+        template_kwargs = {'enable_thinking': enable_thinking,'continue_final_message':continue_final_message}
         if messages and runtime.is_multimodal:
             multimodal_messages = _normalize_multimodal_messages(messages)
             rendered_prompt = runtime.processor.apply_chat_template(
@@ -2458,6 +2477,6 @@ def _capture_qwen35_token_trace(
 
 
 def _capture_token_trace(runtime: ModelRuntime, **kwargs: Any) -> tuple[ModelTrace, Any]:
-    if runtime.architecture in {"qwen3_5", "qwen3_vl", "gemma2", "gemma4"}:
+    if runtime.architecture in {"qwen3", "qwen3_5", "qwen3_vl", "gemma2", "gemma4"}:
         return _capture_qwen35_token_trace(runtime, **kwargs)
     return _capture_gpt2_token_trace(runtime, **kwargs)

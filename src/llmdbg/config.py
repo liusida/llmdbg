@@ -222,6 +222,14 @@ def load_debug_config(path: str) -> dict[str, Any]:
 
 
 def _literal(node: ast.AST, name: str) -> Any:
+    if name == 'messages':
+        import copy
+        class AutoReplyLiteral(ast.NodeTransformer):
+            def visit_Name(self, value):
+                if value.id == 'AUTO_REPLY':
+                    return ast.Dict(keys=[ast.Constant('__llmdbg_auto_reply__')],values=[ast.Constant(True)])
+                return value
+        node = AutoReplyLiteral().visit(copy.deepcopy(node))
     try:
         return ast.literal_eval(node)
     except (ValueError, TypeError) as error:
@@ -236,6 +244,7 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
     messages: list[dict[str, str]] | None = None
     add_generation_prompt = True
     enable_thinking = False
+    continue_final_message = False
     max_new_tokens = 0
     token: int | None = None
     stop_on_entry = False
@@ -342,11 +351,13 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
                     )
                     if not isinstance(value, list) or not value:
                         raise ValueError("messages must be a non-empty list")
+                    from llmdbg.chat_auto import normalize_messages, is_auto_reply
+                    value = normalize_messages(value)
                     for message in value:
                         if (
                             not isinstance(message, dict)
                             or message.get("role") not in {"system", "user", "assistant"}
-                            or not _valid_message_content(message.get("content"))
+                            or not (_valid_message_content(message.get("content")) or is_auto_reply(message.get('content')))
                         ):
                             raise ValueError(
                                 "each message must contain a supported role and either string "
@@ -362,6 +373,10 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
                             enable_thinking = _literal(keyword.value, 'enable_thinking')
                             if type(enable_thinking) is not bool:
                                 raise ValueError('enable_thinking must be a boolean')
+                        elif keyword.arg == 'continue_final_message':
+                            continue_final_message = _literal(keyword.value,'continue_final_message')
+                            if type(continue_final_message) is not bool:
+                                raise ValueError('continue_final_message must be a boolean')
                         elif keyword.arg == "max_new_tokens":
                             max_new_tokens = int(
                                 _literal(keyword.value, "max_new_tokens")
@@ -380,6 +395,8 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
             elif isinstance(node.func, ast.Name) and node.func.id == "end":
                 call_lines.setdefault("end", node.lineno)
 
+    from llmdbg.chat_auto import validate_continuation
+    validate_continuation(messages,add_generation_prompt,continue_final_message)
     if model_call is None or not model_call.args:
         raise ValueError("Python llmdbg program must assign model = gpt2(\"model-id\", ...)")
     model = _literal(model_call.args[0], "model id")
@@ -391,8 +408,8 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
     if messages is None and (not isinstance(prompt, str) or not prompt):
         raise ValueError("Python llmdbg program must tokenize a prompt or chat messages")
     model_kind = model_call.func.id if isinstance(model_call.func, ast.Name) else "gpt2"
-    if model_kind not in {"gpt2", "qwen35", "qwen3vl", "gemma2", "gemma4"}:
-        raise ValueError("model constructor must be gpt2(...), qwen35(...), qwen3vl(...), gemma2(...), or gemma4(...)")
+    if model_kind not in {"gpt2", "qwen3", "qwen35", "qwen3vl", "gemma2", "gemma4"}:
+        raise ValueError("model constructor must be gpt2(...), qwen3(...), qwen35(...), qwen3vl(...), gemma2(...), or gemma4(...)")
 
     from llmdbg.source_plan import compile_plans
     program_calls = {node.func.id for statement in tree.body if not isinstance(statement,(ast.FunctionDef,ast.AsyncFunctionDef))
@@ -413,6 +430,7 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
         "prompt": prompt or "", "messages": messages,
         "addGenerationPrompt": add_generation_prompt,
         "enableThinking": enable_thinking,
+        "continueFinalMessage": continue_final_message,
         "maxNewTokens": max_new_tokens,
         "defaultToken": token if token is not None else globals_.get("token"),
         "stopOnEntry": globals_.get("stop_on_entry", stop_on_entry),
