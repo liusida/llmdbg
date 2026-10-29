@@ -14,6 +14,66 @@ pip install --pre llmdbg
 llmdbg --version
 ```
 
+## Terminal debugger
+
+Use the same DAP backend without VS Code. From a source checkout:
+
+```console
+.venv/bin/python -m llmdbg debug starters/Qwen35-Thinking.llmdbg.py
+```
+
+It starts a private model host, launches the file, and pauses at entry. Type:
+
+```text
+break mlp token=45,layer=10
+continue
+where
+print residual_stream
+step
+vars
+out
+lens residual_stream
+lens normalized - x
+lens j residual-post
+tokens
+quit
+```
+
+`break` accepts a source line number or an authored call name such as `mlp` or
+`attention`. `next` steps over, `step` enters, and `out` steps out. `help` lists
+commands. `lens EXPRESSION` uses the same decoder as the VS Code `abc` action,
+showing all configured, available lenses for a model-width tensor expression.
+It also accepts supported slices and arithmetic; non-vector tensors must be
+explicitly sliced or projected, not flattened automatically. `lens j residual-post`
+retains the separate site-based readout syntax. This is a DAP client, not an
+arbitrary Python shell.
+
+To use an already running host and keep its model resident across CLI sessions:
+
+```console
+.venv/bin/python -m llmdbg debug --connect 127.0.0.1:5678 starters/Qwen35-Thinking.llmdbg.py
+```
+
+For Codex or other automation, use repeated `-c` commands with `--json`:
+
+```console
+.venv/bin/python -m llmdbg debug starters/Qwen35-Thinking.llmdbg.py --json \
+  -c 'break mlp token=45,layer=10' -c continue -c vector
+```
+
+Each command (including automatic launch) writes one JSON result to stdout;
+model progress goes to stderr. `-c` executes in order and then disconnects.
+`--batch` reads commands from stdin, keeps one debug session for the stream,
+and exits nonzero on the first error. An interactive process can likewise stay
+open while an agent sends commands. `request COMMAND JSON` exposes arbitrary
+DAP and `llmdbg/*` inspection requests; raw requests do not automatically wait
+for a stop, so use the dedicated stepping commands for execution control.
+
+The client only terminates hosts it starts itself; disconnecting from an
+external `--connect` host leaves that host running. Use `--demo` for a fast,
+model-free trial. Model/config execution, downloads, and GPU allocation happen
+only when launching a real configuration.
+
 ## VS Code extension
 
 Install `SidaLiu.llmdbg` from the VS Code Marketplace. To build and install a
