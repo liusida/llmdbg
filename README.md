@@ -378,6 +378,12 @@ the top five tokens from `W_down[neuron] @ W_unembed`, and the top five direct
 token contributions after scaling by the current activation. Token IDs and
 decoded text are both displayed. Results are cached for the current token and
 layer.
+In the Lens panel, activated MLP-neuron and attention-channel rows decode the
+signed component `activation * output_direction`, not the bare positive
+direction. Negative activations reverse the readout for Logit, J-, R-, and
+Neuronpedia lenses; zero activations have no activated readout. Explicit
+`top_neurons[i].vocabulary` Watches retain bare-direction scores, while
+`.contribution` retains signed, unnormalized dot-product scores.
 For GPT-2 and Qwen3.5 0.8B, 2B, 9B, and 27B, MLP neurons and attention output
 channels are ranked by the norm of the vector each component adds to the
 residual stream: `abs(activation) * norm(projection direction)`. The signed
@@ -407,7 +413,13 @@ used when inspecting image prompts; it is not an image-specific baseline.
 The scripts support Gemma's varying channel/MLP widths. Its plots are in
 `build/calibration/`. These scales are not used for the base E2B checkpoint.
 The toolbar's **Lens** view has a selector for **Logit Lens**, **J-Lens**,
-**R-Lens**, **J++ Lens**, or **All lenses**. Logit Lens projects the neuron's
+**R-Lens**, **J++ Lens**, or **All lenses**. A panel refresh fetches its selected
+sections in one batched debugger request, with one Lens-availability lookup for
+the batch. Top head vectors are decoded together through batched vocabulary
+readouts; maps at different activation sites remain separate. Unavailable
+sections do not suppress healthy results, and stale refresh replies are ignored.
+The single-section debugger request remains supported for clients that need it.
+Logit Lens projects the neuron's
 down-projection direction directly through the unembedding. J-Lens first
 transports it through an averaged ordinary Jacobian. R-Lens uses the same
 transport construction with value-preserving RelP backward rules. Both

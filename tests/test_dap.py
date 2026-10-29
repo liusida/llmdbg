@@ -33,6 +33,13 @@ def parse_frames(data: bytes) -> list[dict[str, object]]:
     return messages
 
 
+def mock_batch_projection(execution):
+    """Keep per-vector assertions while exercising the adapter's batch boundary."""
+    from unittest.mock import Mock
+    execution._vectors_lens = Mock(side_effect=lambda layer, vectors, **kwargs:
+        tuple(execution.vector_lens(layer, vector, **kwargs) for vector in vectors))
+
+
 class DAPIntegrationTest(unittest.TestCase):
     def test_delta_memory_write_lens_decodes_beta_scaled_prediction_error(self) -> None:
         import torch
@@ -60,6 +67,7 @@ class DAPIntegrationTest(unittest.TestCase):
             config=SimpleNamespace(linear_num_value_heads=2))), vector_lens=Mock(return_value=SimpleNamespace(
                 vocabulary=(TokenScore(1,'cat',1.),),j_lens=(),r_lens=(),jpp_lens=())))
         weight = torch.arange(12.).reshape(4,3)
+        mock_batch_projection(adapter.execution)
         with patch.object(adapter,'_attention_output_weight',return_value=weight):
             result = adapter._neuron_lens_snapshot(view='delta-memory-write')
             self.assertEqual(result['label'],'DeltaNet Memory Write Lens')
@@ -103,6 +111,7 @@ class DAPIntegrationTest(unittest.TestCase):
             adapter.execution = SimpleNamespace(runtime=runtime, vector_lens=Mock(return_value=SimpleNamespace(
                 vocabulary=(TokenScore(1,'cat',1.),), j_lens=(), r_lens=(), jpp_lens=())))
             weight = torch.arange(12.).reshape(4,3)
+            mock_batch_projection(adapter.execution)
             with patch.object(adapter, '_attention_output_weight', return_value=weight):
                 result = adapter._neuron_lens_snapshot(view='attention-head-values')
             self.assertEqual(result['label'], 'Attention Head Value Lens')
@@ -147,7 +156,10 @@ class DAPIntegrationTest(unittest.TestCase):
             adapter.tokens = ("test",)
             adapter.trace[0].details['attention_projection'] = (0.,)*3
             adapter.layer_index = 1
+            mock_batch_projection(adapter.execution)
             result = adapter._neuron_lens_snapshot(view="attention-heads")
+            adapter.execution._vectors_lens.assert_called_once()
+            self.assertEqual(len(adapter.execution._vectors_lens.call_args.args[1]), 2)
             self.assertEqual([head["index"] for head in result["heads"]], [1, 0])
             calls = adapter.execution.vector_lens.call_args_list
             vectors = [torch.tensor(call.args[1]) for call in calls]
@@ -1046,7 +1058,7 @@ class DAPIntegrationTest(unittest.TestCase):
         self.assertIn("norm", locals_by_name)
         self.assertIn("features", locals_by_name)
 
-    def test_neuron_lens_snapshot_contains_direction_tokens(self) -> None:
+    def test_neuron_lens_snapshot_contains_signed_component_tokens(self) -> None:
         adapter = object.__new__(LLMDebugAdapter)
         adapter.trace = (
             LayerState(
@@ -1066,10 +1078,11 @@ class DAPIntegrationTest(unittest.TestCase):
         adapter.inside_attention = False
         projection = NeuronProjection(
             index=1,
-            activation=3.0,
+            activation=-3.0,
             direction_norm=2.5,
-            vocabulary=(TokenScore(42, " answer", 8.5),),
-            contribution=(),
+            vocabulary=(TokenScore(42, " bare-positive", 8.5),),
+            contribution=(TokenScore(43, " raw-negative", 9.0),),
+            logit_lens=(TokenScore(44, " activated", 10.5),),
             j_lens=(TokenScore(21, " jacobian", 7.0),),
             r_lens=(TokenScore(84, " transported", 6.25),),
         )
@@ -1081,9 +1094,9 @@ class DAPIntegrationTest(unittest.TestCase):
         result = adapter._neuron_lens_snapshot()
 
         self.assertEqual(result["neurons"][0]["index"], 1)
-        self.assertEqual(result["neurons"][0]["tokens"][0]["text"], " answer")
-        self.assertEqual(result["neurons"][0]["tokens"][0]["logit"], 8.5)
-        self.assertEqual(result["neurons"][0]["logitTokens"][0]["text"], " answer")
+        self.assertEqual(result["neurons"][0]["tokens"][0]["text"], " activated")
+        self.assertEqual(result["neurons"][0]["tokens"][0]["logit"], 10.5)
+        self.assertEqual(result["neurons"][0]["logitTokens"][0]["text"], " activated")
         self.assertEqual(result["neurons"][0]["jLensTokens"][0]["text"], " jacobian")
         self.assertEqual(result["neurons"][0]["rLensTokens"][0]["text"], " transported")
 

@@ -301,6 +301,7 @@ class ModelRuntimeCacheTest(unittest.TestCase):
 
         model = SimpleNamespace(
             config=SimpleNamespace(_name_or_path="fake/model"),
+            model=SimpleNamespace(norm=torch.nn.Identity()),
             get_output_embeddings=lambda: SimpleNamespace(weight=torch.eye(2)),
         )
         tokenizer = SimpleNamespace(decode=lambda ids: str(ids[0]))
@@ -562,6 +563,7 @@ class ModelRuntimeCacheTest(unittest.TestCase):
 
         model = SimpleNamespace(
             config=SimpleNamespace(_name_or_path="fake/model"),
+            model=SimpleNamespace(norm=torch.nn.Identity()),
             get_output_embeddings=lambda: SimpleNamespace(weight=torch.eye(2)),
         )
         tokenizer = SimpleNamespace(decode=lambda ids: str(ids[0]))

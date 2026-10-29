@@ -1004,6 +1004,7 @@ function activate(context) {
   ];
   let neuronLensIcaInitialized = false;
   let neuronLensRevision = 0;
+  let neuronLensRefreshRequest = 0;
   let neuronLensExecutionReady = false;
   const neuronLensItemCache = new Map();
   let residentModel;
@@ -1419,6 +1420,9 @@ function activate(context) {
 
   async function refreshNeuronLens(modes = neuronLensModes, views = neuronLensViews, force = false) {
     if (!neuronLensPanel) return;
+    const revision = neuronLensRevision;
+    const refreshRequest = ++neuronLensRefreshRequest;
+    const stale = () => revision !== neuronLensRevision || refreshRequest !== neuronLensRefreshRequest || !neuronLensPanel || !neuronLensExecutionReady;
     await neuronLensPanel.webview.postMessage({ type: "busy", busy: true });
     if (!neuronLensExecutionReady) return;
     const active = vscode.debug.activeDebugSession;
@@ -1434,6 +1438,7 @@ function activate(context) {
       const residualLenses = Array.isArray(residualLensSupport.lenses)
         ? residualLensSupport.lenses
         : [];
+      if (stale()) return;
       const availableModes = new Set(["logit", ...residualLenses.map(lens => `lens:${lens.id}`)]);
       if (!Array.isArray(modes)) modes = undefined;
       if (modes === undefined) modes = [residualLenses.length ? `lens:${residualLenses[0].id}` : "logit"];
@@ -1467,22 +1472,26 @@ function activate(context) {
       ]);
       const allowedViews = [...targets.keys()].filter(view => views.includes(view) && (support.supported || !view.startsWith("ica-")));
       const items = [];
+      const requestModes = modes.length ? modes : ["none"];
+      const missing = [];
+      for (const view of allowedViews) for (const mode of requestModes) {
+        if (force || !neuronLensItemCache.has(`${revision}|${mode}|${view}`)) missing.push({ mode, view });
+      }
+      const entriesByKey = new Map();
+      if (missing.length) {
+        const batch = await active.customRequest("llmdbg/neuronLensBatch", { requests: missing });
+        if (stale()) return;
+        for (const entry of batch.items) {
+          const key = `${revision}|${entry.mode}|${entry.view}`;
+          entriesByKey.set(key, entry);
+          if (entry.item) neuronLensItemCache.set(key, entry.item);
+        }
+      }
       for (const targetView of allowedViews) {
-        const requestModes = modes.length ? modes : ["none"];
         const entries = [];
         for (const mode of requestModes) {
-          const cacheKey = `${neuronLensRevision}|${mode}|${targetView}`;
-          if (!force && neuronLensItemCache.has(cacheKey)) {
-            entries.push({ mode, item: neuronLensItemCache.get(cacheKey) });
-            continue;
-          }
-          try {
-            const item = await active.customRequest("llmdbg/neuronLens", { mode, view: targetView });
-            neuronLensItemCache.set(cacheKey, item);
-            entries.push({ mode, item });
-          } catch (error) {
-            entries.push({ mode, error: error.message });
-          }
+          const key = `${revision}|${mode}|${targetView}`;
+          entries.push(entriesByKey.get(key) || { mode, item: neuronLensItemCache.get(key) });
         }
         const merged = mergeLensSnapshots(entries, residualLenses);
         const unavailable = entries.find(entry => entry.item?.unavailable)?.item;
@@ -1491,6 +1500,7 @@ function activate(context) {
       const lensTheme = vscode.workspace.getConfiguration("llmdbg").get("lensTheme", "dark");
       await neuronLensPanel.webview.postMessage({ type: "lens", selectedModes: modes, items, selectedViews: allowedViews, icaSupported: support.supported, residualToVocabularyLenses: residualLenses, lensTheme, reportTheme: lensTheme, cosineReference: pinnedCosineReference ? { label: pinnedCosineReference.label, norm: pinnedCosineReference.norm, tokenPosition: pinnedCosineReference.tokenPosition } : undefined, tokenReference: pinnedTokenReference ? { tokenPosition: pinnedTokenReference.tokenPosition } : undefined, patchReference: pinnedPatchVector ? { label: pinnedPatchVector.label, norm: pinnedPatchVector.norm, tokenPosition: pinnedPatchVector.tokenPosition, dimensions: pinnedPatchVector.dimensions } : undefined });
     } catch (error) {
+      if (stale()) return;
       await neuronLensPanel.webview.postMessage({ type: "error", message: error.message });
     }
   }

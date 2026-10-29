@@ -123,6 +123,7 @@ class NeuronProjection:
     residual_cosine: float | None = None
     potential_norm: float = 0.0
     vector: tuple[float, ...] = ()
+    logit_lens: tuple[TokenScore, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -847,6 +848,17 @@ class ModelExecution:
             direction_norms = all_direction_norms.index_select(0, active_indices)
             output_projections = all_output_projections.index_select(0, active_indices)
             component_vectors = directions.float() * active_values.float().unsqueeze(1)
+            # Panel readouts describe the signed vector actually added to the
+            # residual stream. Keep bare vocabulary/contribution scores above
+            # for the explicit direction and raw-dot-product Watch interfaces.
+            logit_lens_values = logit_lens_ids = None
+            if include_logit_lens:
+                normalized = self.runtime.final_norm(
+                    component_vectors.to(dtype=projection.dtype)[:, None, :]
+                )[:, 0]
+                scores = (normalized @ unembedding.T).float()
+                logit_lens_values, logit_lens_ids = torch.topk(
+                    scores, min(token_count, scores.shape[1]), dim=1)
             residual_norm = 0.0
             residual_cosines: list[float | None] = [None] * active_indices.shape[0]
             potential_norms = [0.0] * active_indices.shape[0]
@@ -878,7 +890,7 @@ class ModelExecution:
                     return None, None
                 mapping, _ = source
                 mapping = mapping.to(device=directions.device, dtype=torch.float32)
-                mapped = torch.einsum("oi,bi->bo", mapping, directions.float())
+                mapped = torch.einsum("oi,bi->bo", mapping, component_vectors)
                 normalized = self.runtime.final_norm(
                     mapped.to(dtype=projection.dtype)[:, None, :]
                 )[:, 0]
@@ -928,19 +940,19 @@ class ModelExecution:
                 ),
                 j_lens=(
                     token_scores(j_lens_ids[rank], j_lens_values[rank])
-                    if j_lens_ids is not None and j_lens_values is not None
+                    if j_lens_ids is not None and j_lens_values is not None and float(active_values[rank]) != 0
                     else ()
                 ),
                 j_lens_metadata=(j_lens_source[1] if j_lens_source else None),
                 r_lens=(
                     token_scores(r_lens_ids[rank], r_lens_values[rank])
-                    if r_lens_ids is not None and r_lens_values is not None
+                    if r_lens_ids is not None and r_lens_values is not None and float(active_values[rank]) != 0
                     else ()
                 ),
                 r_lens_metadata=(r_lens_source[1] if r_lens_source else None),
                 jpp_lens=(
                     token_scores(jpp_lens_ids[rank], jpp_lens_values[rank])
-                    if jpp_lens_ids is not None and jpp_lens_values is not None
+                    if jpp_lens_ids is not None and jpp_lens_values is not None and float(active_values[rank]) != 0
                     else ()
                 ),
                 jpp_lens_metadata=(jpp_lens_source[1] if jpp_lens_source else None),
@@ -949,6 +961,11 @@ class ModelExecution:
                 residual_cosine=residual_cosines[rank],
                 potential_norm=float(potential_norms[rank]),
                 vector=tuple(float(value) for value in component_vectors[rank].tolist()),
+                logit_lens=(
+                    token_scores(logit_lens_ids[rank], logit_lens_values[rank])
+                    if logit_lens_ids is not None and logit_lens_values is not None and float(active_values[rank]) != 0
+                    else ()
+                ),
             )
             for rank in range(active_indices.shape[0])
         )

@@ -776,56 +776,12 @@ class LLMDebugAdapter:
             ))
 
         elif command == "llmdbg/neuronLens":
-            mode = str(arguments.get("mode", "logit"))
-            from llmdbg.residual_vocabulary_lenses import activate, available_lenses, lens
-
-            selected_lens = lens(mode.removeprefix("lens:")) if mode.startswith("lens:") else None
-            method = str(selected_lens.get("method")) if selected_lens else None
-            available = available_lenses(str(self.model_name))
-            available_methods = {item["method"] for item in available}
-            active_selection: str | dict[str, str] | None = (
-                str(selected_lens["id"]) if selected_lens else None
-            )
-            if mode == "all":
-                by_method: dict[str, str] = {}
-                for item in available:
-                    by_method.setdefault(item["method"], item["id"])
-                active_selection = by_method
-            view = str(arguments.get("view", "neurons"))
-            cache_key = (
-                self.token_index,
-                self.layer_index,
-                self.inside_mlp,
-                self.inside_attention,
-                self.mlp_step_index,
-                mode,
-                view,
-            )
-            snapshot = self.lens_snapshot_cache.get(cache_key)
-            if snapshot is None:
-                self._console(
-                    f"Computing {mode} readouts for {view}; the first request may "
-                    "download and load Lens artifacts."
-                )
-                with activate(active_selection):
-                    snapshot = self._neuron_lens_snapshot(
-                        view=view,
-                        include_logit_lens=mode in {"logit", "all"},
-                        include_j_lens=mode == "j-lens" or method == "j" or (mode == "all" and "j" in available_methods),
-                        include_r_lens=mode == "r-lens" or method == "r" or (mode == "all" and "r" in available_methods),
-                        include_jpp_lens=mode == "jpp-lens" or method == "jpp" or (mode == "all" and "jpp" in available_methods),
-                    )
-                if selected_lens:
-                    active_metadata = {
-                        "id": selected_lens["id"], "label": selected_lens["label"],
-                        "method": selected_lens["method"],
-                    }
-                    snapshot["activeResidualVocabularyLens"] = active_metadata
-                    for child in snapshot.get("icaComponents", snapshot.get("neurons", [])):
-                        child["activeResidualVocabularyLens"] = active_metadata
-                self.lens_snapshot_cache[cache_key] = snapshot
-                self._console(f"Finished computing {mode} readouts for {view}.")
-            self.send_response(request, snapshot)
+            from llmdbg.residual_vocabulary_lenses import available_lenses
+            self.send_response(request, self._lens_readout(
+                str(arguments.get("mode", "logit")), str(arguments.get("view", "neurons")),
+                available_lenses(str(self.model_name))))
+        elif command == "llmdbg/neuronLensBatch":
+            self.send_response(request, self._lens_readout_batch(arguments.get("requests", [])))
         elif command == "llmdbg/deltaMemoryContributions":
             self.send_response(request, self._delta_memory_contributions(
                 str(arguments.get('layer', '')), int(arguments.get('head', -1)),
@@ -3876,10 +3832,11 @@ class LLMDebugAdapter:
             projected_heads.append((head, norm, tuple(vector.cpu().tolist()), scale))
         calibrated = all(item[3] is not None for item in projected_heads)
         projected_heads.sort(key=lambda item: (-(item[1] / item[3] if calibrated else item[1]), item[0]))
-        for head, norm, vector, scale in projected_heads[:5]:
-            projection = self.execution.vector_lens(
-                state.layer.name, vector, source_site="mid", source_layer=layer, token_count=5, **lens_flags,
-            )
+        selected_heads = projected_heads[:5]
+        projections = self.execution._vectors_lens(
+            state.layer.name, tuple(item[2] for item in selected_heads),
+            source_site="mid", source_layer=layer, token_count=5, **lens_flags)
+        for (head, norm, vector, scale), projection in zip(selected_heads, projections, strict=True):
             result = {"index": head, "headDimension": width, "vectorNorm": norm,
                       "normScale": scale, "relativeNorm": norm / scale if scale else None,
                       "calibrationError": None if scale or write_mode else "Missing calibrated value-head reference (× unavailable)" if value_mode else "Missing calibrated head reference (× unavailable)",
@@ -3904,6 +3861,66 @@ class LLMDebugAdapter:
                 "saved": self._lens_result_is_saved(view, state.layer.name),
                 "ranking": "raw-write-norm" if write_mode else "calibrated-value-norm" if value_mode and calibrated else "calibrated-norm" if calibrated else "raw-norm-missing-calibration",
                 "heads": results}
+
+    def _lens_readout(self, mode, view, available):
+        """Serve one section; discovery is shared by all entries in a panel batch."""
+        from llmdbg.residual_vocabulary_lenses import activate, lens
+        key = (self.token_index, self.layer_index, self.inside_mlp,
+               self.inside_attention, self.mlp_step_index, mode, view)
+        if key in self.lens_snapshot_cache:
+            return self.lens_snapshot_cache[key]
+        selected = lens(mode.removeprefix('lens:')) if mode.startswith('lens:') else None
+        method = selected.get('method') if selected else None
+        methods = {item['method'] for item in available}
+        selection = selected['id'] if selected else None
+        if mode == 'all':
+            selection = {}
+            for item in available:
+                selection.setdefault(item['method'], item['id'])
+        with activate(selection):
+            snapshot = self._neuron_lens_snapshot(view=view,
+                include_logit_lens=mode in {'logit', 'all'},
+                include_j_lens=mode == 'j-lens' or method == 'j' or (mode == 'all' and 'j' in methods),
+                include_r_lens=mode == 'r-lens' or method == 'r' or (mode == 'all' and 'r' in methods),
+                include_jpp_lens=mode == 'jpp-lens' or method == 'jpp' or (mode == 'all' and 'jpp' in methods))
+        if selected:
+            metadata = {field: selected[field] for field in ('id', 'label', 'method')}
+            snapshot['activeResidualVocabularyLens'] = metadata
+            for child in snapshot.get('icaComponents', snapshot.get('neurons', [])):
+                child['activeResidualVocabularyLens'] = metadata
+        self.lens_snapshot_cache[key] = snapshot
+        return snapshot
+
+    def _lens_readout_batch(self, requests):
+        from llmdbg.residual_vocabulary_lenses import available_lenses
+        if not isinstance(requests, list) or len(requests) > 256 or any(
+            not isinstance(item, dict) or not isinstance(item.get('mode'), str)
+            or not isinstance(item.get('view'), str) for item in requests
+        ):
+            raise DebugActionError('Lens batch requires at most 256 mode/view requests')
+        if not requests:
+            return {'items': []}
+        available = available_lenses(str(self.model_name))
+        items = []
+        for item in requests:
+            mode, view = item['mode'], item['view']
+            try:
+                result = {'mode': mode, 'view': view,
+                          'item': self._lens_readout(mode, view, available)}
+            except LensUnavailable as error:
+                snapshot = {'view': view, 'error': str(error), 'unavailable': True}
+                key = (self.token_index, self.layer_index, self.inside_mlp,
+                       self.inside_attention, self.mlp_step_index, mode, view)
+                self.lens_snapshot_cache[key] = snapshot
+                result = {'mode': mode, 'view': view, 'item': snapshot}
+            except Exception as error:
+                # Preserve healthy sections if one view fails; log genuine failures.
+                if not isinstance(error, DebugActionError):
+                    self.send_event('output', {'category': 'stderr',
+                        'output': f'llmdbg: Lens batch {mode}/{view} failed:\n{traceback.format_exc()}'})
+                result = {'mode': mode, 'view': view, 'error': str(error)}
+            items.append(result)
+        return {'items': items}
 
     def _neuron_lens_snapshot(
         self,
@@ -4498,7 +4515,8 @@ class LLMDebugAdapter:
                             "text": token.text,
                             "logit": token.score,
                         }
-                        for token_rank, token in enumerate(neuron.vocabulary, start=1)
+                        for token_rank, token in enumerate(
+                            getattr(neuron, 'logit_lens', ()) or (neuron.contribution if neuron.activation else ()), start=1)
                     ],
                     # Compatibility for older extension builds.
                     "tokens": [
@@ -4508,7 +4526,8 @@ class LLMDebugAdapter:
                             "text": token.text,
                             "logit": token.score,
                         }
-                        for token_rank, token in enumerate(neuron.vocabulary, start=1)
+                        for token_rank, token in enumerate(
+                            getattr(neuron, 'logit_lens', ()) or (neuron.contribution if neuron.activation else ()), start=1)
                     ],
                     "rLensTokens": [
                         {

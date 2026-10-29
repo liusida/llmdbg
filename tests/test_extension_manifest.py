@@ -105,7 +105,7 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn("registerDebugConfigurationProvider", source)
         self.assertIn("activeLlmdbgFile", source)
         self.assertIn('customRequest("llmdbg/plot"', source)
-        self.assertIn('customRequest("llmdbg/neuronLens"', source)
+        self.assertIn('customRequest("llmdbg/neuronLensBatch"', source)
         self.assertIn('customRequest("llmdbg/promptTokens"', source)
         self.assertIn("context.globalState.get(LEGACY_PLOT_SNIPPETS_KEY", source)
         self.assertIn('file.endsWith(".plot.py")', source)
