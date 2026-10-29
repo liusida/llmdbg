@@ -1437,9 +1437,17 @@ class LLMDebugAdapter:
         ):
             return False
         prediction = self.predictions[0]
+        context = self._live_generation_context()
+        cached_eos = False
+        if context is not None:
+            from llmdbg import generation_cache
+            entry = generation_cache.load(context['key'],context['metadata']['vocabulary_size'])
+            cached_eos = bool(entry and entry['eos'] and
+                entry['ids'] == self.execution.input_ids[0,context['start']:].tolist())
         eos = getattr(self.execution.runtime.tokenizer, "eos_token_id", None)
         eos_ids = set(eos if isinstance(eos, (list, tuple, set)) else [eos])
-        if prediction.token_id in eos_ids:
+        if prediction.token_id in eos_ids or cached_eos:
+            self._save_live_generation(eos=True)
             if self.execution.auto_chat:
                 from llmdbg.chat_auto import finish_auto_turn
                 from llmdbg.model_runtime import _runtime_lock
@@ -1453,8 +1461,10 @@ class LLMDebugAdapter:
                 {"category": "stdout", "output": "llmdbg: generation reached EOS\n"},
             )
             return False
+        self._live_generation_context()
         text = self.execution.append_generated_token(prediction.token_id)
         self.generated_tokens += 1
+        self._save_live_generation(eos=False)
         self.tokens = self.execution.tokens
         self.send_event(
             "output",
@@ -1464,6 +1474,83 @@ class LLMDebugAdapter:
             },
         )
         return True
+
+    def _live_generation_context(self):
+        """Share canonical token-ID caches with inspection, never modified runs."""
+        execution = getattr(self, 'execution', None)
+        if execution is None or execution.auto_chat or self.max_new_tokens <= 0:
+            return None
+        previous = getattr(self, '_live_generation_cache', None)
+        if previous is None or previous['execution'] is not execution:
+            from llmdbg import generation_cache
+            start = execution.token_count - self.generated_tokens
+            try:
+                key, persistent, metadata = generation_cache.identity(self, start)
+            except AttributeError:
+                return None  # Lightweight non-model/demo executions have no cache identity.
+            previous = dict(execution=execution, start=start, key=key,
+                            persistent=persistent, metadata=metadata)
+            self._live_generation_cache = previous
+        if execution.interventions or execution.ica_interventions or execution.vector_patches:
+            previous['persistent'] = False  # Remains disabled even if later removed.
+        return previous if previous['persistent'] else None
+
+    def _save_live_generation(self, *, eos):
+        context = self._live_generation_context()
+        if context is None:
+            return
+        from llmdbg import generation_cache
+        ids = self.execution.input_ids[0,context['start']:].tolist()
+        old = generation_cache.load(context['key'], context['metadata']['vocabulary_size'])
+        if old and old['ids'][:min(len(ids),len(old['ids']))] != ids[:min(len(ids),len(old['ids']))]:
+            context['persistent'] = False
+            return
+        generation_cache.save(context['key'], ids, eos, context['metadata'])
+
+    def _reuse_live_generation_until_breakpoint(self, *, include_current, before_start):
+        """Materialize only a safe cached prefix; _load_token prefills before its stop."""
+        context = self._live_generation_context()
+        if context is None:
+            return
+        from llmdbg import generation_cache
+        entry = generation_cache.load(context['key'], context['metadata']['vocabulary_size'])
+        if not entry:
+            return
+        prefix = self.execution.input_ids[0,context['start']:].tolist()
+        if entry['ids'][:len(prefix)] != prefix:
+            context['persistent'] = False
+            return
+        current = (self.token_index,self.layer_index,self.mlp_step_index+1 if self.inside_internal else 0)
+        def has_breakpoint(position):
+            for index,line in enumerate(self.source_lines):
+                path = self.step_paths[index] if index < len(self.step_paths) else ''
+                lines = (line, *self._internal_source_lines(path))
+                for location,line in enumerate(lines):
+                    point=(position,index,location)
+                    if not before_start and (point<current or (point==current and not include_current)):
+                        continue
+                    if any(bp.line==line and self._breakpoint_matches(bp,position,index) for bp in self.breakpoints):
+                        return True
+            return False
+        # Do not consume cached future text before a reachable existing stop.
+        first = 0 if before_start else self.token_index
+        for position in range(first,len(self.tokens)):
+            if has_breakpoint(position):
+                return
+        remaining = entry['ids'][len(prefix):self.max_new_tokens]
+        count = 0
+        for token in remaining:
+            position = len(self.tokens)
+            self.execution.append_generated_token(token)
+            self.tokens = self.execution.tokens
+            self.generated_tokens += 1
+            count += 1
+            if has_breakpoint(position):
+                break
+        if count:
+            text = self.execution.runtime.tokenizer.decode(remaining[:count])
+            self.send_event('output', {'category':'stdout','output':text})
+            self._console(f'Reused {count} cached generated tokens; prefilling only before the next stop.')
 
     def _load_token(self, position: int) -> None:
         """Execute one prompt token and select the authored model steps."""
@@ -1702,6 +1789,7 @@ class LLMDebugAdapter:
         before_start: bool = False,
     ) -> None:
         """Advance in token-major order, including authored function-body operations."""
+        self._reuse_live_generation_until_breakpoint(include_current=include_current,before_start=before_start)
         self._console(
             f"Searching {len(self.tokens)} token positions and "
             f"{len(self.source_lines)} execution locations for the next breakpoint."

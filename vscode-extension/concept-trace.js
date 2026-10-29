@@ -372,9 +372,14 @@ function browserMain() {
   canvas.onmouseleave=()=>{canvas.title='';};
   canvas.onclick=event=>{const point=hit(event);if(busy||ended||!point||!snapshot)return;if(point.label){if(point.row.id.startsWith('post:'))void expand(point.row.layer);return;}void select(point);};
   canvas.onkeydown=event=>{
-    if(busy||ended||!snapshotSessionValid||!snapshot||!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key))return;event.preventDefault();
+    if(busy||ended||!snapshotSessionValid||!snapshot||!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','PageUp','PageDown','Home','End'].includes(event.key))return;event.preventDefault();
     let r=selected?displayed.findIndex(row=>row.id===selected.row.id):0,c=selected?selected.column:0;
     if(event.key==='ArrowLeft')c--;if(event.key==='ArrowRight')c++;
+    if(event.key==='Home')c=0;if(event.key==='End')c=snapshot.tokens.length-1;
+    if(event.key==='PageUp'||event.key==='PageDown'){
+      const layers=displayed.map((row,index)=>({row,index})).filter(({row})=>row.id.startsWith('post:'));
+      if(layers.length)r=(event.key==='PageUp'?layers[0]:layers[layers.length-1]).index;
+    }
     if(event.key==='ArrowUp'||event.key==='ArrowDown'){
       const layer=displayed[r].layer+(event.key==='ArrowUp'?-1:1);
       const next=displayed.findIndex(row=>row.layer===layer&&(row.id.startsWith('post:')||row.id==='embed'));

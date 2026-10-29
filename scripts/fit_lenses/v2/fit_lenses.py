@@ -29,6 +29,7 @@ WIKITEXT_DATASET_ID = "Salesforce/wikitext"
 WIKITEXT_CONFIG = "wikitext-103-raw-v1"
 SUPPORTED_MODELS = (
     "openai-community/gpt2",
+    "Qwen/Qwen3-4B",
     "Qwen/Qwen3-8B",
     "Qwen/Qwen3.5-0.8B",
     "Qwen/Qwen3.5-2B-Base",
@@ -38,6 +39,7 @@ SUPPORTED_MODELS = (
 )
 DEFAULT_PROMPTS = {
     "openai-community/gpt2": 100,
+    "Qwen/Qwen3-4B": 100,
     "Qwen/Qwen3-8B": 25,
     "Qwen/Qwen3.5-0.8B": 100,
     "Qwen/Qwen3.5-2B-Base": 100,

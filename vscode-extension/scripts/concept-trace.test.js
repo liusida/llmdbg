@@ -249,6 +249,27 @@ test('arrow keys move between tokens and residual layers after selection',async(
   assert.equal(e.lattice.focused,true);
 });
 
+test('PageUp/PageDown jump to first/last layer and Home/End to snapshot token boundaries',async()=>{
+  const b=browser(),e=b.elements;b.sent.shift();e.target.value=' cat';
+  const submitted=e.form.onsubmit({preventDefault(){}});
+  b.reply(b.sent.shift(),{tokens:[{id:3,text:' cat'}]});await tick();
+  b.reply(b.sent.shift(),{snapshotId:'jumps',model:'test/model',target:' cat',targetId:3,lensLabel:'Logit Lens',mode:'logit',start:5,stop:8,tokens:['a','b','c'],
+    rows:[{id:'embed',layer:-1,label:'Embedding',scores:[.1,.2,.3]},
+      ...[0,1,2].map(layer=>({id:'post:'+layer,layer,label:'Layer '+layer,scores:[.1,.2,.3]}))],
+    images:[],metric:'cosine',warning:'Saved'});
+  await submitted;
+  for(const [key,rowId,position] of [['PageDown','post:2',5],['End','post:2',7],
+    ['PageUp','post:0',7],['Home','post:0',5],['ArrowUp','embed',5],
+    ['PageUp','post:0',5],['PageDown','post:2',5],['End','post:2',7],['End','post:2',7]]){
+    let prevented=false;
+    e.lattice.onkeydown({key,preventDefault(){prevented=true;}});
+    assert.equal(prevented,true);
+    const inspect=b.sent.shift();assert.equal(inspect.rowId,rowId);assert.equal(inspect.position,position);
+    b.reply(inspect,{norm:1,tokens:[]});await tick();
+  }
+  assert.equal(e.lattice.focused,true);
+});
+
 test('persistent token strip includes prompt, multiple images, and generation with synchronized selection',async()=>{
   const b=browser(),e=b.elements;b.sent.shift();e.target.value=' cat';
   const submitted=e.form.onsubmit({preventDefault(){}});

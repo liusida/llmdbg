@@ -84,6 +84,8 @@ class FitWorkspaceLensesTest(unittest.TestCase):
 
     def test_model_specific_prompt_defaults(self) -> None:
         self.assertEqual(self.module.DEFAULT_PROMPTS["openai-community/gpt2"], 100)
+        self.assertIn("Qwen/Qwen3-4B", self.module.SUPPORTED_MODELS)
+        self.assertEqual(self.module.DEFAULT_PROMPTS["Qwen/Qwen3-4B"], 100)
         self.assertEqual(self.module.DEFAULT_PROMPTS["Qwen/Qwen3-8B"], 25)
         self.assertEqual(self.module.DEFAULT_PROMPTS["Qwen/Qwen3.5-0.8B"], 100)
         self.assertEqual(self.module.DEFAULT_PROMPTS["Qwen/Qwen3.5-2B-Base"], 100)
