@@ -1455,6 +1455,7 @@ class LLMDebugAdapter:
                     finish_auto_turn(self.execution)
                 self.generated_tokens = 0
                 self.tokens = self.execution.tokens
+                self.prompt = self.execution.rendered_prompt
                 return True
             self.send_event(
                 "output",

@@ -99,7 +99,28 @@ def load_debug_config(path: str) -> dict[str, Any]:
     """Load an ordered .llmdbg program and return flattened DAP arguments."""
     config_path = Path(path).expanduser().resolve()
     if config_path.name.endswith(".llmdbg.py"):
-        return _load_python_debug_config(config_path)
+        config = _load_python_debug_config(config_path)
+        # DAP clients need the same config-relative image resolution as VS Code.
+        for message in config.get('messages') or []:
+            content = message.get('content')
+            if not isinstance(content,list):
+                continue
+            for part in content:
+                if part.get('type') != 'image':
+                    continue
+                field = 'url' if 'url' in part else 'path'
+                source = part.get(field)
+                if isinstance(source,str) and len(source)<4096 and not source.startswith(('http://','https://','data:')):
+                    candidate = Path(source).expanduser()
+                    if not candidate.is_absolute():
+                        candidate = config_path.parent/candidate
+                    try:
+                        exists = candidate.is_file()
+                    except OSError:
+                        exists = False  # Raw base64 is also an accepted image source.
+                    if exists:
+                        part[field] = str(candidate.resolve())
+        return config
     if config_path.suffix != ".llmdbg":
         raise ValueError(f"debug source must use .llmdbg or .llmdbg.py: {config_path}")
     if not config_path.is_file():

@@ -272,6 +272,7 @@ with debug(model,tokens):
             self.assertTrue(adapter._append_next_generated_token())
         self.assertIsNone(execution.auto_chat)
         self.assertIn('<user>reveal</user>',execution.rendered_prompt)
+        self.assertEqual(adapter.prompt,execution.rendered_prompt)
         self.assertEqual(adapter.generated_tokens,0)
         self.assertEqual(execution.input_ids[0,:4].tolist(),[1,2,3,4])
 

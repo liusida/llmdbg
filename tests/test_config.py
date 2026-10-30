@@ -8,6 +8,13 @@ from llmdbg.config import load_debug_config
 
 
 class DebugConfigTest(unittest.TestCase):
+    def test_starter_image_resolves_relative_to_config_not_working_directory(self):
+        source=Path(__file__).resolve().parents[1]/'starters/Qwen35-Vision.llmdbg.py'
+        config=load_debug_config(str(source))
+        image=next(p for m in config['messages'] if isinstance(m['content'],list)
+            for p in m['content'] if p['type']=='image')
+        self.assertEqual(Path(image.get('url',image.get('path'))),source.parent/'images/cat.jpg')
+
     def test_loads_gemma4_vision_program(self) -> None:
         source = Path(__file__).parents[2] / "llmdbg-usecase" / "Gemma4-E2B.llmdbg.py"
         config = load_debug_config(str(source))

@@ -98,7 +98,11 @@ class StartersReleaseTest(unittest.TestCase):
                         client.request('continue', threadId=1)
                         client.stopped()
                         current = client.request('llmdbg/promptTokens')
-                        if 'MultiTurn' not in filename or current['prompt'].endswith('One useful improvement is'):
+                        # Appending a follow-up expands the known prompt while
+                        # execution may still be at its first token. Reach the
+                        # end of the final prefill before testing new generation.
+                        if 'MultiTurn' not in filename or (current['prompt'].endswith('One useful improvement is')
+                                and current['currentToken']==len(current['tokens'])-1):
                             break
                     self.assertIn('tokens', client.request('evaluate', expression='predictions')['result'])
                     self.assertTrue(client.request('evaluate', expression='predictions[0].token')['result'])
