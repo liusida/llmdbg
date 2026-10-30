@@ -19,3 +19,4 @@ htmlcov/
 /src/llmdbg/data/r_lens/
 private/
 diagnostics/
+to_delete/

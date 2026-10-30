@@ -39,3 +39,6 @@ jlens = { git = "https://github.com/anthropics/jacobian-lens.git" }
 dev = [
     "jlens",
 ]
+training = [
+    "tensorboard>=2.14,<3",
+]

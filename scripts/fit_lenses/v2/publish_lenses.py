@@ -50,7 +50,7 @@ def validate_artifact(directory: Path) -> dict[str, Any]:
         raise ValueError(f"{manifest_path} is missing {', '.join(missing)}")
     if manifest["format_version"] != 2:
         raise ValueError(f"{manifest_path} is not format version 2")
-    if manifest["method"] not in {"j", "r", "jpp"}:
+    if manifest["method"] not in {"j", "r", "jpp", "s"}:
         raise ValueError(f"invalid method {manifest['method']!r}")
     tensor_path = directory / manifest["artifact"]
     if digest(tensor_path) != manifest["sha256"]:

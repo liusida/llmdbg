@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Literal
 
-Method = Literal["j", "r", "jpp"]
+Method = Literal["j", "r", "jpp", "s"]
 Site = Literal["embed", "mid", "post"]
 
 HUB_REPO_ID = "sida/llmdbg"
