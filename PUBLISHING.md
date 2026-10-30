@@ -47,6 +47,35 @@ cannot later be promoted under the same number.
 
 ## Local validation
 
+For the current 0.1.5 pre-release, build with the pre-release flag:
+
+```console
+cd vscode-extension
+npm run package:pre-release
+```
+
+The artifact is `build/releases/vsix/llmdbg-0.1.5-pre-release.vsix`. Publishing is a
+separate, explicit action: commit/push the prepared release, then choose **pre-release**
+in the workflow. Keep the Python package and extension versions aligned in
+`pyproject.toml`, `src/llmdbg/__init__.py`, `uv.lock`, and the extension manifest
+and lockfile. Python/PyPI publication remains a separate explicit action.
+The Marketplace pre-release status is a VSIX flag, not a version suffix; the
+shared source version is `0.1.5`. Do not publish the Python wheel as a PyPI
+pre-release without assigning an appropriate Python pre-release version first.
+
+Standard release checks from the repository root:
+
+```console
+.venv/bin/python -m unittest discover -s tests -q
+node --test vscode-extension/scripts/*.test.js
+```
+
+For major-release real-model validation, explicitly opt into the GPU starter suite:
+
+```console
+LLMDBG_RELEASE_TESTS=1 PYTHONPATH=tests:src .venv/bin/python -m unittest discover -s tests/integration -p test_starters_gpu.py -v
+```
+
 Create a VSIX carrying the Marketplace pre-release flag without publishing it:
 
 ```console

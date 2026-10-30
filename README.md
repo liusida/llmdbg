@@ -82,8 +82,8 @@ local copy instead:
 ```console
 cd vscode-extension
 npm install
-npm run package
-code --install-extension ../build/releases/vsix/llmdbg-0.1.0.vsix
+npm run package:pre-release
+code --install-extension ../build/releases/vsix/llmdbg-0.1.5-pre-release.vsix --force
 ```
 
 Marketplace publishing and pre-release instructions are in
