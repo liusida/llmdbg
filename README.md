@@ -10,7 +10,7 @@ logit-lens interpretations, and a VS Code debug extension. A deterministic
 built-in trace remains available when no model is configured.
 
 ```console
-pip install --pre llmdbg
+pip install llmdbg
 llmdbg --version
 ```
 
