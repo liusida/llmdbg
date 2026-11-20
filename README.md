@@ -48,11 +48,23 @@ explicitly sliced or projected, not flattened automatically. `lens j residual-po
 retains the separate site-based readout syntax. This is a DAP client, not an
 arbitrary Python shell.
 
-To use an already running host and keep its model resident across CLI sessions:
+To use an already running host and keep its model resident across CLI sessions,
+give the client the host's token through the environment:
 
 ```console
-.venv/bin/python -m llmdbg debug --connect 127.0.0.1:5678 starters/Qwen35-Thinking.llmdbg.py
+.venv/bin/python -m llmdbg.host --port 5678      # prints LLMDBG_HOST_TOKEN <token>
+LLMDBG_HOST_TOKEN=<token> .venv/bin/python -m llmdbg debug --connect 127.0.0.1:5678 starters/Qwen35-Thinking.llmdbg.py
 ```
+
+The model host only serves clients that present its token in the `launch`
+request (`hostToken`); before that only `initialize` is answered, and a
+connection that has not authenticated within 30 seconds is closed. This keeps
+other accounts on a shared machine, which can reach any `127.0.0.1` port, from
+starting sessions on your host and running code as you. Pass the token in
+`LLMDBG_HOST_TOKEN` (if unset, a host started by hand generates one and prints
+it), never as a command-line argument: other users can read arguments with `ps`.
+The VS Code extension and the private host of `llmdbg debug` generate and pass
+a fresh token automatically.
 
 For Codex or other automation, use repeated `-c` commands with `--json`:
 
@@ -74,6 +86,98 @@ external `--connect` host leaves that host running. Use `--demo` for a fast,
 model-free trial. Model/config execution, downloads, and GPU allocation happen
 only when launching a real configuration.
 
+## Shared sessions (driving a VS Code session from outside)
+
+Every launched session is also shared on a loopback port. The address and a
+random token are written to an owner-only file in
+`$XDG_CACHE_HOME/llmdbg/sessions/` (default `~/.cache/llmdbg/sessions/`), and
+the Debug Console prints `Shared session listening on ...`. Opt out with
+`"shareSession": false` in the launch configuration or `LLMDBG_SHARE_SESSION=0`.
+
+Another program (for example an agent) can join the newest live session with
+every terminal command:
+
+```console
+llmdbg debug --attach --client-name my-agent --json -c where -c 'break mlp token=3,layer=10' -c continue \
+  -c 'print mlp_expansion[1843]' -c 'set mlp_expansion[1843] = 0' -c 'lens residual_stream'
+```
+
+Attached clients can step, continue, set breakpoints (replacing the session's
+breakpoints for that file; VS Code shows the change), evaluate, intervene, and
+send any `llmdbg/*` request with `request COMMAND JSON`. Only the session owner
+can launch, configure, or end the session; an attached client's `quit` just
+detaches. Each connection is logged in the Debug Console under its
+self-reported `--client-name` (or `$LLMDBG_CLIENT_NAME`) plus a sequence number
+and pid, e.g. `[my-agent #3 (pid 4242)] requested next.`; names are labels, not
+authentication. Requests from all clients run one at a time in arrival order, and
+stops caused by an attached client say so in their description.
+
+### Control panel
+
+The sliders icon in the debug toolbar opens **llmdbg Control**. It also opens
+when a debug session starts (turn that off with `llmdbg.openControlPanelOnStart`);
+the Lens panel opens only from its own toolbar button. It shows:
+
+- **Agent access:** Full, Read-only (agents may inspect but not step, edit, or
+  run plot code), or Off (disconnects agents and refuses new ones).
+- **Connected agents**, each with a Disconnect button.
+- **Changes in this session:** weight edits (Reset weights) and activation edits
+  (Clear activation edits).
+- **Connect an agent:** a prompt to paste into any local agent, with the exact
+  client command for this machine and the bundled agent guide
+  (`llmdbg/data/agent-guide.md`).
+- **Activity:** what each agent did, with failures, plus your own control changes.
+
+Each session file also records `protocol`, `client` (command and `PYTHONPATH`),
+and `docs`, so an agent that finds the file knows how to connect without the panel.
+
+### Rewriting activations with expressions
+
+`let TARGET = EXPRESSION` (request `llmdbg/assign`) rewrites the residual stream
+at the paused stop and replays the current token, like a pasted vector patch:
+
+```text
+vec base = x                     # save the current residual stream as a named vector
+vec steer from steer.npy         # or load one (.npy, .json, or plain text)
+let x = x + 4 * steer            # add a scaled vector
+let x = x * 0.5                  # scale it
+let x = x - (x @ d) * d          # remove the component along unit vector d
+let x[0, 0, 46] = 0              # one dimension, or a slice such as x[0, 0, :64]
+vecs                             # list saved vectors
+```
+
+The right-hand side uses the same restricted evaluator as Watch and the decoder
+(`+ - * / @`, slices, locals at the paused line, `W_o`, saved vectors, and
+`.norm()`, `.sum()`, `.mean()`, `.abs()`); it is computed in fp32 and must match
+the target's shape. Targets are the residual stream (`x`, `residual_stream`) or
+an integer/slice selection of it, at a stop before that site executes. The
+assignment is written to the vector-patch log with its formula. Saved vectors
+(`llmdbg/defineVector`, `llmdbg/listVectors`) last for the debug session.
+
+### Editing weights for one debug session
+
+The same `let` command edits model parameters. Edits apply to the resident
+model, so the debugger recomputes the prompt from token 0 to the paused position
+with the new weights, and they are **undone when the debug session ends** (stop,
+disconnect, or error); the next session starts from the checkpoint again.
+
+```text
+params down_proj                                                   # find parameter names and shapes
+let weight["model.layers.5.mlp.down_proj.weight"][:, 1843] = 0     # ablate one MLP neuron's output
+let weight["model.layers.5.mlp.down_proj.weight"][:, 1843] *= 2    # amplify it (+=, -=, *=, /= work too)
+let W_o[:64, :] *= 0                                               # current layer's attention output, first 64 rows
+print weight["model.layers.5.mlp.down_proj.weight"][:4, 1843]      # read weights back
+weights                                                            # list this session's edits
+undo weights                                                       # restore all (or: undo weights NAME)
+```
+
+`W_o` uses the same input-by-residual orientation as in expressions. Values are
+computed in fp32 and stored in the parameter's dtype; the reply reports how many
+values changed and how many were rounded. Parameters that share storage (tied
+embeddings) are listed in `tiedWith`, because editing one edits the other. While
+any weight edit is active, generation caches are bypassed, and Concept Trace
+marks its results as intervened.
+
 ## VS Code extension
 
 Install `SidaLiu.llmdbg` from the VS Code Marketplace. To build and install a
@@ -82,12 +186,12 @@ local copy instead:
 ```console
 cd vscode-extension
 npm install
-npm run package:pre-release
-code --install-extension ../build/releases/vsix/llmdbg-0.1.5-pre-release.vsix --force
+npm run package
+code --install-extension ../build/releases/vsix/llmdbg-0.2.0.vsix --force
 ```
 
-Marketplace publishing and pre-release instructions are in
-[`PUBLISHING.md`](PUBLISHING.md).
+Marketplace publishing, the release/pre-release version policy, and pre-release
+builds are covered in [`PUBLISHING.md`](PUBLISHING.md).
 
 ## Fitting J++ lenses
 
@@ -147,10 +251,23 @@ must match the exact checkpoint (the base E2B and E2B-it are distinct).
 The curated chat demos pass literal `messages` through the checkpoint's own
 chat template with `model.chat(messages, add_generation_prompt=True)`; the
 multi-turn demo instead continues a final assistant prefill.
-Set `max_new_tokens` on `model.chat(...)` to continue greedily generating after
-the prompt. Each generated token enters the same token-by-token, layer-by-layer
-debug loop, so stepping proceeds through its complete forward pass before the
-next token is selected. Generation stops at EOS or at the configured limit.
+`model.tokenize(...)` and `model.chat(...)` describe the **input**; the run's
+options go on `debug(...)`. Set `max_new_tokens` there to continue greedily
+generating after the input, for plain-text and chat inputs alike:
+
+```python
+inputs = model.tokenize("The capital of France is")
+with debug(model, inputs, max_new_tokens=8) as run:
+    for token in run.tokens:   # positions: the input's, then each generated one
+        ...
+```
+
+Each generated token enters the same token-by-token, layer-by-layer debug loop,
+so stepping proceeds through its complete forward pass before the next token is
+selected. Generation stops at EOS or at the limit (default 0: input only). Older
+programs that pass `max_new_tokens` to `model.chat(...)` keep working; a value
+on `debug(...)` takes precedence. A launch configuration's `"maxNewTokens"` and
+the terminal's `--max-new-tokens` override both.
 
 The compound suffix is intentional: VS Code recognizes it as **llmdbg Python**,
 so F5 starts llmdbg rather than the ordinary Python debugger, while the editor
@@ -161,7 +278,7 @@ from llmdbg import debug, gpt2, nop
 
 model = gpt2("openai-community/gpt2", device="auto", dtype="auto")
 prompt = "The capital of France is"
-tokens = model.tokenize(prompt)
+inputs = model.tokenize(prompt)
 
 def attention(x, block):
     normalized = block.layernorm(x)
@@ -177,9 +294,9 @@ def mlp(x, block):
     update = block.projection(hidden)
     return x + update
 
-with debug(model, tokens) as run:
+with debug(model, inputs) as run:
     for token in run.tokens:
-        x = model.token_embedding(tokens)
+        x = model.token_embedding(inputs)
         for layer, block in enumerate(model.layers):
             nop()  # resid-pre
             x = attention(x, block)
@@ -595,8 +712,9 @@ messages = [
     {"role": "assistant", "content": AUTO_REPLY},
     {"role": "user", "content": "Now reveal the secret concept you chose."},
 ]
-tokens = model.chat(messages, max_new_tokens=4000, enable_thinking=False,
-                    add_generation_prompt=True)
+inputs = model.chat(messages, enable_thinking=False, add_generation_prompt=True)
+with debug(model, inputs, max_new_tokens=4000) as run:
+    ...
 ```
 
 Session preparation stops at the first assistant generation prefix: no
@@ -645,8 +763,10 @@ messages = [
     {"role": "user", "content": "Reveal the secret concept."},
     {"role": "assistant", "content": "The first concept"},
 ]
-tokens = model.chat(messages, max_new_tokens=4000, enable_thinking=False,
+inputs = model.chat(messages, enable_thinking=False,
                     add_generation_prompt=False, continue_final_message=True)
+with debug(model, inputs, max_new_tokens=4000) as run:
+    ...
 ```
 
 This also works after `AUTO_REPLY` turns. Those turns remain lazy and finish at

@@ -22,6 +22,9 @@ def main() -> None:
     terminal = subparsers.add_parser('debug', help='Interactive/scriptable terminal DAP client.')
     terminal.add_argument('config', nargs='?', help='Path to a .llmdbg.py program')
     terminal.add_argument('--connect', metavar='HOST:PORT', help='Use an existing model host instead of a private host')
+    terminal.add_argument('--attach', nargs='?', const='auto', metavar='SESSION_JSON',
+                          help='Join a live shared session (e.g. one VS Code is paused in); default: the newest')
+    terminal.add_argument('--client-name', help='Label shown in the session log for --attach (default: $LLMDBG_CLIENT_NAME or llmdbg-terminal)')
     terminal.add_argument('--json', action='store_true', help='One JSON result per command on stdout; progress on stderr')
     terminal.add_argument('--batch', action='store_true', help='Read commands from stdin; exit on first error')
     terminal.add_argument('-c', '--command', dest='commands', action='append', default=[], help='Execute a command (repeatable)')

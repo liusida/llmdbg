@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import unittest
 from pathlib import Path
 
@@ -84,8 +85,15 @@ class ExtensionManifestTest(unittest.TestCase):
                 ("llmdbg.closeExpressionDecoder", "llmdbg@4"),
                 ("llmdbg.showConceptTrace", "llmdbg@5"),
                 ("llmdbg.closeConceptTrace", "llmdbg@5"),
+                ("llmdbg.showControlPanel", "llmdbg@6"),
+                ("llmdbg.closeControlPanel", "llmdbg@6"),
             ],
         )
+        self.assertEqual(commands["llmdbg.showControlPanel"]["icon"]["dark"], "assets/control-dark.svg")
+        self.assertEqual(commands["llmdbg.closeControlPanel"]["icon"]["dark"], "assets/control-open-dark.svg")
+        for name in ("control-dark", "control-light", "control-open-dark", "control-open-light"):
+            self.assertTrue((root / "vscode-extension" / "assets" / f"{name}.svg").exists(), name)
+        self.assertTrue(settings["llmdbg.openControlPanelOnStart"]["default"])
 
     def test_extension_uses_a_private_runtime(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -98,6 +106,19 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn('["venv", "--python", recipe.python, runtimeRoot]', source)
         self.assertIn('path.join(runtimesRoot, recipe.key)', source)
         self.assertIn('hostPython === python', source)
+        # The model host's secret travels by environment and launch config, never argv.
+        self.assertIn("LLMDBG_HOST_TOKEN: hostToken", source)
+        self.assertIn("config.hostToken = hostToken", source)
+        self.assertNotIn('"--token"', source)
+        # The agent prompt points at the session file instead of embedding local paths.
+        prompt = source[source.index("function agentPrompt"):source.index("function escapeHtml")]
+        self.assertIn("Open the newest JSON file in ~/.cache/llmdbg/sessions/", prompt)
+        self.assertNotIn("state.client", prompt)
+        # Every tool tab carries the same icon as its toolbar button.
+        trace = (root / "vscode-extension" / "concept-trace.js").read_text()
+        for text in (source, trace):
+            self.assertEqual(text.count("createWebviewPanel("), len(re.findall(r"\.iconPath\s*=", text)),
+                             "a panel lacks a tab icon")
         self.assertIn('"runtime-profiles.js"', (root / "vscode-extension" / "package.json").read_text())
         self.assertIn('"pip", "install"', source)
         self.assertIn('get("uvPath", "uv")', source)
@@ -139,7 +160,11 @@ class ExtensionManifestTest(unittest.TestCase):
         self.assertIn('registerCommand("llmdbg.manageResidualToVocabularyLenses"', source)
         self.assertIn("function residualToVocabularyLensSettings()", source)
         self.assertIn('"llmdbg.neuronLens", "llmdbg Lens"', source)
-        self.assertIn("void showNeuronLens(session, false)", source)
+        # Lens opens only from its toolbar button; Control opens when a session starts.
+        start = source[source.index("onDidStartDebugSession"):source.index("onDidTerminateDebugSession")]
+        self.assertNotIn("showNeuronLens(", start)
+        self.assertIn("showControlPanel()", start)
+        self.assertIn('get("openControlPanelOnStart", true)', start)
         self.assertIn("if (refreshImmediately) await refreshNeuronLens()", source)
         self.assertIn("if (!neuronLensExecutionReady) return", source)
         self.assertIn("neuronLensExecutionReady = true", source)

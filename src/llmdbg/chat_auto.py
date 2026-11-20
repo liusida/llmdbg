@@ -83,7 +83,7 @@ def generate_reply(execution, budget, model, revision, *, start=None):
     adapter = SimpleNamespace(execution=execution, model_name=model, model_revision=revision)
     key, persistent, metadata = generation_cache.identity(adapter, start)
     key = generation_cache.fingerprint(key, 'auto-reply-v1')
-    modified = any(getattr(execution,name,{}) for name in ('interventions','ica_interventions','vector_patches'))
+    modified = any(getattr(execution,name,{}) for name in ('interventions','ica_interventions','vector_patches','weight_edits'))
     cacheable = not modified
     entry = _turn_cache(execution).get(key) if not modified else None
     source = 'resident memory' if entry else 'disk'
@@ -125,7 +125,7 @@ def generate_reply(execution, budget, model, revision, *, start=None):
     finished = False
     try:
         while execution.token_count-start < budget:
-            modified = any(getattr(execution,name,{}) for name in ('interventions','ica_interventions','vector_patches'))
+            modified = any(getattr(execution,name,{}) for name in ('interventions','ica_interventions','vector_patches','weight_edits'))
             if modified:
                 for position in range(execution.cached_through+1,execution.token_count):
                     execution.trace_token(position)
@@ -193,7 +193,7 @@ def finish_auto_turn(execution, *, save_cache=True):
         adapter = SimpleNamespace(execution=execution,model_name=state['model'],model_revision=state['kwargs'].get('revision','main'))
         key,persistent,metadata = generation_cache.identity(adapter,state['start'])
         key = generation_cache.fingerprint(key,'auto-reply-v1')
-        if not any(getattr(execution,name,{}) for name in ('interventions','ica_interventions','vector_patches')):
+        if not any(getattr(execution,name,{}) for name in ('interventions','ica_interventions','vector_patches','weight_edits')):
             _remember_turn(execution,key,ids,True)
         if persistent:
             generation_cache.save(key,ids,True,metadata)

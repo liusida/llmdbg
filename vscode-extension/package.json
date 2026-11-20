@@ -2,7 +2,7 @@
   "name": "llmdbg",
   "displayName": "llmdbg",
   "description": "Step through LLM layers and inspect human-readable internal representations.",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "publisher": "SidaLiu",
   "icon": "assets/icon.png",
   "license": "MIT",
@@ -139,6 +139,22 @@
         "command": "llmdbg.manageResidualToVocabularyLenses",
         "title": "llmdbg: Manage Custom Residual-to-Vocabulary Lenses",
         "icon": "$(settings-gear)"
+      },
+      {
+        "command": "llmdbg.showControlPanel",
+        "title": "llmdbg: Open Control Panel",
+        "icon": {
+          "light": "assets/control-light.svg",
+          "dark": "assets/control-dark.svg"
+        }
+      },
+      {
+        "command": "llmdbg.closeControlPanel",
+        "title": "llmdbg: Close Control Panel",
+        "icon": {
+          "light": "assets/control-open-light.svg",
+          "dark": "assets/control-open-dark.svg"
+        }
       }
     ],
     "menus": {
@@ -192,6 +208,16 @@
           "command": "llmdbg.closeConceptTrace",
           "when": "debugType == llmdbg && llmdbg.conceptTraceOpen",
           "group": "llmdbg@5"
+        },
+        {
+          "command": "llmdbg.showControlPanel",
+          "when": "debugType == llmdbg && !llmdbg.controlPanelOpen",
+          "group": "llmdbg@6"
+        },
+        {
+          "command": "llmdbg.closeControlPanel",
+          "when": "debugType == llmdbg && llmdbg.controlPanelOpen",
+          "group": "llmdbg@6"
         }
       ]
     },
@@ -488,6 +514,11 @@
             "type": "boolean",
             "default": true,
             "description": "Automatically reload the VS Code window when a newly installed llmdbg extension version is detected."
+          },
+          "llmdbg.openControlPanelOnStart": {
+            "type": "boolean",
+            "default": true,
+            "description": "Open the llmdbg Control panel (agent access, session changes, activity) when a debug session starts. The Lens panel opens only from its toolbar button."
           }
         }
       }

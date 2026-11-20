@@ -19,7 +19,7 @@ messages = [
 ]
 # AUTO_REPLY is generated lazily. The budget applies separately to each reply.
 # Continue the assistant's existing text rather than opening a new assistant turn.
-tokens = model.chat(messages, max_new_tokens=256, enable_thinking=False,
+inputs = model.chat(messages, enable_thinking=False,
                     add_generation_prompt=False, continue_final_message=True)
 
 
@@ -51,9 +51,10 @@ def mlp(x, block):
     return x + update
 
 
-with debug(model, tokens) as run:
+# max_new_tokens: tokens generated greedily after the input (stops early at EOS).
+with debug(model, inputs, max_new_tokens=256) as run:
     for token in run.tokens:
-        x = model.token_embedding(tokens)
+        x = model.token_embedding(inputs)
         for layer, block in enumerate(model.layers):
             nop()  # resid-pre
             x = full_attention(x, block)

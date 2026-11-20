@@ -295,7 +295,7 @@ with debug(model,tokens):
         with patch('llmdbg.model_runtime.prepare_model_execution',return_value=execution):
             prepare_auto_chat('test/model',messages,max_new_tokens=8)
         session=DebugSession.__new__(DebugSession)
-        session.execution=execution;session.prompt=SimpleNamespace(max_new_tokens=8)
+        session.execution=execution;session.prompt=SimpleNamespace(max_new_tokens=8);session.max_new_tokens=8
         execution.runtime.final_norm_name='norm'
         session._states={'norm':SimpleNamespace(output_vector=(1.,))}
         session._refresh=lambda:None

@@ -13,7 +13,8 @@ import time
 
 
 class DAPClient:
-    def __init__(self, port, log, timeout=30):
+    def __init__(self, port, log, timeout=30, host_token=None):
+        self.host_token = host_token
         self.socket = socket.create_connection(('127.0.0.1', port), timeout=timeout)
         self.socket.settimeout(timeout)
         self.buffer = bytearray()
@@ -55,9 +56,12 @@ class DAPClient:
         self.buffer.extend(chunk)
 
     def request(self, command, **arguments):
+        if command == 'launch' and self.host_token:
+            arguments.setdefault('hostToken', self.host_token)
         self.seq += 1
         request = {'seq': self.seq, 'type': 'request', 'command': command, 'arguments': arguments}
-        self.record('send', request)
+        logged = dict(request, arguments={k: ('<redacted>' if k == 'hostToken' else v) for k, v in arguments.items()})
+        self.record('send', logged)
         payload = json.dumps(request).encode()
         self.socket.sendall(f'Content-Length: {len(payload)}\r\n\r\n'.encode()+payload)
         deadline = time.monotonic()+self.timeout
@@ -94,7 +98,10 @@ class DebugHost:
         self.timeout = timeout
         self.stderr = (logs/'host-stderr.log').open('w')
         self.stdout = (logs/'host-stdout.log').open('w')
-        env = dict(os.environ, LLMDBG_GENERATION_CACHE_DIR=str(logs/'generation-cache'))
+        import secrets
+        self.token = secrets.token_urlsafe(32)
+        env = dict(os.environ, LLMDBG_GENERATION_CACHE_DIR=str(logs/'generation-cache'),
+                   LLMDBG_HOST_TOKEN=self.token)
         env.update(env_overrides or {})
         root = Path(__file__).resolve().parents[1]
         env['PYTHONPATH'] = str(root/'src')+os.pathsep+env.get('PYTHONPATH', '')
@@ -121,7 +128,7 @@ class DebugHost:
             raise
 
     def client(self, name):
-        return DAPClient(self.port, (self.logs/(name+'.dap.jsonl')).open('w'), self.timeout)
+        return DAPClient(self.port, (self.logs/(name+'.dap.jsonl')).open('w'), self.timeout, self.token)
 
     def close(self):
         if self.stderr.closed:

@@ -445,6 +445,8 @@ function registerConceptTrace(context, vscode) {
       session=active;
       panel=vscode.window.createWebviewPanel('llmdbg.conceptTrace','llmdbg Concept Trace',{viewColumn:vscode.ViewColumn.Beside,preserveFocus:false},{enableScripts:true,retainContextWhenHidden:true});
       const own=panel;
+      // Same icon as its toolbar button; cosmetic, so never let it block opening the panel.
+      if(vscode.Uri&&context.extensionUri){const traceIcon=vscode.Uri.joinPath(context.extensionUri,'assets','concept-trace.svg');panel.iconPath={light:traceIcon,dark:traceIcon};}
       void vscode.commands.executeCommand('setContext','llmdbg.conceptTraceOpen',true);
       panel.webview.onDidReceiveMessage(async message=>{
         if(message.type!=='conceptTrace')return;

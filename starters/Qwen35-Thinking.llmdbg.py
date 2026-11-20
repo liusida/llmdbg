@@ -13,7 +13,7 @@ messages = [
     {"role": "user", "content": "Why does the sky look blue during the day but red or orange at sunset?"},
 ]
 # Thinking and the final answer share this generation budget.
-tokens = model.chat(messages, max_new_tokens=4096, enable_thinking=True,
+inputs = model.chat(messages, enable_thinking=True,
                     add_generation_prompt=True)
 
 
@@ -69,9 +69,10 @@ def mlp(x, block):
     return x + update
 
 
-with debug(model, tokens) as run:
+# max_new_tokens: tokens generated greedily after the input (stops early at EOS).
+with debug(model, inputs, max_new_tokens=4096) as run:
     for token in run.tokens:
-        x = model.token_embedding(tokens)
+        x = model.token_embedding(inputs)
         for layer, block in enumerate(model.layers):
             nop()  # resid-pre
             if block.kind == "full_attention":

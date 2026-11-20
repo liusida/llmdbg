@@ -36,7 +36,8 @@ def identity(adapter, prompt_count):
     requested = getattr(adapter, 'model_revision', 'main')
     revision = revision or (requested if requested not in ('main','master','') else None)
     # A local mutable checkpoint or unresolved branch cannot safely share a disk entry.
-    persistent = bool(revision) and not (execution.interventions or execution.ica_interventions or execution.vector_patches)
+    persistent = bool(revision) and not (execution.interventions or execution.ica_interventions or execution.vector_patches
+                                         or getattr(execution, 'weight_edits', None))
     vocab = getattr(tokenizer, '_llmdbg_generation_vocab_hash', None)
     if vocab is None:
         vocab = fingerprint(tokenizer.get_vocab() if hasattr(tokenizer,'get_vocab') else {},
@@ -60,7 +61,8 @@ def identity(adapter, prompt_count):
         execution.visual_pos_masks[:,:prompt_count] if execution.visual_pos_masks is not None else None,
         execution.deepstack_visual_embeds,
         execution.per_layer_inputs[:,:prompt_count] if execution.per_layer_inputs is not None else None,
-        execution.interventions,execution.ica_interventions,execution.vector_patches)
+        execution.interventions,execution.ica_interventions,execution.vector_patches,
+        getattr(execution,'weight_edits',None) or None)
     return key, persistent, {'schema':1,'model':metadata['model'],'revision':revision,
                              'vocabulary_size':int(runtime.model.get_output_embeddings().weight.shape[0])}
 

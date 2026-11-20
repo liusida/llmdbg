@@ -166,7 +166,8 @@ class Snapshot:
         self.model = str(adapter.model_name)
         self.rows, self.vectors, self.mixed, self.values, self.head_rows = [], {}, {}, {}, {}
         self.maps, self.edge_cache = {}, {}
-        self.intervened = bool(self.replay.interventions or self.replay.ica_interventions or self.replay.vector_patches)
+        self.intervened = bool(self.replay.interventions or self.replay.ica_interventions or self.replay.vector_patches
+                               or getattr(self.replay, 'weight_edits', None))
         self.current_token = adapter.token_index
         from llmdbg import generation_cache
         cache_adapter = adapter

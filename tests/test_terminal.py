@@ -12,9 +12,9 @@ from llmdbg.terminal import Terminal, DAPError
 
 
 class TerminalTest(unittest.TestCase):
-    def cli(self,*args,input=None):
+    def cli(self,*args,input=None,env_overrides=None):
         root=Path(__file__).resolve().parents[1]
-        env=dict(os.environ,PYTHONPATH=str(root/'src'))
+        env=dict(os.environ,PYTHONPATH=str(root/'src'),**(env_overrides or {}))
         return subprocess.run([sys.executable,'-m','llmdbg','debug','--demo','--json',*args],
             input=input,text=True,capture_output=True,cwd=root,env=env,timeout=30)
 
@@ -80,7 +80,8 @@ class TerminalTest(unittest.TestCase):
             host=DebugHost(Path(directory))
             try:
                 for _ in range(2):
-                    result=self.cli('--connect',f'127.0.0.1:{host.port}','-c','next')
+                    result=self.cli('--connect',f'127.0.0.1:{host.port}','-c','next',
+                                    env_overrides={'LLMDBG_HOST_TOKEN':host.token})
                     self.assertEqual(result.returncode,0,result.stderr)
                     self.assertIsNone(host.process.poll())
             finally:host.close()

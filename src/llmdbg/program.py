@@ -260,9 +260,16 @@ class RemoteModel:
 
 
 class DebugSession:
-    def __init__(self, model: RemoteModel, tokens: Prompt | ChatPrompt, token: int | None):
+    def __init__(self, model: RemoteModel, tokens: Prompt | ChatPrompt, token: int | None,
+                 max_new_tokens: int | None = None):
         self.model, self.prompt = model, tokens
         self.token = 0 if token is None else token
+        if max_new_tokens is None:
+            # Compatibility: chat(..., max_new_tokens=N) used to carry the run's budget.
+            max_new_tokens = tokens.max_new_tokens if isinstance(tokens, ChatPrompt) else 0
+        if max_new_tokens < 0:
+            raise ValueError("max_new_tokens must be non-negative")
+        self.max_new_tokens = int(max_new_tokens)
         self.execution: ModelExecution | None = None
         self._states: dict[str, Any] = {}
 
@@ -275,7 +282,7 @@ class DebugSession:
             add_generation_prompt=(self.prompt.add_generation_prompt if isinstance(self.prompt, ChatPrompt) else True),
             enable_thinking=(self.prompt.enable_thinking if isinstance(self.prompt, ChatPrompt) else False),
             continue_final_message=(self.prompt.continue_final_message if isinstance(self.prompt, ChatPrompt) else False),
-            max_new_tokens=(self.prompt.max_new_tokens if isinstance(self.prompt, ChatPrompt) else 20),
+            max_new_tokens=self.max_new_tokens,
             device=self.model.device, dtype=self.model.dtype,
         )
         self.model._session = self
@@ -295,16 +302,15 @@ class DebugSession:
     def tokens(self) -> Iterator[int]:
         """Yield real token-position locals while selecting each runtime trace."""
         assert self.execution is not None
-        auto = self.execution.auto_chat is not None
         position, generated = 0, 0
         while position < self.execution.token_count:
             self.token = position
             self._refresh()
             yield position
             position += 1
-            if position < self.execution.token_count or not auto:
+            if position < self.execution.token_count:
                 continue
-            budget = self.prompt.max_new_tokens
+            budget = self.max_new_tokens
             if generated >= budget:
                 if self.execution.auto_chat:
                     raise ValueError('AUTO_REPLY reached max_new_tokens before EOS. Increase the budget to reach the follow-up.')
@@ -423,9 +429,16 @@ def gemma4(
 
 
 def debug(
-    model: RemoteModel, tokens: Prompt | ChatPrompt, *, token: int | None = None
+    model: RemoteModel, inputs: Prompt | ChatPrompt, *, token: int | None = None,
+    max_new_tokens: int | None = None,
 ) -> DebugSession:
-    return DebugSession(model, tokens, token)
+    """Run ``inputs`` (from ``model.tokenize`` or ``model.chat``) under the debugger.
+
+    ``max_new_tokens`` is how many tokens to generate greedily after the input
+    (default 0 for ``tokenize``; for ``chat`` the older ``chat(max_new_tokens=)``
+    value is used when this is not given). Generation also stops at EOS.
+    """
+    return DebugSession(model, inputs, token, max_new_tokens)
 
 
 def nop() -> None:

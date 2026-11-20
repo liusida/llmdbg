@@ -13,7 +13,7 @@ messages = [
     {"role": "system", "content": "You are a helpful assistant. Be concise."},
     {"role": "user", "content": "Why does ice float on water? Answer in two sentences."},
 ]
-tokens = model.chat(messages, max_new_tokens=128, enable_thinking=False,
+inputs = model.chat(messages, enable_thinking=False,
                     add_generation_prompt=True)
 
 
@@ -45,9 +45,10 @@ def mlp(x, block):
     return x + update
 
 
-with debug(model, tokens) as run:
+# max_new_tokens: tokens generated greedily after the input (stops early at EOS).
+with debug(model, inputs, max_new_tokens=128) as run:
     for token in run.tokens:
-        x = model.token_embedding(tokens)
+        x = model.token_embedding(inputs)
         for layer, block in enumerate(model.layers):
             nop()  # resid-pre
             x = full_attention(x, block)

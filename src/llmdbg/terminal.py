@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import queue
 import shlex
@@ -54,7 +55,7 @@ class Client:
                 if message.get('request_seq')!=self.sequence:raise DAPError('Unexpected DAP response')
                 if not message.get('success'):raise DAPError(message.get('message',f'{command} failed'))
                 return message.get('body',{})
-            if message.get('event') in ('stopped','terminated','exited','llmdbg/computationFailed'):
+            if message.get('event') in ('stopped','continued','terminated','exited','llmdbg/computationFailed'):
                 self.events.append(message)
 
     def wait_stop(self):
@@ -62,12 +63,13 @@ class Client:
         while True:
             event=self.events.pop(0) if self.events else self.read(deadline)
             name=event.get('event')
+            if name=='continued':continue
             if name=='stopped':return dict(event='stopped',**event.get('body',{}))
             if name in ('terminated','exited'):return dict(event=name,**event.get('body',{}))
             if name=='llmdbg/computationFailed':raise DAPError(event.get('body',{}).get('message','Computation failed'))
 
 
-HELP='''launch FILE                 Launch a .llmdbg.py file, paused at entry
+HELP='''launch FILE                 Launch a .llmdbg.py file, paused at entry (not with --attach)
 break LINE|mlp|attention [token=N,layer=N]   Add a conditional breakpoint
 clear                       Clear breakpoints in the current source
 continue / c                Run to next breakpoint or termination
@@ -77,6 +79,16 @@ out                         Step out
 where                       Show stack and source location
 vars [REFERENCE]            Inspect scopes/variables
 print / p EXPRESSION        Evaluate a debugger expression
+set EXPRESSION = VALUE      Intervene on one value, e.g. set mlp_expansion[1843] = 0
+let TARGET = EXPRESSION     Rewrite the residual stream, e.g. let x = x + 4*steer, let x[0,0,46] = 0
+let TARGET op= EXPRESSION   Also +=, -=, *=, /=; weights too: let W_o[:64, :] *= 0,
+                              let weight["model.layers.5.mlp.down_proj.weight"][:, 1843] = 0
+params [FILTER]             List parameter names, shapes, dtypes
+weights                     List this session's weight edits
+undo weights [NAME]         Restore original weights (all, or one parameter)
+vec NAME = EXPRESSION       Save a vector from the current stop, e.g. vec base = x
+vec NAME from FILE          Load a vector from .npy, .json, or whitespace-separated text
+vecs                        List saved vectors
 tokens                      Show prompt and generated tokens
 vector                      Inspect the active vector
 lens EXPRESSION             Decode a tensor through all configured lenses (abc)
@@ -89,6 +101,24 @@ help                        Show this help'''
 class Terminal:
     def __init__(self,client,args):
         self.client=client;self.args=args;self.source=None;self.breakpoints=[];self.calls={};self.launched=False
+        self.attached=False
+
+    def attach(self,record):
+        """Join a shared session that another client (e.g. VS Code) launched and owns."""
+        import os
+        name=getattr(self.args,'client_name',None) or os.environ.get('LLMDBG_CLIENT_NAME') or 'llmdbg-terminal'
+        reply=self.client.request('llmdbg/attach',token=record['token'],clientName=name,pid=os.getpid())
+        self.attached=self.launched=True
+        self.source=record.get('source')
+        if self.source:
+            try:
+                from llmdbg.config import load_debug_config
+                self.calls=load_debug_config(self.source).get('callLines',{})
+            except Exception:
+                self.calls={}
+        frames=self.client.request('stackTrace',threadId=1).get('stackFrames',[])
+        return {'attached':f"{record['host']}:{record['port']}",'as':reply.get('label'),'model':record.get('model'),
+                'source':self.source,'frame':frames[0] if frames else None}
 
     def launch(self,filename=None):
         arguments={'stopOnEntry':True}
@@ -101,6 +131,7 @@ class Terminal:
         for name,key in [('model','model'),('device','device'),('dtype','dtype'),('max_new_tokens','maxNewTokens')]:
             value=getattr(self.args,name,None)
             if value is not None:arguments[key]=value
+        if getattr(self,'host_token',None):arguments['hostToken']=self.host_token
         self.client.events.clear();self.breakpoints=[]
         self.client.request('launch',**arguments);self.launched=True
         self.client.request('configurationDone')
@@ -123,6 +154,7 @@ class Terminal:
         if command=='help':return {'help':HELP}
         if command=='quit':return {'quit':True}
         if command=='launch':
+            if self.attached:raise ValueError('Attached to a shared session; its owner controls launch')
             paths=shlex.split(rest)
             if len(paths)>1:raise ValueError('launch expects one quoted file path')
             return self.launch(paths[0] if paths else None)
@@ -133,10 +165,40 @@ class Terminal:
             return self.client.request(name,**arguments)
         if not self.launched:raise ValueError('Launch a config first')
         if command in ('continue','next','step','out'):
+            self.client.events.clear()
             self.client.request({'step':'stepIn','out':'stepOut'}.get(command,command),threadId=1)
+            if self.attached:
+                # Drop stops the owner caused before ours; ours follow our 'continued'.
+                marks=[index for index,event in enumerate(self.client.events) if event.get('event')=='continued']
+                if marks:del self.client.events[:marks[-1]+1]
             return self.stopped()
         if command=='where':return self.client.request('stackTrace',threadId=1)
         if command=='print':return self.client.request('evaluate',expression=rest,context='repl')
+        if command=='let':
+            target,separator,expression=rest.partition('=')
+            target,expression=target.strip(),expression.strip()
+            if not separator or not target or not expression:raise ValueError('Use let TARGET = EXPRESSION')
+            if target[-1] in '+-*/':  # augmented: let T *= E  ->  T = T * (E)
+                operator,target=target[-1],target[:-1].strip()
+                expression=f'{target} {operator} ({expression})'
+            return self.client.request('llmdbg/assign',target=target,expression=expression)
+        if command=='params':return self.client.request('llmdbg/listParameters',filter=rest)
+        if command=='weights':return self.client.request('llmdbg/listWeightEdits')
+        if command=='undo':
+            words=rest.split(maxsplit=1)
+            if not words or words[0]!='weights':raise ValueError('Use undo weights [PARAMETER]')
+            return self.client.request('llmdbg/restoreWeights',**({'parameter':words[1]} if len(words)>1 else {}))
+        if command=='vecs':return self.client.request('llmdbg/listVectors')
+        if command=='vec':
+            name,separator,source=rest.partition('=')
+            if separator:return self.client.request('llmdbg/defineVector',name=name.strip(),expression=source.strip())
+            words=rest.split(maxsplit=2)
+            if len(words)!=3 or words[1]!='from':raise ValueError('Use vec NAME = EXPRESSION or vec NAME from FILE')
+            return self.client.request('llmdbg/defineVector',name=words[0],values=load_vector(words[2]))
+        if command=='set':
+            expression,separator,value=rest.rpartition('=')
+            if not separator or not expression.strip() or not value.strip():raise ValueError('Use set EXPRESSION = VALUE')
+            return self.client.request('setExpression',expression=expression.strip(),value=value.strip())
         if command=='tokens':return self.client.request('llmdbg/promptTokens')
         if command=='vector':return self.client.request('llmdbg/vector')
         if command=='lens':
@@ -169,17 +231,37 @@ class Terminal:
         raise ValueError(f'Unknown command: {command}. Type help.')
 
 
+def load_vector(path):
+    """Read numbers from .npy, .json, or whitespace/comma-separated text as nested lists."""
+    path=Path(path).expanduser()
+    if path.suffix=='.npy':
+        import numpy
+        return numpy.load(path,allow_pickle=False).astype(float).tolist()
+    text=path.read_text()
+    if path.suffix=='.json':return json.loads(text)
+    return [float(value) for value in text.replace(',',' ').split()]
+
+
 def run(args):
     """Own a private host by default; never terminate an explicitly connected host."""
-    owned=None;client=None
+    owned=None;client=None;record=None;host_token=None
     try:
-        if args.connect:
+        if getattr(args,'attach',None):
+            if args.config or args.demo or args.connect:raise ValueError('--attach joins an existing session; omit FILE, --demo and --connect')
+            from llmdbg.shared_session import discover
+            record=discover(None if args.attach=='auto' else args.attach)
+            address=(record['host'],int(record['port']))
+        elif args.connect:
             host,separator,port=args.connect.rpartition(':')
             if not separator:raise ValueError('--connect expects HOST:PORT')
             address=(host,int(port))
+            host_token=os.environ.get('LLMDBG_HOST_TOKEN')
+            if not host_token:raise ValueError('--connect needs the host token in $LLMDBG_HOST_TOKEN (printed by a host started by hand)')
         else:
+            import secrets
+            host_token=secrets.token_urlsafe(32)
             owned=subprocess.Popen([sys.executable,'-u','-m','llmdbg.host','--host','127.0.0.1','--port','0'],
-                stdout=subprocess.PIPE,stderr=None,text=True)
+                stdout=subprocess.PIPE,stderr=None,text=True,env=dict(os.environ,LLMDBG_HOST_TOKEN=host_token))
             ready=queue.Queue()
             def consume():
                 for line in owned.stdout:
@@ -191,15 +273,18 @@ def run(args):
             if port is None:raise DAPError('Private host exited during startup')
             address=('127.0.0.1',port)
         client=Client(address,args.timeout,output=lambda text:print(text,end='',file=sys.stderr,flush=True))
-        client.request('initialize',adapterID='llmdbg',clientID='llmdbg-terminal',linesStartAt1=True,columnsStartAt1=True)
-        terminal=Terminal(client,args)
+        terminal=Terminal(client,args);terminal.host_token=host_token
+        if not record:
+            client.request('initialize',adapterID='llmdbg',clientID='llmdbg-terminal',linesStartAt1=True,columnsStartAt1=True)
         def emit(command,result=None,error=None):
             if args.json:
                 print(json.dumps(dict(command=command,ok=error is None,**({'error':str(error)} if error else {'body':result})),ensure_ascii=False),flush=True)
             elif error:print('Error: '+str(error),file=sys.stderr)
             elif result.get('help'):print(result['help'])
             else:print(json.dumps(result,ensure_ascii=False,indent=2),flush=True)
-        if args.config or args.demo:
+        if record:
+            emit('attach',terminal.attach(record))
+        elif args.config or args.demo:
             emit('launch',terminal.launch(args.config))
         def execute(line):
             if not line.strip() or line.lstrip().startswith('#'):return True

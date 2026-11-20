@@ -9,7 +9,7 @@ model = gpt2(
 )
 
 prompt = "The capital of Japan is the city of"
-tokens = model.tokenize(prompt)
+inputs = model.tokenize(prompt)
 
 
 def attention(x, block):
@@ -28,9 +28,10 @@ def mlp(x, block):
     return x + update
 
 
-with debug(model, tokens) as run:
+# max_new_tokens: tokens generated greedily after the input (stops early at EOS).
+with debug(model, inputs, max_new_tokens=0) as run:
     for token in run.tokens:
-        x = model.token_embedding(tokens)
+        x = model.token_embedding(inputs)
         for layer, block in enumerate(model.layers):
             nop()  # resid-pre
             x = attention(x, block)

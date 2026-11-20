@@ -1,6 +1,7 @@
 "use strict";
 
 const childProcess = require("child_process");
+const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -450,6 +451,163 @@ function vectorPlotHtml(webview) {
 </html>`;
 }
 
+function controlPanelHtml(webview) {
+  const nonce = crypto.randomBytes(16).toString("base64");
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+<style>
+:root{--muted:var(--vscode-descriptionForeground);--line:var(--vscode-panel-border);--accent:var(--vscode-charts-orange,#d18616);--ok:var(--vscode-charts-green,#4ec9b0)}
+body{margin:0;padding:14px 16px 28px;font:15px/1.45 var(--vscode-font-family);color:var(--vscode-foreground);background:var(--vscode-editor-background)}
+button{font:inherit;font-size:13px;padding:3px 10px;border-radius:3px;border:1px solid transparent;background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground);cursor:pointer;white-space:nowrap}
+button:hover:not(:disabled){background:var(--vscode-button-secondaryHoverBackground)}button:disabled{opacity:.45;cursor:default}
+button.primary{background:var(--vscode-button-background);color:var(--vscode-button-foreground)}button.primary:hover:not(:disabled){background:var(--vscode-button-hoverBackground)}
+.top{display:flex;align-items:center;gap:8px;margin-bottom:12px;min-height:24px}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--muted);flex:none}.dot.live{background:var(--ok)}
+.where{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.where b{font-weight:600}.where span{color:var(--muted)}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:16px}
+.tile{border:1px solid var(--line);border-radius:6px;padding:10px 12px;display:flex;flex-direction:column;gap:5px;min-height:88px}
+.tile.flag{border-color:var(--accent)}.tile.flag .value{color:var(--accent)}
+.label{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.value{font-size:22px;font-weight:600;line-height:1.2}
+.detail{font-size:13px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tile .act{margin-top:auto;display:flex;gap:6px;flex-wrap:wrap}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:4px;overflow:hidden}.seg button{border-radius:0;padding:3px 8px}
+.seg button[aria-pressed=true]{background:var(--vscode-button-background);color:var(--vscode-button-foreground)}
+.chip{display:inline-flex;align-items:center;gap:3px;font-size:13px;padding:0 2px 0 7px;border-radius:9px;border:1px solid var(--line);margin:1px 3px 1px 0}
+.chip button{padding:0 5px;background:transparent;border:0;color:var(--muted)}.chip button:hover{color:var(--vscode-errorForeground);background:transparent}
+.sect{display:flex;align-items:baseline;gap:8px;margin:2px 0 6px}.sect h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0;font-weight:600}
+.feed{border-top:1px solid var(--line)}
+.ev{display:grid;grid-template-columns:68px 120px 1fr;gap:10px;padding:5px 0 5px 9px;border-bottom:1px solid var(--line);border-left:3px solid transparent;align-items:baseline}
+.ev.edit{border-left-color:var(--accent)}.ev.move{border-left-color:var(--vscode-charts-blue,#3794ff)}.ev.setup{border-left-color:var(--muted)}
+.legend{display:flex;gap:12px;font-size:12px;color:var(--muted);margin-left:auto;align-items:center}.legend i{display:inline-block;width:3px;height:10px;margin-right:4px;vertical-align:-1px}
+.legend label{display:flex;gap:4px;align-items:center;cursor:pointer}
+.ev .t{color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}
+.ev .who{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ev .what{font:13.5px/1.45 var(--vscode-editor-font-family);word-break:break-word}.ev.bad .what{color:var(--vscode-errorForeground)}
+.ev .why{color:var(--muted);font-family:var(--vscode-font-family)}
+.start{border:1px dashed var(--line);border-radius:6px;padding:12px 14px;margin:6px 0}
+.start h3{margin:0 0 10px;font-size:15px}
+.steps{display:grid;grid-template-columns:auto 1fr;gap:6px 10px;align-items:center;margin-bottom:8px}
+.n{width:21px;height:21px;border-radius:50%;background:var(--vscode-badge-background);color:var(--vscode-badge-foreground);font-size:12px;display:grid;place-items:center}
+details{margin-top:6px}summary{cursor:pointer;color:var(--muted);font-size:13px}
+pre{white-space:pre-wrap;word-break:break-word;margin:6px 0 0;font:13px/1.5 var(--vscode-editor-font-family);background:var(--vscode-textCodeBlock-background);padding:8px 10px;border-radius:4px}
+.empty{color:var(--muted);font-style:italic;padding:6px 0}
+@media (max-width:480px){.top{flex-wrap:wrap}.where{flex-basis:100%;order:-1}.ev{grid-template-columns:62px 76px 1fr;gap:7px}.ev .who{font-size:12px}.legend .k{display:none}}
+</style></head><body>
+<div class="top"><span class="dot" id="dot"></span><div class="where" id="where">Waiting for a debug session…</div>
+<button class="primary" id="copy" title="Copy instructions for an AI agent on this machine">Copy prompt</button>
+<button id="guide" title="Open the agent guide">Guide</button></div>
+
+<div class="tiles">
+ <div class="tile" id="accessTile"><div class="label">Agent access</div><div class="value" id="access">—</div>
+  <div class="act"><span class="seg" role="group" aria-label="Agent access">
+   <button data-mode="full" title="Agents can inspect, step, set breakpoints and edit activations or weights">Full</button>
+   <button data-mode="readonly" title="Agents can inspect but not step, edit, or run plot code">Read-only</button>
+   <button data-mode="off" title="Disconnect agents and refuse new ones">Off</button></span></div></div>
+ <div class="tile" id="agentsTile"><div class="label">Agents</div><div class="value" id="agentCount">0</div><div id="agents" class="detail"></div></div>
+ <div class="tile" id="weightsTile"><div class="label">Weights</div><div class="value" id="weights">Original</div><div class="detail" id="weightsDetail"></div>
+  <div class="act"><button id="resetWeights">Reset weights</button></div></div>
+ <div class="tile" id="actsTile"><div class="label">Activations</div><div class="value" id="acts">Unchanged</div><div class="detail" id="actsDetail"></div>
+  <div class="act"><button id="clearActivations">Clear edits</button></div></div>
+</div>
+
+<div id="start" class="start" hidden><h3>Let an AI agent work with this session</h3>
+ <div class="steps"><span class="n">1</span><span><button class="primary" id="copy2">Copy agent prompt</button></span>
+ <span class="n">2</span><span>Paste it into Claude Code, Codex, Cursor, or another agent on this machine.</span>
+ <span class="n">3</span><span>Its steps and edits show up here. Change its access or undo its edits with the tiles above.</span></div>
+ <details><summary>Show the prompt</summary><pre id="prompt"></pre></details></div>
+
+<div class="sect"><h2>Activity</h2><span class="detail" id="activityCount"></span>
+<span class="legend"><span class="k"><i style="background:var(--accent)"></i>edit</span><span class="k"><i style="background:var(--vscode-charts-blue,#3794ff)"></i>step</span><span class="k"><i style="background:var(--muted)"></i>setup</span>
+<label><input type="checkbox" id="changesOnly">Changes only</label></span></div>
+<div class="feed" id="activity"></div>
+
+<script nonce="${nonce}">
+const vscode=acquireVsCodeApi();let state=null;const $=id=>document.getElementById(id);
+function el(tag,attrs,...kids){const e=document.createElement(tag);for(const[k,v]of Object.entries(attrs||{}))if(k==='class')e.className=v;else if(k.startsWith('on'))e.addEventListener(k.slice(2),v);else e.setAttribute(k,v);for(const k of kids)if(k!=null)e.append(k instanceof Node?k:document.createTextNode(String(k)));return e}
+const clock=t=>new Date(t*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+const EDIT=new Set(['llmdbg/assign','setExpression','setVariable','llmdbg/patchVector','llmdbg/removeProjectedComponent','llmdbg/removeIcaComponent','llmdbg/restoreWeights','llmdbg/clearInterventions']);
+const MOVE=new Set(['next','stepIn','stepOut','continue','pause']);
+const SETUP=new Set(['attach','disconnect','setBreakpoints','llmdbg/setAgentAccess','llmdbg/disconnectClient']);
+const kind=r=>EDIT.has(r.command)?'edit':MOVE.has(r.command)?'move':SETUP.has(r.command)?'setup':'read';
+let changesOnly=false;try{changesOnly=!!(vscode.getState()||{}).changesOnly}catch(_){}
+const short=label=>String(label).replace(/ \\(pid \\d+\\)$/,'');
+const plural=(n,w)=>n+' '+w+(n===1?'':'s');
+function render(){
+  const live=!!(state&&!state.ended&&!state.error),shared=live&&!!state.sharing;
+  $('dot').className='dot'+(live?' live':'');
+  const where=$('where');where.replaceChildren();
+  if(!state)where.append('Waiting for a debug session…');
+  else if(state.error)where.append('Error: '+state.error);
+  else{where.append(el('b',{},state.model||'built-in demo'),el('span',{},state.ended?'  ·  session ended':state.position?'  ·  '+state.position:''))}
+  where.title=shared?('Shared on '+state.sharing.host+':'+state.sharing.port+' · session file '+state.sharing.file):'';
+  const prompt=live&&shared&&state.prompt;for(const id of['copy','copy2'])$(id).disabled=!prompt;$('guide').disabled=!(state&&state.prompt);$('prompt').textContent=prompt||'';
+  // Access
+  const mode=live?state.mode:null;
+  $('access').textContent=!live?'—':!shared?'Not shared':{full:'Full',readonly:'Read-only',off:'Off'}[mode];
+  $('accessTile').title=shared?'Only programs running as you can attach: they need the token in your private session file. Other accounts on this machine cannot.':'Sharing is disabled for this session ("shareSession": false).';
+  for(const b of document.querySelectorAll('[data-mode]')){b.setAttribute('aria-pressed',String(mode===b.dataset.mode));b.disabled=!shared}
+  // Agents
+  const clients=live?state.clients:[];$('agentCount').textContent=clients.length;
+  $('agentsTile').classList.toggle('flag',clients.length>0);
+  const agents=$('agents');agents.replaceChildren();agents.className=clients.length?'':'detail';
+  if(!clients.length)agents.append(live&&shared?(mode==='off'?'Agent access is off':'None connected'):'');
+  for(const label of clients)agents.append(el('span',{class:'chip',title:label},short(label),
+    el('button',{title:'Disconnect '+label,'aria-label':'Disconnect '+label,onclick:()=>vscode.postMessage({type:'disconnect',label})},'×')));
+  // Weights
+  const w=live?state.weightEdits:[];$('weights').textContent=w.length?plural(w.length,'parameter')+' edited':'Original';
+  $('weightsTile').classList.toggle('flag',w.length>0);$('resetWeights').disabled=!w.length;
+  $('weightsDetail').textContent=w.map(e=>e.parameter).join(', ');
+  $('weightsTile').title=w.length?w.map(e=>e.parameter+'\\n  '+e.formulas.join('\\n  ')).join('\\n')+'\\n\\nUndone automatically when the debug session ends.':'Weight edits last until the debug session ends.';
+  // Activations
+  const a=live?state.activationEdits:{patches:[],valueEdits:0,icaRemovals:0},total=a.patches.length+a.valueEdits+a.icaRemovals;
+  $('acts').textContent=total?plural(total,'edit'):'Unchanged';$('actsTile').classList.toggle('flag',total>0);$('clearActivations').disabled=!total;
+  const lines=a.patches.map(p=>'token '+p.token+' '+p.view+': '+p.label);
+  if(a.valueEdits)lines.push(plural(a.valueEdits,'single-value edit'));if(a.icaRemovals)lines.push(plural(a.icaRemovals,'ICA removal'));
+  $('actsDetail').textContent=lines.join(' · ');$('actsTile').title=lines.join('\\n');
+  // First use: nothing has happened yet
+  const rows=state&&state.activity?state.activity.slice().reverse():[];
+  const agentEver=rows.some(r=>r.actor!=='you');
+  $('start').hidden=!(shared&&!agentEver&&mode!=='off');
+  $('changesOnly').checked=changesOnly;
+  const shown=changesOnly?rows.filter(r=>kind(r)!=='read'):rows;
+  $('activityCount').textContent=rows.length?(shown.length===rows.length?plural(rows.length,'event'):shown.length+' of '+rows.length):'';
+  const feed=$('activity');feed.replaceChildren();
+  if(!shown.length){feed.append(el('div',{class:'empty'},rows.length?'No changes yet.':live?'No activity yet.':'—'));return}
+  for(const r of shown)feed.append(el('div',{class:'ev '+kind(r)+(r.ok?'':' bad'),title:r.actor+' · '+r.command+' ('+kind(r)+')'},
+    el('span',{class:'t'},clock(r.time)),el('span',{class:'who'},short(r.actor)),
+    el('span',{class:'what'},r.summary,r.ok?null:el('span',{class:'why'},'  ✗ '+(r.error||'failed')))));
+}
+for(const b of document.querySelectorAll('[data-mode]'))b.addEventListener('click',()=>vscode.postMessage({type:'mode',mode:b.dataset.mode}));
+$('resetWeights').addEventListener('click',()=>vscode.postMessage({type:'resetWeights'}));
+$('clearActivations').addEventListener('click',()=>vscode.postMessage({type:'clearActivations'}));
+for(const id of['copy','copy2'])$(id).addEventListener('click',()=>vscode.postMessage({type:'copy'}));
+$('guide').addEventListener('click',()=>vscode.postMessage({type:'guide'}));
+$('changesOnly').addEventListener('change',e=>{changesOnly=e.target.checked;try{vscode.setState({changesOnly})}catch(_){}render()});
+addEventListener('message',event=>{if(event.data.type==='state'){state=event.data.state;render()}});
+render();vscode.postMessage({type:'ready'});
+</script></body></html>`;
+}
+
+function agentPrompt(state) {
+  // Stable instructions only: no local paths, versions, or usernames. The session
+  // file always holds the current client command and guide location, so a prompt
+  // copied today still works after an extension update or runtime rebuild.
+  if (!state || !state.sharing) return undefined;
+  return [
+    `An llmdbg debug session is running in my VS Code${state.model ? ` (model ${state.model})` : ""}. You can inspect and control it.`,
+    ``,
+    `1. Open the newest JSON file in ~/.cache/llmdbg/sessions/ (or $XDG_CACHE_HOME/llmdbg/sessions/ if that is set).`,
+    `   Never print or share its "token" field.`,
+    `2. Read the agent guide at the path in its "docs" field.`,
+    `3. Run llmdbg commands using its "client" fields: with the environment variables from client.env set,`,
+    `   run client.command followed by: --client-name <your-name> --json -c where`,
+    `   Add more -c commands as needed. Use your own name for --client-name.`,
+    `4. Tell me what you change. I can see and undo your actions in the llmdbg Control panel.`,
+  ].join("\n");
+}
+
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, character => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
@@ -668,7 +826,7 @@ document.querySelector('.tokens').addEventListener('keydown',event=>{if(event.ke
 `;
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: data:; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';"><style>
 *{box-sizing:border-box}body{margin:0;padding:18px;font:13px/1.45 var(--vscode-font-family);color:var(--vscode-foreground);background:var(--vscode-editor-background)}header{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:12px;padding:0 0 12px;background:var(--vscode-editor-background)}h1{margin:0;font-size:17px}input{margin-left:auto;width:min(360px,45vw);height:28px;padding:4px 8px;color:var(--vscode-input-foreground);background:var(--vscode-input-background);border:1px solid var(--vscode-input-border,transparent);outline:none}input:focus{border-color:var(--vscode-focusBorder)}h2{margin:18px 0 8px;font-size:14px}pre{margin:0;padding:12px;white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid var(--vscode-panel-border);background:var(--vscode-textCodeBlock-background);font-family:var(--vscode-editor-font-family)}.summary{color:var(--vscode-descriptionForeground);white-space:nowrap}.images{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,360px));gap:12px}.image-card{margin:0;overflow:hidden;border:1px solid var(--vscode-panel-border);border-radius:6px;background:var(--vscode-sideBar-background)}.image-preview{display:grid;place-items:center;width:100%;height:190px;padding:0;border:0;background:repeating-conic-gradient(color-mix(in srgb,var(--vscode-editor-background) 80%,transparent) 0 25%,transparent 0 50%) 50%/18px 18px;cursor:zoom-in}.image-preview img{display:block;max-width:100%;max-height:190px;object-fit:contain}.image-card.expanded{grid-column:1/-1;max-width:min(900px,100%)}.image-card.expanded .image-preview{height:min(65vh,680px);cursor:zoom-out}.image-card.expanded img{max-height:min(65vh,680px)}figcaption{display:grid;gap:5px;padding:9px 11px;border-top:1px solid var(--vscode-panel-border)}figcaption>div{display:flex;align-items:center;justify-content:space-between;gap:10px}.image-span{padding:2px 6px;border-radius:10px;color:var(--vscode-badge-foreground);background:var(--vscode-badge-background);font-size:11px;white-space:nowrap}.image-source{display:block;padding:0;overflow:hidden;color:var(--vscode-descriptionForeground);text-overflow:ellipsis;white-space:nowrap}.tokens{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:7px}.token{display:grid;grid-template-columns:auto minmax(0,1fr);min-height:38px;border:1px solid var(--vscode-panel-border);background:var(--vscode-sideBar-background)}.token.visual{border-color:color-mix(in srgb,var(--vscode-charts-purple,#b180d7) 65%,var(--vscode-panel-border))}.token.visual code{color:var(--vscode-charts-purple,#c69ae8)}.token.visual-group{grid-column:span 2;min-width:260px}.token.visual-group .index.range{min-width:76px}.token.visual-group .repeat{color:var(--vscode-descriptionForeground);font-family:var(--vscode-font-family);font-size:11px}.token[hidden]{display:none}.token.current{border:2px solid var(--vscode-focusBorder);background:var(--vscode-list-activeSelectionBackground)}.index{display:grid;place-items:center;min-width:38px;padding:5px;color:var(--vscode-descriptionForeground);background:var(--vscode-badge-background);font-variant-numeric:tabular-nums}.token.current .index{color:var(--vscode-list-activeSelectionForeground)}code{align-self:center;padding:6px 8px;white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--vscode-editor-font-family);color:var(--vscode-foreground)}
-</style>${patchStyles}</head><body><header><h1>Prompt tokens</h1><span class="summary">${(data.tokens || []).length} tokens · current ${Number.isInteger(current) ? current : "—"}</span><input id="filter" type="search" placeholder="Filter by token index or text" aria-label="Filter tokens"></header>${visualInputs}<h2>Rendered prompt</h2><pre>${escapeHtml(data.prompt || "")}</pre><h2>Tokenizer split</h2><main class="tokens">${tokens}</main><script nonce="${nonce}">const filter=document.getElementById('filter'),items=[...document.querySelectorAll('.token')];${patchScript}for(const button of document.querySelectorAll('.image-preview'))button.onclick=()=>button.closest('.image-card').classList.toggle('expanded');document.querySelector('.token.current')?.scrollIntoView({block:'center'});</script></body></html>`;
+</style>${patchStyles}</head><body><header><h1>Prompt tokens</h1><span class="summary">${(data.tokens || []).length} tokens · ${data.ended ? "session ended" : `current ${Number.isInteger(current) ? current : "—"}`}</span><input id="filter" type="search" placeholder="Filter by token index or text" aria-label="Filter tokens"></header>${visualInputs}<h2>Rendered prompt</h2><pre>${escapeHtml(data.prompt || "")}</pre><h2>Tokenizer split</h2><main class="tokens">${tokens}</main><script nonce="${nonce}">const filter=document.getElementById('filter'),items=[...document.querySelectorAll('.token')];${patchScript}for(const button of document.querySelectorAll('.image-preview'))button.onclick=()=>button.closest('.image-card').classList.toggle('expanded');document.querySelector('.token.current')?.scrollIntoView({block:'center'});</script></body></html>`;
 }
 
 async function promptImagePreviews(images) {
@@ -984,6 +1142,10 @@ function activate(context) {
   context.subscriptions.push(runtimeOutput);
   const runtimePromises = new Map();
   let hostProcess;
+  // Secret for the local model host. Without it, any account on a shared machine
+  // could connect to the host's loopback port and run code as this user. It lives
+  // only in memory and in the host's environment (never argv, which ps shows to every user).
+  const hostToken = crypto.randomBytes(32).toString("base64url");
   let hostPromise;
   let hostSource;
   let hostPython;
@@ -1009,7 +1171,15 @@ function activate(context) {
   const neuronLensItemCache = new Map();
   let residentModel;
 
+  // Each tool tab shows the same icon as its debug-toolbar button.
+  const tabIcon = (name) => ({
+    light: vscode.Uri.joinPath(context.extensionUri, "assets", `${name}-light.svg`),
+    dark: vscode.Uri.joinPath(context.extensionUri, "assets", `${name}-dark.svg`),
+  });
+  let controlPanel;
+  let controlState;
   const toolPanelContextKeys = {
+    control: "llmdbg.controlPanelOpen",
     vector: "llmdbg.vectorPanelOpen",
     decoder: "llmdbg.decoderPanelOpen",
     promptTokens: "llmdbg.promptTokensPanelOpen",
@@ -1034,6 +1204,9 @@ function activate(context) {
     } else if (kind === "neuronLens") {
       panel = neuronLensPanel;
       neuronLensPanel = undefined;
+    } else if (kind === "control") {
+      panel = controlPanel;
+      controlPanel = undefined;
     }
     setToolPanelOpen(kind, false);
     panel?.dispose();
@@ -1226,6 +1399,7 @@ function activate(context) {
       { enableScripts: true, retainContextWhenHidden: true }
     );
     setToolPanelOpen("decoder", true);
+    panel.iconPath = tabIcon("decode");
     panel.webview.html = expressionDecoderHtml(panel.webview, vscode.workspace.getConfiguration("llmdbg").get("lensTheme", "dark"));
     panel.webview.onDidReceiveMessage(async message => {
       if (message.type !== "decode") return;
@@ -1262,6 +1436,7 @@ function activate(context) {
         { enableScripts: true, retainContextWhenHidden: true }
       );
       setToolPanelOpen("vector", true);
+      vectorPanel.iconPath = tabIcon("plot");
       vectorPanel.webview.html = vectorPlotHtml(vectorPanel.webview);
       vectorPanel.webview.onDidReceiveMessage(async (message) => {
         if (message.type === "ready") {
@@ -1313,17 +1488,97 @@ function activate(context) {
     await sendPlotSnippets();
   }
 
+  async function renderPromptTokens(data) {
+    if (!promptTokensPanel) return;
+    data.images = await promptImagePreviews(data.images);
+    if (promptTokensPanel) promptTokensPanel.webview.html = promptTokensHtml(promptTokensPanel.webview, data);
+  }
+
   async function refreshPromptTokens() {
     if (!promptTokensPanel) return;
     const active = vscode.debug.activeDebugSession;
     if (!active || active.type !== "llmdbg") return;
     try {
-      const data = await active.customRequest("llmdbg/promptTokens", {});
-      data.images = await promptImagePreviews(data.images);
-      promptTokensPanel.webview.html = promptTokensHtml(promptTokensPanel.webview, data);
+      await renderPromptTokens(await active.customRequest("llmdbg/promptTokens", {}));
     } catch (error) {
       vscode.window.showErrorMessage(`llmdbg: ${error.message}`);
     }
+  }
+
+  function postControlState() {
+    if (!controlPanel) return;
+    const state = controlState ? { ...controlState, prompt: agentPrompt(controlState) } : null;
+    void controlPanel.webview.postMessage({ type: "state", state });
+  }
+
+  async function refreshControlState() {
+    const session = vscode.debug.activeDebugSession;
+    if (!session || session.type !== "llmdbg") return postControlState();
+    try {
+      controlState = await session.customRequest("llmdbg/controlState", {});
+    } catch (_error) {
+      // The adapter answers once the current step finishes; its controlState event follows.
+    }
+    postControlState();
+  }
+
+  async function controlRequest(command, args, describe) {
+    const session = vscode.debug.activeDebugSession;
+    if (!session || session.type !== "llmdbg") {
+      vscode.window.showWarningMessage("llmdbg: start a debug session first.");
+      return;
+    }
+    try {
+      const result = await session.customRequest(command, args);
+      if (describe) vscode.window.setStatusBarMessage(`llmdbg: ${describe(result)}`, 4000);
+    } catch (error) {
+      vscode.window.showErrorMessage(`llmdbg: ${error.message}`);
+    }
+    await refreshControlState();
+  }
+
+  async function onControlMessage(message) {
+    if (message.type === "ready") return refreshControlState();
+    if (message.type === "mode") return controlRequest("llmdbg/setAgentAccess", { mode: message.mode },
+      (result) => `agent access ${result.mode}` + (result.disconnected?.length ? `; disconnected ${result.disconnected.join(", ")}` : ""));
+    if (message.type === "disconnect") return controlRequest("llmdbg/disconnectClient", { label: message.label },
+      () => `disconnected ${message.label}`);
+    if (message.type === "resetWeights") return controlRequest("llmdbg/restoreWeights", {},
+      (result) => result.restored.length ? `restored ${result.restored.length} parameter(s)` : "weights already original");
+    if (message.type === "clearActivations") return controlRequest("llmdbg/clearInterventions", {},
+      (result) => `cleared ${result.cleared} activation edit(s)`);
+    const prompt = agentPrompt(controlState);
+    if (message.type === "copy" && prompt) {
+      await vscode.env.clipboard.writeText(prompt);
+      vscode.window.setStatusBarMessage("llmdbg: agent prompt copied", 3000);
+    }
+    if (message.type === "guide" && controlState?.client?.docs) {
+      await vscode.commands.executeCommand("markdown.showPreview", vscode.Uri.file(controlState.client.docs));
+    }
+  }
+
+  function showControlPanel() {
+    if (!controlPanel) {
+      const column = neuronLensPanel?.viewColumn ?? vscode.ViewColumn.Beside;
+      controlPanel = vscode.window.createWebviewPanel(
+        "llmdbg.control", "llmdbg Control",
+        { viewColumn: column, preserveFocus: true },
+        { enableScripts: true, retainContextWhenHidden: true }
+      );
+      setToolPanelOpen("control", true);
+      const panel = controlPanel;
+      panel.iconPath = tabIcon("control");
+      panel.webview.html = controlPanelHtml(panel.webview);
+      panel.webview.onDidReceiveMessage((message) => void onControlMessage(message), null, context.subscriptions);
+      panel.onDidDispose(() => {
+        if (controlPanel !== panel) return;
+        controlPanel = undefined;
+        setToolPanelOpen("control", false);
+      }, null, context.subscriptions);
+    } else {
+      controlPanel.reveal(controlPanel.viewColumn, true);
+    }
+    void refreshControlState();
   }
 
   async function showPromptTokens() {
@@ -1342,6 +1597,7 @@ function activate(context) {
         { enableScripts: true, retainContextWhenHidden: true }
       );
       setToolPanelOpen("promptTokens", true);
+      promptTokensPanel.iconPath = tabIcon("prompt");
       const panel = promptTokensPanel;
       panel.onDidDispose(() => {
         if (promptTokensPanel !== panel) return;
@@ -1530,6 +1786,7 @@ function activate(context) {
           { viewColumn: ownToolPanelColumn(undefined, [neuronLensPanel, vectorPanel, promptTokensPanel, attentionContributionsPanel, attentionImagesPanel]), preserveFocus: false },
           { enableScripts: true, retainContextWhenHidden: true }
         );
+        panel.iconPath = tabIcon("lens");  // opened from the Lens panel
         if (imagesOnly) attentionImagesPanel = panel;
         else attentionContributionsPanel = panel;
         panel.onDidDispose(() => {
@@ -1570,6 +1827,7 @@ function activate(context) {
         { enableScripts: true, retainContextWhenHidden: true }
       );
       setToolPanelOpen("neuronLens", true);
+      neuronLensPanel.iconPath = tabIcon("lens");
       neuronLensPanel.webview.html = neuronLensHtml(neuronLensPanel.webview);
       neuronLensPanel.webview.onDidReceiveMessage(
         async message => {
@@ -1888,6 +2146,23 @@ function activate(context) {
     void vscode.window.showInformationMessage("llmdbg rebuilt and verified its private Python runtime.");
   }
 
+  // A shared-session client replaced the breakpoints of one source file. Mirror
+  // them into VS Code so they are visible and editable; VS Code then sends the
+  // same set back with setBreakpoints, which the adapter applies idempotently.
+  function syncBreakpointsFromAdapter(body) {
+    const sourcePath = body && body.source && body.source.path;
+    if (!sourcePath) return;
+    const uri = vscode.Uri.file(sourcePath);
+    const existing = vscode.debug.breakpoints.filter((breakpoint) =>
+      breakpoint instanceof vscode.SourceBreakpoint && breakpoint.location.uri.fsPath === uri.fsPath);
+    const wanted = (body.breakpoints || []).map((item) => new vscode.SourceBreakpoint(
+      new vscode.Location(uri, new vscode.Position(Math.max(0, Number(item.line) - 1), 0)),
+      true,
+      item.condition || undefined));
+    if (existing.length) vscode.debug.removeBreakpoints(existing);
+    if (wanted.length) vscode.debug.addBreakpoints(wanted);
+  }
+
   function adapterSource(session) {
     const configuredSource = session.configuration.adapterSource
       || vscode.workspace.getConfiguration("llmdbg").get("developmentSourcePath", "");
@@ -1930,7 +2205,8 @@ function activate(context) {
           PYTHONNOUSERSITE: "1",
           PYTHONPATH: pythonPath,
           LLMDBG_RUNTIME_PROFILE: profile,
-          LLMDBG_RESIDUAL_TO_VOCABULARY_LENSES: lensConfiguration
+          LLMDBG_RESIDUAL_TO_VOCABULARY_LENSES: lensConfiguration,
+          LLMDBG_HOST_TOKEN: hostToken
         },
         stdio: ["ignore", "pipe", "pipe"]
       }
@@ -2026,12 +2302,19 @@ function activate(context) {
           config.config = activeConfig;
         }
         return config;
+      },
+      // Runs after variable substitution, just before the launch request is sent.
+      resolveDebugConfigurationWithSubstitutedVariables(_folder, config) {
+        if (config.type === "llmdbg") config.hostToken = hostToken;
+        return config;
       }
     }),
     vscode.commands.registerCommand("llmdbg.plotCurrentVector", () => showVectorPlot()),
     vscode.commands.registerCommand("llmdbg.closeVectorPlot", () => closeToolPanel("vector")),
     vscode.commands.registerCommand("llmdbg.decodeExpression", () => showExpressionDecoder()),
     vscode.commands.registerCommand("llmdbg.closeExpressionDecoder", () => closeToolPanel("decoder")),
+    vscode.commands.registerCommand("llmdbg.showControlPanel", () => showControlPanel()),
+    vscode.commands.registerCommand("llmdbg.closeControlPanel", () => closeToolPanel("control")),
     vscode.commands.registerCommand("llmdbg.showPromptTokens", () => showPromptTokens()),
     vscode.commands.registerCommand("llmdbg.closePromptTokens", () => closeToolPanel("promptTokens")),
     vscode.commands.registerCommand("llmdbg.initializeProject", initializeProject),
@@ -2068,6 +2351,14 @@ function activate(context) {
         neuronLensItemCache.clear();
         refreshNeuronLens();
         refreshPromptTokens();
+      } else if (event.event === "llmdbg/breakpointsChanged") {
+        syncBreakpointsFromAdapter(event.body);
+      } else if (event.event === "llmdbg/promptTokens") {
+        // Final sequence at the end of a run (it may include tokens generated after the last stop).
+        void renderPromptTokens(event.body || {});
+      } else if (event.event === "llmdbg/controlState") {
+        controlState = event.body;
+        postControlState();
       }
     }),
     vscode.debug.onDidStartDebugSession((session) => {
@@ -2077,12 +2368,22 @@ function activate(context) {
       neuronLensRevision += 1;
       neuronLensItemCache.clear();
       if (neuronLensPanel) neuronLensPanel.webview.postMessage({ type: "reset" });
-      // The adapter has loaded the model, but no token trace exists yet. The
-      // first stopped/vectorChanged event refreshes the panel with valid data.
-      void showNeuronLens(session, false);
+      // Lens opens only from its toolbar button; an already-open Lens panel is
+      // refreshed by the first stopped/vectorChanged event. Control opens by default.
+      controlState = undefined;
+      if (controlPanel) {
+        postControlState();
+      } else if (vscode.workspace.getConfiguration("llmdbg").get("openControlPanelOnStart", true)) {
+        showControlPanel();
+      }
     }),
     vscode.debug.onDidTerminateDebugSession((session) => {
       if (session.type !== "llmdbg") return;
+      if (controlState) {
+        controlState = { ...controlState, ended: true, clients: [], weightEdits: [],
+                         activationEdits: { patches: [], valueEdits: 0, icaRemovals: 0 } };
+        postControlState();
+      }
       if (decoderPanel) decoderPanel.webview.postMessage({ type: "stale" });
       neuronLensExecutionReady = false;
       if (neuronLensPanel) neuronLensPanel.webview.postMessage({ type: "busy", busy: false });

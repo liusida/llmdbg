@@ -207,6 +207,14 @@ class ModelExecution:
     semantic_token_masks: dict[tuple[int, str], Any] = field(default_factory=dict)
     capture_delta_core: bool = False
     auto_chat: dict[str, Any] | None = None
+    # Parameter name -> formulas applied this session. Shared with replays: the
+    # resident model itself is edited, so every replay sees the same weights.
+    weight_edits: dict[str, list[str]] = field(default_factory=dict)
+
+    @property
+    def modified(self) -> bool:
+        """True when any activation intervention or weight edit is active."""
+        return bool(self.interventions or self.ica_interventions or self.vector_patches or self.weight_edits)
 
     def delta_memory_contributions(self, layer: int, head: int, position: int) -> dict[str, Any]:
         """On-demand replay with an independent cache; retain only one head's history."""
@@ -232,7 +240,7 @@ class ModelExecution:
                 else: digest.update(repr((type(value).__name__, value)).encode())
             for value in (self.input_ids, self.inputs_embeds, self.position_ids, self.visual_pos_masks,
                           self.deepstack_visual_embeds, self.per_layer_inputs, self.interventions,
-                          self.ica_interventions, self.vector_patches, self.tokens,
+                          self.ica_interventions, self.vector_patches, self.weight_edits, self.tokens,
                           getattr(self.runtime.model.config, '_commit_hash', None)):
                 fingerprint(value)
             key = (layer, head, position, digest.hexdigest())
@@ -248,6 +256,7 @@ class ModelExecution:
             self.progress(f'Replaying tokens 0..{position} for DeltaNet layer {layer}, head {head}; debugger cache is unchanged.\n')
             if self.interventions or self.ica_interventions or self.vector_patches:
                 # Apply each historical intervention at its recorded token.
+                # (Weight edits need no per-token replay: the model itself is edited.)
                 for source in range(position + 1):
                     trace = replay.trace_token(source)
                     state = next(s for s in trace.states if s.layer.name == name)
@@ -1323,6 +1332,14 @@ def _resolve_device_and_dtype(device: str, dtype: str) -> tuple[str, str]:
             "Use dtype='float16' or dtype='auto'."
         )
     return device, dtype
+
+
+def discard_resident_runtime() -> None:
+    """Forget the resident model so the next session reloads it from the checkpoint."""
+    global _runtime, _runtime_key
+    with _runtime_lock:
+        _runtime = None
+        _runtime_key = None
 
 
 def _get_model_runtime(

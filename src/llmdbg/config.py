@@ -267,6 +267,7 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
     enable_thinking = False
     continue_final_message = False
     max_new_tokens = 0
+    run_max_new_tokens: int | None = None  # debug(..., max_new_tokens=N); wins over chat(...)
     token: int | None = None
     stop_on_entry = False
     functions: dict[str, dict[str, int]] = {}
@@ -355,6 +356,10 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
                                 token = None
                             else:
                                 token = int(_literal(keyword.value, "token"))
+                        elif keyword.arg == "max_new_tokens":
+                            run_max_new_tokens = int(_literal(keyword.value, "max_new_tokens"))
+                            if run_max_new_tokens < 0:
+                                raise ValueError("max_new_tokens must be non-negative")
         if isinstance(node, ast.Call):
             if isinstance(node.func, ast.Attribute):
                 if node.func.attr == "tokenize" and node.args:
@@ -424,6 +429,8 @@ def _load_python_debug_config(path: Path) -> dict[str, Any]:
     keywords = {keyword.arg: _literal(keyword.value, keyword.arg or "argument") for keyword in model_call.keywords}
     if not isinstance(model, str) or not model:
         raise ValueError("gpt2 model id must be a non-empty string")
+    if run_max_new_tokens is not None:
+        max_new_tokens = run_max_new_tokens
     if prompt is None and messages is None:
         prompt = globals_.get("prompt")
     if messages is None and (not isinstance(prompt, str) or not prompt):

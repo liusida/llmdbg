@@ -202,8 +202,11 @@ class LLMDebugAdapter:
         ("residual_add", "output", "Add the attention update to the residual."),
     )
 
-    def __init__(self, stream: ProtocolStream) -> None:
+    def __init__(self, stream: ProtocolStream, *, host_token: str | None = None) -> None:
         self.stream = stream
+        # A TCP host requires its secret in launch.hostToken; stdio sessions need none.
+        self.host_token = host_token
+        self.host_authenticated = host_token is None
         self.sequence = 1
         self.trace: tuple[LayerState, ...] = ()
         self.execution: ModelExecution | None = None
@@ -417,8 +420,9 @@ class LLMDebugAdapter:
         if message is not None:
             response["message"] = message
         self.sequence += 1
-        self.stream.write(response)
-        self._last_response_request = request["seq"]
+        (getattr(self, "_reply_stream", None) or self.stream).write(response)
+        self._last_response_request = id(request)
+        self._last_response_success = (success, message)
 
     def send_event(self, event: str, body: dict[str, Any] | None = None) -> None:
         message: dict[str, Any] = {
@@ -430,6 +434,9 @@ class LLMDebugAdapter:
             message["body"] = body
         self.sequence += 1
         self.stream.write(message)
+        shared = getattr(self, "shared_session", None)
+        if shared is not None:
+            shared.broadcast(message)
 
     def _console(self, message: str, *, warning: bool = False) -> None:
         """Write one actionable progress line to the Debug Console."""
@@ -449,6 +456,7 @@ class LLMDebugAdapter:
                 "reason": reason,
                 "description": (
                     f"Stopped at token {self.token_index}, {self.state.layer.name}"
+                    + (f" (by {self._reply_label})" if getattr(self, "_reply_stream", None) is not None else "")
                 ),
                 "threadId": self.THREAD_ID,
                 "allThreadsStopped": True,
@@ -458,8 +466,23 @@ class LLMDebugAdapter:
             "llmdbg/vectorChanged",
             {"tokenPosition": self.token_index, "layer": self.state.layer.name},
         )
+        self._announce_control()
+
+    def _prompt_tokens_body(self) -> dict[str, Any]:
+        return {
+            "prompt": self.prompt,
+            "tokens": list(self.tokens),
+            "currentToken": self.token_index,
+            "images": self._prompt_images(),
+        }
 
     def terminate(self) -> None:
+        # A run to the end can generate tokens after the last stop; editors refresh
+        # on stops, so hand them the final sequence before the session goes away.
+        try:
+            self.send_event("llmdbg/promptTokens", {**self._prompt_tokens_body(), "ended": True})
+        except Exception:  # pragma: no cover - never block termination
+            pass
         self.send_event("output", {"category": "stdout", "output": "llmdbg: model trace complete\n"})
         self.send_event("terminated")
 
@@ -750,15 +773,7 @@ class LLMDebugAdapter:
                 raise DebugActionError(str(error)) from error
             self.send_response(request, result)
         elif command == "llmdbg/promptTokens":
-            self.send_response(
-                request,
-                {
-                    "prompt": self.prompt,
-                    "tokens": list(self.tokens),
-                    "currentToken": self.token_index,
-                    "images": self._prompt_images(),
-                },
-            )
+            self.send_response(request, self._prompt_tokens_body())
         elif command == "llmdbg/plot":
             self.send_response(
                 request,
@@ -847,6 +862,75 @@ class LLMDebugAdapter:
                     "norm": norm,
                     "tokenPosition": token_position,
                 },
+            )
+        elif command == "llmdbg/controlState":
+            self.send_response(request, self._control_state(activity_limit=500))
+        elif command == "llmdbg/setAgentAccess":
+            result = self._set_agent_access(str(arguments.get("mode", "")))
+            self._record("you", command, f"agent access → {result['mode']}")
+            self.send_response(request, result)
+            self._announce_control()
+        elif command == "llmdbg/disconnectClient":
+            label = str(arguments.get("label", ""))
+            found = self._disconnect_client(label)
+            if found:
+                self._record("you", command, f"disconnected {label}")
+            self.send_response(request, {"disconnected": found})
+            self._announce_control()
+        elif command == "llmdbg/clearInterventions":
+            self.send_event("llmdbg/computationStarted", {"command": command})
+            cleared = self._clear_activation_edits()
+            self.send_response(request, {"cleared": cleared})
+            if cleared:
+                self.send_event("invalidated", {"areas": ["variables", "watch"]})
+                self.send_event("llmdbg/vectorChanged",
+                                {"tokenPosition": self.token_index, "layer": self.state.layer.name})
+            if getattr(self, "_reply_stream", None) is None:
+                self._record("you", command, f"cleared {cleared} activation edit(s)")
+                self._announce_control()
+        elif command == "llmdbg/listParameters":
+            needle = str(arguments.get("filter", "")).lower()
+            limit = max(1, min(int(arguments.get("limit", 200)), 2000))
+            matches = [(name, value) for name, value in self._parameters().items() if needle in name.lower()]
+            self.send_response(request, {"total": len(matches), "parameters": [
+                {"name": name, "shape": list(value.shape), "dtype": str(value.dtype).replace("torch.", ""),
+                 "edited": name in self.execution.weight_edits}
+                for name, value in matches[:limit]]})
+        elif command == "llmdbg/listWeightEdits":
+            edits = self.execution.weight_edits if self.execution is not None else {}
+            self.send_response(request, {"edits": [{"parameter": name, "formulas": list(formulas)}
+                                                   for name, formulas in edits.items()]})
+        elif command == "llmdbg/restoreWeights":
+            self.send_event("llmdbg/computationStarted", {"command": command})
+            restored = self._restore_weights(arguments.get("parameter") or None)
+            self.send_response(request, {"restored": restored})
+            if getattr(self, "_reply_stream", None) is None:
+                self._record("you", command, f"reset weights: {', '.join(restored) or 'nothing to reset'}")
+                self._announce_control()
+            if restored:
+                self.send_event("invalidated", {"areas": ["variables", "watch"]})
+                self.send_event("llmdbg/vectorChanged",
+                                {"tokenPosition": self.token_index, "layer": self.state.layer.name})
+        elif command == "llmdbg/defineVector":
+            self.send_response(request, self._define_vector(
+                str(arguments.get("name", "")), arguments.get("values"), arguments.get("expression"),
+            ))
+        elif command == "llmdbg/listVectors":
+            self.send_response(request, {"vectors": [
+                {"name": name, "shape": list(vector.shape), "norm": float(vector.norm())}
+                for name, vector in getattr(self, "user_vectors", {}).items()
+            ]})
+        elif command == "llmdbg/assign":
+            target = str(arguments.get("target", "")).strip()
+            expression = str(arguments.get("expression", "")).strip()
+            self.send_event("llmdbg/computationStarted", {"command": command})
+            self._console(f"Replaying token {self.token_index} with {target} = {expression}.")
+            result = self._assign(target, expression)
+            self.send_response(request, result)
+            self.send_event("invalidated", {"areas": ["variables", "watch"]})
+            self.send_event(
+                "llmdbg/vectorChanged",
+                {"tokenPosition": self.token_index, "layer": self.state.layer.name},
             )
         elif command == "llmdbg/patchVector":
             self.send_event("llmdbg/computationStarted", {"command": command})
@@ -1492,7 +1576,7 @@ class LLMDebugAdapter:
             previous = dict(execution=execution, start=start, key=key,
                             persistent=persistent, metadata=metadata)
             self._live_generation_cache = previous
-        if execution.interventions or execution.ica_interventions or execution.vector_patches:
+        if execution.interventions or execution.ica_interventions or execution.vector_patches or getattr(execution, 'weight_edits', None):
             previous['persistent'] = False  # Remains disabled even if later removed.
         return previous if previous['persistent'] else None
 
@@ -2379,6 +2463,259 @@ class LLMDebugAdapter:
             "log": log_paths,
         }
 
+    RESIDUAL_NAMES = frozenset({"x", "input", "residual", "residual_stream"})
+
+    def _define_vector(self, name: str, values: Any, expression: Any) -> dict[str, Any]:
+        """Store a named fp32 vector for later tensor expressions (from values or an expression now)."""
+        import torch
+        if not name.isidentifier() or keyword.iskeyword(name):
+            raise DebugActionError("Vector names must be Python identifiers.")
+        if name in self.RESIDUAL_NAMES or name == "W_o":
+            raise DebugActionError(f"{name!r} is a built-in name; choose another.")
+        if (values is None) == (expression is None):
+            raise DebugActionError("Give exactly one of values or expression.")
+        if expression is not None:
+            tensor = self._inspect_expression(str(expression))
+            if tensor is None or not torch.is_tensor(tensor):
+                raise DebugActionError(f"Unknown tensor expression: {expression}")
+            vector = tensor.detach().float().cpu().clone()
+        else:
+            try:
+                vector = torch.tensor(values, dtype=torch.float32)
+            except (TypeError, ValueError) as error:
+                raise DebugActionError("values must be a (nested) list of numbers") from error
+        if not bool(torch.isfinite(vector).all()):
+            raise DebugActionError("Vector contains NaN or infinity.")
+        if not hasattr(self, "user_vectors"):
+            self.user_vectors = {}
+        self.user_vectors[name] = vector
+        return {"name": name, "shape": list(vector.shape), "norm": float(vector.norm())}
+
+    def _literal_index(self, node: ast.AST) -> Any:
+        """Integer/slice/tuple subscripts only: the part of a target that selects values."""
+        if isinstance(node, ast.Tuple):
+            return tuple(self._literal_index(part) for part in node.elts)
+        if isinstance(node, ast.Slice):
+            return slice(*(None if part is None else self._literal_index(part)
+                           for part in (node.lower, node.upper, node.step)))
+        try:
+            value = ast.literal_eval(node)
+        except ValueError:
+            value = None
+        if type(value) is not int:
+            raise DebugActionError("Assignment targets use integer indices and slices only.")
+        return value
+
+    # ------------------------------------------------------------------ weights
+    def _parameters(self) -> dict[str, Any]:
+        if self.execution is None:
+            raise DebugActionError("Weights require a loaded model.")
+        return dict(self.execution.runtime.model.named_parameters())
+
+    def _parameter_node(self, node: ast.AST) -> Any:
+        """The live parameter for an AST node of the form weight["name"], else None."""
+        if not (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name)
+                and node.value.id == "weight"):
+            return None
+        if not (isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str)):
+            raise DebugActionError('Name a parameter as weight["model.layers.5.mlp.down_proj.weight"].')
+        parameter = self._parameters().get(node.slice.value)
+        if parameter is None:
+            raise DebugActionError(f"Unknown parameter {node.slice.value!r}; list names with params FILTER.")
+        return parameter
+
+    def _attention_output_parameter(self) -> tuple[str, Any]:
+        """(name, live view) of the current layer's W_o in the same orientation as the W_o expression."""
+        layer = self._transformer_layer_index(self.outer_state.layer.name)
+        runtime = self.execution.runtime
+        if layer is None or not 0 <= layer < len(runtime.layers):
+            raise DebugActionError("W_o is available inside a transformer layer.")
+        block = runtime.layers[layer]
+        if runtime.architecture == "gpt2":
+            parameter, view = block.attn.c_proj.weight, block.attn.c_proj.weight
+        else:
+            mixer = block.self_attn if runtime.layer_kind(layer) == "full_attention" else block.linear_attn
+            projection = mixer.o_proj if hasattr(mixer, "o_proj") else mixer.out_proj
+            parameter, view = projection.weight, projection.weight.T
+        name = next(name for name, value in self._parameters().items() if value is parameter)
+        return name, view
+
+    def _weight_target(self, node: ast.AST) -> tuple[str, Any, Any] | None:
+        """(parameter name, live tensor view, index) for weight/W_o targets, else None."""
+        index = None
+        base = node
+        if isinstance(node, ast.Subscript) and not self._is_parameter_name(node):
+            base, index = node.value, self._literal_index(node.slice)
+        if isinstance(base, ast.Name) and base.id == "W_o":
+            name, view = self._attention_output_parameter()
+            return name, view, index
+        parameter = self._parameter_node(base)
+        if parameter is None:
+            return None
+        return base.slice.value, parameter, index
+
+    @staticmethod
+    def _is_parameter_name(node: ast.AST) -> bool:
+        return (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name)
+                and node.value.id == "weight")
+
+    def _assign_weight(self, target: str, expression: str, name: str, view: Any, index: Any) -> dict[str, Any]:
+        """Edit the resident model's weights for this session and recompute from token 0."""
+        import torch
+        from llmdbg.model_runtime import _runtime_lock
+
+        value = self._inspect_expression(expression)
+        if value is None:
+            raise DebugActionError(f"Unknown tensor expression: {expression}")
+        selected = view if index is None else view[index]
+        if not torch.is_tensor(selected):
+            raise DebugActionError(f"{target} does not select a tensor region.")
+        right = value.detach().float().to(selected.device) if torch.is_tensor(value) else float(value)
+        try:
+            requested = torch.broadcast_to(right, selected.shape).clone() if torch.is_tensor(right) else torch.full(
+                selected.shape, right, dtype=torch.float32, device=selected.device)
+        except RuntimeError as error:
+            raise DebugActionError(f"Cannot assign shape {tuple(right.shape)} to {target} {tuple(selected.shape)}: {error}") from error
+        if not bool(torch.isfinite(requested).all()):
+            raise DebugActionError("Result contains NaN or infinity.")
+        parameters = self._parameters()
+        parameter = parameters[name]
+        tied = sorted(other for other, tensor in parameters.items()
+                      if other != name and tensor.data_ptr() == parameter.data_ptr())
+        with _runtime_lock, torch.no_grad():
+            originals = self.__dict__.setdefault("weight_originals", {})
+            if name not in originals:
+                originals[name] = parameter.detach().to("cpu", copy=True)
+            before = selected.detach().float().clone()
+            selected.copy_(requested.to(selected.dtype))
+            stored = selected.detach().float()
+            changed = int((stored != before).sum())
+            rounded = int((stored != requested).sum())
+        self.execution.weight_edits.setdefault(name, []).append(f"{target} = {expression}")
+        self._after_weight_change(f"[weights] {target} = {expression}")
+        return {"patched": True, "parameter": name, "target": target, "expression": expression,
+                "shape": list(selected.shape), "dtype": str(parameter.dtype).replace("torch.", ""),
+                "changedValues": changed, "roundedValues": rounded, "tiedWith": tied,
+                "tokenPosition": self.token_index, "edits": self.execution.weight_edits[name]}
+
+    def _after_weight_change(self, message: str) -> None:
+        """Drop everything computed with the old weights and recompute the current token from token 0."""
+        self.execution.past_key_values = None
+        self.execution.cached_through = -1
+        self.execution.projection_norms.clear()
+        self.__dict__.pop("_concept_trace_capture_cache", None)
+        self.__dict__.pop("_live_generation_cache", None)
+        self.execution.__dict__.pop("_delta_contribution_result", None)
+        self._console(f"{message}; recomputing tokens 0..{self.token_index} with the edited weights.")
+        current_layer = self.layer_index
+        self._load_token(self.token_index)
+        self.layer_index = current_layer
+        self.neuron_cache.clear()
+        getattr(self, "lens_snapshot_cache", {}).clear()
+        getattr(self, "measurement_vectors", {}).clear()
+
+    def _clear_activation_edits(self) -> int:
+        """Remove every activation intervention and recompute the current token from token 0."""
+        if self.execution is None:
+            return 0
+        execution = self.execution
+        count = (len(execution.interventions) + len(execution.ica_interventions)
+                 + len(execution.vector_patches))
+        execution.interventions.clear()
+        execution.ica_interventions.clear()
+        execution.vector_patches.clear()
+        execution.ica_observations.clear()
+        self.__dict__.pop("activation_edit_log", None)
+        if count and self.trace:
+            self._after_weight_change("Cleared activation edits")
+        return count
+
+    def _restore_weights(self, name: str | None = None, *, reload: bool = True) -> list[str]:
+        """Copy saved originals back into the model (one parameter, or all)."""
+        import torch
+        from llmdbg.model_runtime import _runtime_lock
+
+        originals = self.__dict__.get("weight_originals", {})
+        names = [name] if name else list(originals)
+        if name and name not in originals:
+            raise DebugActionError(f"{name!r} has no active edits.")
+        if not names:
+            return []
+        parameters = self._parameters() if self.execution is not None else {}
+        with _runtime_lock, torch.no_grad():
+            for item in names:
+                parameter = parameters.get(item)
+                if parameter is not None:
+                    parameter.copy_(originals[item].to(parameter.device))
+                del originals[item]
+                if self.execution is not None:
+                    self.execution.weight_edits.pop(item, None)
+        if reload and self.execution is not None and self.trace:
+            self._after_weight_change(f"[weights] restored {', '.join(names)}")
+        return names
+
+    def _assign(self, target: str, expression: str) -> dict[str, Any]:
+        """Evaluate EXPRESSION and write it into TARGET (a residual stream or a slice of it)."""
+        import torch
+        if self.execution is None:
+            raise DebugActionError("Assignment requires a loaded model.")
+        try:
+            target_node = ast.parse(target, mode="eval").body
+        except SyntaxError as error:
+            raise DebugActionError(f"Invalid assignment target: {target}") from error
+        weight_target = self._weight_target(target_node)
+        if weight_target is not None:
+            return self._assign_weight(target, expression, *weight_target)
+        index = None
+        base = target_node
+        if isinstance(target_node, ast.Subscript):
+            base, index = target_node.value, self._literal_index(target_node.slice)
+        if not isinstance(base, ast.Name) or base.id not in self.RESIDUAL_NAMES:
+            raise DebugActionError(
+                "Assignable targets are the residual stream (x, residual_stream, or a slice such as x[0, 0, :64]) "
+                "and weights (weight[\"<parameter name>\"][...] or W_o[...])."
+            )
+        current = self._inspect_expression(base.id)
+        value = self._inspect_expression(expression)
+        if current is None or not torch.is_tensor(current):
+            raise DebugActionError("The residual stream is unavailable at this stop.")
+        if value is None:
+            raise DebugActionError(f"Unknown tensor expression: {expression}")
+        updated = current.detach().float().clone()
+        right = value.detach().float().to(updated.device) if torch.is_tensor(value) else float(value)
+        try:
+            if index is None:
+                updated = torch.broadcast_to(right, updated.shape).clone() if torch.is_tensor(right) else torch.full_like(updated, right)
+            else:
+                updated[index] = right
+        except (RuntimeError, IndexError) as error:
+            raise DebugActionError(f"Cannot assign shape {tuple(getattr(right, 'shape', ()))} to {target}: {error}") from error
+        if not bool(torch.isfinite(updated).all()):
+            raise DebugActionError("Result contains NaN or infinity.")
+        phase = self._current_lens_phase()
+        if self.outer_state.layer.name == "token_embedding":
+            raise DebugActionError("Step to a transformer layer before assigning to the residual stream.")
+        view = "residual-" + ("pre" if phase <= 1 else "mid" if phase <= 3 else "post")
+        # The patch site must hold exactly the tensor the expression called x.
+        snapshot = self._neuron_lens_snapshot(
+            view=view, include_logit_lens=False, include_j_lens=False,
+            include_r_lens=False, include_jpp_lens=False,
+        )
+        if snapshot.get("saved"):
+            raise DebugActionError(f"{view} has already executed here; step back to a stop before it.")
+        measured = self.measurement_vectors.get(str(snapshot.get("measurementId", "")))
+        reference = current.detach().float().reshape(-1).cpu()
+        if measured is None or len(measured[1]) != reference.numel() or not torch.allclose(
+            torch.tensor(measured[1], dtype=torch.float32), reference, atol=1e-3, rtol=1e-3
+        ):
+            raise DebugActionError(f"x at this stop does not correspond to the patchable {view} site.")
+        before = reference
+        after = updated.reshape(-1).cpu()
+        result = self._patch_vector(view, tuple(after.tolist()), f"{target} = {expression}")
+        return {**result, "target": target, "expression": expression,
+                "normBefore": float(before.norm()), "normAfter": float(after.norm()),
+                "changedValues": int((after != before).sum())}
+
     def _patch_vector(
         self, view: str, replacement: tuple[float, ...], source_label: str
     ) -> dict[str, Any]:
@@ -2426,6 +2763,9 @@ class LLMDebugAdapter:
         self.neuron_cache.clear()
         getattr(self, "lens_snapshot_cache", {}).clear()
         getattr(self, "measurement_vectors", {}).clear()
+        self.__dict__.setdefault("activation_edit_log", []).append(
+            {"token": self.token_index, "layer": layer, "view": normalized_view, "label": source_label}
+        )
         log_paths = self._write_vector_patch_log(
             view=normalized_view,
             layer=layer,
@@ -3476,6 +3816,10 @@ class LLMDebugAdapter:
                         return resolve(ast.parse(frame['bindings'][node.id],mode='eval').body,True)
                     if node.id in frame['localNames']:
                         raise LookupError
+                user_vector = getattr(self, "user_vectors", {}).get(node.id)
+                if user_vector is not None and not captured:
+                    reference = self.outer_state.tensors.get("input") if self.trace else None
+                    return user_vector.to(reference.device) if hasattr(reference, "device") else user_vector
                 name = node.id if captured else self._source_expression(node.id)
                 if name in {"x", "input", "residual", "residual_stream"}:
                     name = "input"
@@ -3489,8 +3833,28 @@ class LLMDebugAdapter:
             if isinstance(node, ast.Attribute) and node.attr in {"shape", "dtype", "device", "ndim", "requires_grad"}:
                 return getattr(resolve(node.value,captured), node.attr)
             if isinstance(node, ast.Subscript):
+                parameter = self._parameter_node(node.value)
+                if parameter is not None:  # weight["name"][...]: slice the live tensor, then copy
+                    return parameter[index(node.slice,captured)].detach().clone()
+                parameter = self._parameter_node(node)
+                if parameter is not None:
+                    return parameter.detach().clone()
                 return resolve(node.value,captured)[index(node.slice,captured)]
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                if node.func.attr in {"norm", "sum", "mean", "abs"} and not node.keywords:
+                    args = [resolve(arg,captured) for arg in node.args]
+                    if any(type(arg) is not int for arg in args):
+                        raise DebugActionError(f"{node.func.attr}() takes only integer dimensions")
+                    target = resolve(node.func.value,captured)
+                    if not hasattr(target, "detach"):
+                        raise DebugActionError(f"{node.func.attr}() applies to tensors")
+                    if node.func.attr == "abs":
+                        if args:
+                            raise DebugActionError("abs() takes no arguments")
+                        return target.abs()
+                    if node.func.attr == "norm":
+                        return target.float().norm(dim=args[0]) if args else target.float().norm()
+                    return getattr(target.float(), node.func.attr)(*args)
                 if node.func.attr in {"size", "numel", "dim"} and not node.keywords:
                     args = [resolve(arg,captured) for arg in node.args]
                     if any(not isinstance(arg, int) for arg in args):
@@ -4677,49 +5041,357 @@ class LLMDebugAdapter:
         }
 
     def run(self) -> None:
-        while request := self.stream.read():
-            if request.get("type") != "request":
-                continue
+        """Serve the owner stream plus any attached shared-session clients.
+
+        All requests are handled on this thread, one at a time, in arrival order.
+        """
+        import queue
+        import threading
+        from llmdbg.shared_session import pump
+
+        self.inbox: queue.Queue = queue.Queue()
+        self.shared_session = None
+        threading.Thread(target=pump, args=(self.stream, self.inbox), daemon=True).start()
+        try:
+            while True:
+                origin, request = self.inbox.get()
+                if origin is self.stream:
+                    if request is None:
+                        break
+                    if not self.host_authenticated and not self._authenticate_host(request):
+                        break
+                    if not self._process(request):
+                        break
+                    if request.get("command") == "launch":
+                        self._maybe_share(request.get("arguments") or {})
+                else:
+                    self._handle_attached(origin, request)
+        finally:
+            # Weight edits belong to this debug session; the resident model outlives it.
             try:
-                if not self.handle(request):
-                    break
-            except LensUnavailable as error:
+                restored = self._restore_weights(reload=False)
+                if restored:
+                    sys.stderr.write(f"llmdbg: restored original weights: {', '.join(restored)}\n")
+            except Exception:
+                # Never hand an edited model to the next session: drop it so it reloads.
+                from llmdbg.model_runtime import discard_resident_runtime
+                discard_resident_runtime()
+                sys.stderr.write(f"llmdbg: could not restore weights; the resident model was discarded:\n{traceback.format_exc()}")
+            if self.shared_session is not None:
+                self.shared_session.close()
+                self.shared_session = None
+
+    def _authenticate_host(self, request: dict[str, Any]) -> bool:
+        """Before authentication only initialize runs; launch must carry the host token."""
+        import secrets
+
+        command = request.get("command")
+        if command == "initialize":
+            return True
+        if command == "launch":
+            arguments = request.get("arguments")
+            token = arguments.pop("hostToken", None) if isinstance(arguments, dict) else None
+            if isinstance(token, str) and secrets.compare_digest(token, self.host_token or ""):
+                self.host_authenticated = True
+                return True
+        if request.get("type") == "request" and "seq" in request:
+            self.send_response(
+                request, success=False,
+                message="This llmdbg host requires its host token in the launch request.",
+            )
+        return False
+
+    # ------------------------------------------------------- shared sessions
+    # Commands an attached client may not run while agent access is read-only.
+    AGENT_WRITE_COMMANDS = frozenset({
+        "next", "stepIn", "stepOut", "continue", "pause", "setBreakpoints", "setExpression",
+        "setVariable", "llmdbg/assign", "llmdbg/patchVector", "llmdbg/removeProjectedComponent",
+        "llmdbg/removeIcaComponent", "llmdbg/restoreWeights", "llmdbg/clearInterventions",
+        "llmdbg/plot",  # runs Python plot code
+    })
+    # Bookkeeping requests not worth an activity-log row.
+    QUIET_COMMANDS = frozenset({"threads", "stackTrace", "scopes", "variables", "llmdbg/controlState"})
+    ACCESS_MODES = ("full", "readonly", "off")
+
+    def _client_info(self) -> dict[str, Any]:
+        """How an agent on this machine runs the llmdbg client, and where the guide is."""
+        import llmdbg
+        package = Path(llmdbg.__file__).resolve().parent
+        return {
+            "command": [sys.executable, "-m", "llmdbg", "debug", "--attach"],
+            "env": {"PYTHONPATH": str(package.parent)},
+            "docs": str(package / "data" / "agent-guide.md"),
+        }
+
+    def _maybe_share(self, arguments: dict[str, Any]) -> None:
+        # On by default; opt out with "shareSession": false or LLMDBG_SHARE_SESSION=0.
+        enabled = arguments.get("shareSession")
+        if enabled is None:
+            enabled = os.environ.get("LLMDBG_SHARE_SESSION", "1").lower() not in ("0", "false", "no", "off")
+        if not enabled or self.shared_session is not None:
+            self._announce_control()
+            return
+        from llmdbg.shared_session import SharedSession
+
+        info = self._client_info()
+        self.shared_session = SharedSession(
+            self.inbox,
+            port=int(arguments.get("sharePort", 0) or 0),
+            description={"protocol": 1, "model": self.model_name, "source": self.source_path,
+                         "client": {"command": info["command"], "env": info["env"]}, "docs": info["docs"]},
+        )
+        self._console(
+            f"Shared session listening on {self.shared_session.host}:{self.shared_session.port}; "
+            f"agents: open the llmdbg Control panel or read {info['docs']}"
+        )
+        self._announce_control()
+
+    def _record(self, actor: str, command: str, summary: str, ok: bool = True, error: str | None = None) -> None:
+        from collections import deque
+        import time
+        if not hasattr(self, "activity"):
+            self.activity = deque(maxlen=500)
+        entry = {"time": time.time(), "actor": actor, "command": command, "summary": summary, "ok": ok}
+        if error:
+            entry["error"] = error
+        self.activity.append(entry)
+
+    @staticmethod
+    def _summarize(command: str, arguments: dict[str, Any]) -> str:
+        """One readable line for the activity log; never includes tokens or bulk values."""
+        if command == "llmdbg/assign":
+            return f"{arguments.get('target', '')} = {arguments.get('expression', '')}"
+        if command == "llmdbg/defineVector":
+            source = arguments.get("expression")
+            if source is None:
+                values = arguments.get("values")
+                source = f"{len(values) if isinstance(values, list) else '?'} values"
+            return f"vec {arguments.get('name', '')} = {source}"
+        if command == "setBreakpoints":
+            items = arguments.get("breakpoints") or []
+            return "breakpoints: " + (", ".join(
+                str(item.get("line")) + (f" [{item['condition']}]" if item.get("condition") else "")
+                for item in items) or "none")
+        if command in ("evaluate",):
+            return f"print {arguments.get('expression', '')}"
+        if command == "setExpression":
+            return f"set {arguments.get('expression', '')} = {arguments.get('value', '')}"
+        if command == "llmdbg/restoreWeights":
+            return f"undo weights {arguments.get('parameter') or '(all)'}"
+        if command == "llmdbg/plot":
+            return f"plot {arguments.get('expression', '')} (runs plot code)"
+        shown = {key: value for key, value in arguments.items()
+                 if key not in {"token", "hostToken", "values", "vector", "code", "threadId"}}
+        text = json.dumps(shown, separators=(",", ":"), default=str) if shown else ""
+        return (command + (" " + text if text else ""))[:200]
+
+    def _position_summary(self) -> str:
+        """Human-readable stop, e.g. "token 4 ' is' · layer 5" (falls back to the step name)."""
+        if not getattr(self, "trace", None):
+            return "session ended"
+        parts = [f"token {self.token_index}"]
+        tokens = getattr(self, "tokens", ())
+        if 0 <= self.token_index < len(tokens):
+            parts[0] += f" {tokens[self.token_index]!r}"
+        name = self.state.layer.name
+        try:
+            layer = self._transformer_layer_index(name)
+        except Exception:
+            layer = None
+        parts.append(f"layer {layer}" if layer is not None else name)
+        return " · ".join(parts)
+
+    def _control_state(self, *, activity_limit: int = 200) -> dict[str, Any]:
+        shared = getattr(self, "shared_session", None)
+        execution = getattr(self, "execution", None)
+        state: dict[str, Any] = {
+            "mode": getattr(self, "agent_access", "full"),
+            "sharing": None,
+            "clients": [],
+            "client": self._client_info(),
+            "model": getattr(self, "model_name", None),
+            "source": getattr(self, "source_path", None),
+            "position": self._position_summary() if getattr(self, "trace", None) else None,
+            "activity": list(getattr(self, "activity", ()))[-activity_limit:],
+            "weightEdits": [{"parameter": name, "formulas": list(formulas)}
+                            for name, formulas in (getattr(execution, "weight_edits", {}).items())],
+            "activationEdits": {
+                "patches": list(getattr(self, "activation_edit_log", [])),
+                "valueEdits": len(getattr(execution, "interventions", ())),
+                "icaRemovals": len(getattr(execution, "ica_interventions", ())),
+            },
+            "vectors": sorted(getattr(self, "user_vectors", {})),
+        }
+        if shared is not None:
+            state["sharing"] = {"host": shared.host, "port": shared.port, "file": str(shared.path)}
+            state["clients"] = [shared.label(stream) for stream in shared.attached]
+        return state
+
+    def _announce_control(self) -> None:
+        """Push the Control panel's state; status reporting must never break debugging."""
+        try:
+            state = self._control_state(activity_limit=100)
+        except Exception as error:  # pragma: no cover - defensive
+            state = {"error": str(error)}
+        self.send_event("llmdbg/controlState", state)
+
+    def _set_agent_access(self, mode: str) -> dict[str, Any]:
+        if mode not in self.ACCESS_MODES:
+            raise DebugActionError(f"Agent access must be one of {', '.join(self.ACCESS_MODES)}.")
+        self.agent_access = mode
+        shared = getattr(self, "shared_session", None)
+        disconnected = []
+        if mode == "off" and shared is not None:
+            for stream in tuple(shared.attached):
+                disconnected.append(shared.label(stream))
+                shared.detach(stream)
+        self._console(f"Agent access set to {mode}" + (f"; disconnected {', '.join(disconnected)}" if disconnected else "") + ".")
+        return {"mode": mode, "disconnected": disconnected}
+
+    def _disconnect_client(self, label: str) -> bool:
+        shared = getattr(self, "shared_session", None)
+        for stream in tuple(shared.attached if shared else ()):
+            if shared.label(stream) == label:
+                shared.detach(stream)
+                self._console(f"[{label}] disconnected by the session owner.")
+                return True
+        return False
+
+    def _set_attached_breakpoints(self, request: dict[str, Any], label: str) -> None:
+        """Replace the session's breakpoints for a source, then ask editors to show them."""
+        self._process(request)
+        arguments = request.get("arguments") or {}
+        path = (arguments.get("source") or {}).get("path")
+        items = [
+            {"line": int(item.get("line", 0)), **({"condition": str(item["condition"])} if item.get("condition") else {})}
+            for item in arguments.get("breakpoints", [])
+        ]
+        self.send_event("llmdbg/breakpointsChanged", {"source": {"path": path}, "breakpoints": items})
+        listed = ", ".join(
+            str(item["line"]) + (f" [{item['condition']}]" if item.get("condition") else "") for item in items
+        ) or "none"
+        self._console(f"[{label}] set breakpoints: {listed}.")
+
+    def _handle_attached(self, origin: ProtocolStream, request: dict[str, Any] | None) -> None:
+        from llmdbg.shared_session import ATTACH_COMMAND, EXECUTION_COMMANDS, OWNER_ONLY
+
+        shared = self.shared_session
+        if shared is None or not shared.owns(origin):
+            return
+        if request is None:
+            if origin in shared.attached:
+                label = shared.label(origin)
+                self._console(f"[{label}] disconnected.")
+                self._record(label, "disconnect", "disconnected")
+                shared.detach(origin)
+                self._announce_control()
+            else:
+                shared.detach(origin)
+            return
+        command = request.get("command", "")
+        arguments = request.get("arguments") or {}
+        self._reply_stream = origin
+        self._reply_label = shared.label(origin)
+        mode = getattr(self, "agent_access", "full")
+        try:
+            if origin not in shared.attached:
+                if mode == "off":
+                    self.send_response(request, success=False, message="Agent access is off for this session.")
+                    shared.detach(origin)
+                    return
+                if command == ATTACH_COMMAND and shared.authenticate(
+                    origin, arguments.get("token"), arguments.get("clientName"), arguments.get("pid")
+                ):
+                    self._reply_label = shared.label(origin)
+                    self.send_response(request, {"attached": True, "label": self._reply_label, "mode": mode})
+                    self._console(f"[{self._reply_label}] connected.")
+                    self._record(self._reply_label, "attach", f"connected ({mode} access)")
+                    self._announce_control()
+                else:
+                    self.send_response(request, success=False, message="Send llmdbg/attach with the session token first.")
+                    shared.detach(origin)
+                return
+            if command == "disconnect":
+                self.send_response(request)
+                self._console(f"[{self._reply_label}] disconnected.")
+                self._record(self._reply_label, "disconnect", "disconnected")
+                shared.detach(origin)
+                self._announce_control()
+                return
+            if command in OWNER_ONLY:
+                self.send_response(request, success=False, message=f"{command} is reserved for the session owner.")
+                self._record(self._reply_label, command, self._summarize(command, arguments), False, "owner only")
+                self._announce_control()
+                return
+            if mode == "readonly" and command in self.AGENT_WRITE_COMMANDS:
+                self.send_response(request, success=False,
+                                   message="Agent access is read-only for this session; ask the person to allow full access.")
+                self._record(self._reply_label, command, self._summarize(command, arguments), False, "read-only")
+                self._announce_control()
+                return
+            self._last_response_success = (True, None)
+            if command == "setBreakpoints":
+                self._set_attached_breakpoints(request, self._reply_label)
+            else:
+                if command in EXECUTION_COMMANDS:
+                    self._console(f"[{self._reply_label}] requested {command}.")
+                    self.send_event("continued", {"threadId": self.THREAD_ID, "allThreadsContinued": True})
+                self._process(request)
+            if command not in self.QUIET_COMMANDS:
+                ok, message = self._last_response_success
+                summary = self._summarize(command, arguments)
+                if ok and command in EXECUTION_COMMANDS:
+                    summary += f" → {self._position_summary()}"
+                self._record(self._reply_label, command, summary, ok, None if ok else message)
+                self._announce_control()
+        finally:
+            self._reply_stream = None
+
+    def _process(self, request: dict[str, Any]) -> bool:
+        """Handle one request; returns False when the session should end."""
+        if request.get("type") != "request":
+            return True
+        try:
+            if not self.handle(request):
+                return False
+        except LensUnavailable as error:
+            self._console(f"Warning: {' '.join(str(error).splitlines())}", warning=True)
+            if request.get("command") == "llmdbg/neuronLens":
+                view = str(request.get("arguments", {}).get("view", "neurons"))
+                snapshot = {
+                    "view": view, "error": str(error), "unavailable": True,
+                }
+                mode = str(request.get("arguments", {}).get("mode", "logit"))
+                key = (self.token_index, self.layer_index, self.inside_mlp,
+                       self.inside_attention, self.mlp_step_index, mode, view)
+                self.lens_snapshot_cache[key] = snapshot
+                self.send_response(request, snapshot)
+            else:
+                self.send_response(request, success=False, message=str(error))
+        except Exception as error:  # keep protocol errors visible to the client
+            if isinstance(error, DebugActionError):
                 self._console(f"Warning: {' '.join(str(error).splitlines())}", warning=True)
-                if request.get("command") == "llmdbg/neuronLens":
-                    view = str(request.get("arguments", {}).get("view", "neurons"))
-                    snapshot = {
-                        "view": view, "error": str(error), "unavailable": True,
-                    }
-                    mode = str(request.get("arguments", {}).get("mode", "logit"))
-                    key = (self.token_index, self.layer_index, self.inside_mlp,
-                           self.inside_attention, self.mlp_step_index, mode, view)
-                    self.lens_snapshot_cache[key] = snapshot
-                    self.send_response(request, snapshot)
+            else:
+                self.send_event("output", {
+                    "category": "stderr",
+                    "output": f"llmdbg: {request.get('command')} failed:\n{traceback.format_exc()}",
+                })
+            if getattr(self, "_last_response_request", None) != id(request):
+                self.send_response(request, success=False, message=str(error))
+            if request.get("command") in {
+                "next", "stepIn", "stepOut", "continue", "configurationDone", "pause",
+            }:
+                # A failed internal step may reference a missing detail vector.
+                # Recover at its enclosing layer, which still has valid residuals.
+                self.inside_mlp = False
+                self.inside_attention = False
+                self.mlp_step_index = 0
+                if self.trace and 0 <= self.layer_index < len(self.trace):
+                    self.stop("exception")
                 else:
-                    self.send_response(request, success=False, message=str(error))
-            except Exception as error:  # keep protocol errors visible to the client
-                if isinstance(error, DebugActionError):
-                    self._console(f"Warning: {' '.join(str(error).splitlines())}", warning=True)
-                else:
-                    self.send_event("output", {
-                        "category": "stderr",
-                        "output": f"llmdbg: {request.get('command')} failed:\n{traceback.format_exc()}",
-                    })
-                if getattr(self, "_last_response_request", None) != request["seq"]:
-                    self.send_response(request, success=False, message=str(error))
-                if request.get("command") in {
-                    "next", "stepIn", "stepOut", "continue", "configurationDone", "pause",
-                }:
-                    # A failed internal step may reference a missing detail vector.
-                    # Recover at its enclosing layer, which still has valid residuals.
-                    self.inside_mlp = False
-                    self.inside_attention = False
-                    self.mlp_step_index = 0
-                    if self.trace and 0 <= self.layer_index < len(self.trace):
-                        self.stop("exception")
-                    else:
-                        self.send_event("terminated")
-                self.send_event("llmdbg/computationFailed", {"message": str(error)})
+                    self.send_event("terminated")
+            self.send_event("llmdbg/computationFailed", {"message": str(error)})
+        return True
 
 
 def main() -> None:
